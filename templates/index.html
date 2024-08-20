@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>תמלול בעזרת ivrit.ai</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .container {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            width: 80%;
+            max-width: 600px;
+        }
+        h1 {
+            margin-bottom: 2rem;
+        }
+        #drop-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 2rem;
+            cursor: pointer;
+            margin-bottom: 1rem;
+        }
+        #drop-area.highlight {
+            border-color: #4CAF50;
+            background-color: #e8f5e9;
+        }
+        #file-input {
+            display: none;
+        }
+        #file-name {
+            margin-top: 1rem;
+            font-weight: bold;
+        }
+        #transcribe-btn {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            font-size: 1rem;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-top: 1rem;
+        }
+        #transcribe-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #progress-container {
+            width: 100%;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            margin-top: 1rem;
+            display: none;
+        }
+        #progress-bar {
+            width: 0;
+            height: 20px;
+            background-color: #4CAF50;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+        #transcription {
+            margin-top: 1rem;
+            width: 100%;
+            min-height: 100px;
+            border: 1px solid #ccc;
+            padding: 0.5rem;
+            text-align: right;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>תמלול בעזרת ivrit.ai</h1>
+        <div id="drop-area">
+            <p>גרור קובץ לכאן או לחץ לבחירת קובץ</p>
+            <input type="file" id="file-input" accept="audio/*,video/*">
+        </div>
+        <div id="file-name"></div>
+        <button id="transcribe-btn" disabled>תמלל</button>
+        <div id="progress-container">
+            <div id="progress-bar"></div>
+        </div>
+        <div id="transcription"></div>
+    </div>
+    <script>
+        const dropArea = document.getElementById('drop-area');
+        const fileInput = document.getElementById('file-input');
+        const fileName = document.getElementById('file-name');
+        const transcribeBtn = document.getElementById('transcribe-btn');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const transcriptionArea = document.getElementById('transcription');
+
+        let selectedFile = null;
+        const MAX_FILE_SIZE = 250 * 1024 * 1024; // 250MB in bytes
+        let transcriptionSegments = [];
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropArea.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight() {
+            dropArea.classList.add('highlight');
+        }
+
+        function unhighlight() {
+            dropArea.classList.remove('highlight');
+        }
+
+        dropArea.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+
+        fileInput.addEventListener('change', function() {
+            handleFiles(this.files);
+        });
+
+        function handleFiles(files) {
+            if (files.length > 0) {
+                selectedFile = files[0];
+                if (selectedFile.size > MAX_FILE_SIZE) {
+                    alert('הקובץ גדול מדי. הגודל המקסימלי המותר הוא 250MB.');
+                    selectedFile = null;
+                    transcribeBtn.disabled = true;
+                    fileName.textContent = '';
+                } else {
+                    transcribeBtn.disabled = false;
+                    fileName.textContent = `קובץ נבחר: ${selectedFile.name}`;
+                }
+            }
+        }
+
+        dropArea.addEventListener('click', () => fileInput.click());
+
+        transcribeBtn.addEventListener('click', uploadFile);
+
+        function uploadFile() {
+            if (!selectedFile) return;
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+
+            transcribeBtn.disabled = true;
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            transcriptionArea.textContent = 'מעלה את הקובץ...';
+            transcriptionSegments = [];
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    transcriptionArea.textContent = `שגיאה: ${data.error}`;
+                    resetUploadState();
+                } else {
+                    transcriptionArea.textContent = 'מתחיל בתמלול...';
+                    startStreaming(data.job_id);
+                }
+            })
+            .catch(error => {
+                transcriptionArea.textContent = `שגיאה: ${error.message}`;
+                resetUploadState();
+            });
+        }
+
+        function startStreaming(jobId) {
+            const eventSource = new EventSource(`/stream/${jobId}`);
+
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                progressBar.style.width = `${data.progress * 100}%`;
+                
+                if (data.segment) {
+                    transcriptionSegments.push(data.segment);
+                    updateTranscriptionDisplay();
+                }
+
+                if (data.progress >= 1) {
+                    eventSource.close();
+                    resetUploadState();
+                }
+            };
+
+            eventSource.onerror = function() {
+                eventSource.close();
+                transcriptionArea.textContent += '\nהזרמת התמלול הסתיימה או נכשלה.';
+                resetUploadState();
+            };
+        }
+
+        function updateTranscriptionDisplay() {
+            transcriptionArea.textContent = transcriptionSegments.map(segment => segment.text).join(' ');
+        }
+
+        function resetUploadState() {
+            transcribeBtn.disabled = false;
+            selectedFile = null;
+            fileName.textContent = '';
+            progressContainer.style.display = 'none';
+            progressBar.style.width = '0%';
+        }
+    </script>
+</body>
+</html>
