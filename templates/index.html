@@ -188,7 +188,11 @@
                     transcriptionArea.textContent = `שגיאה: ${data.error}`;
                     resetUploadState();
                 } else {
-                    transcriptionArea.textContent = 'מתחיל בתמלול...';
+                    if (data.queued) {
+                        transcriptionArea.textContent = `קובץ הועלה. ממתין בתור... מיקום: ${data.queued}`;
+                    } else {
+                        transcriptionArea.textContent = 'קובץ הועלה. מתחיל בתמלול...';
+                    }
                     startStreaming(data.job_id);
                 }
             })
@@ -203,14 +207,27 @@
 
             eventSource.onmessage = function(event) {
                 const data = JSON.parse(event.data);
-                progressBar.style.width = `${data.progress * 100}%`;
                 
-                if (data.segment) {
-                    transcriptionSegments.push(data.segment);
-                    updateTranscriptionDisplay();
-                }
+                if (data.queue_position) {
+                    transcriptionArea.textContent = `ממתין בתור... מיקום: ${data.queue_position}`;
+                    progressBar.style.width = '0%';
+                } else if (data.waiting) {
+                    transcriptionArea.textContent = 'ממתין לעיבוד...';
+                    progressBar.style.width = '0%';
+                } else if (data.progress) {
+                    progressBar.style.width = `${data.progress * 100}%`;
+                    
+                    if (data.segment) {
+                        transcriptionSegments.push(data.segment);
+                        updateTranscriptionDisplay();
+                    }
 
-                if (data.progress >= 1) {
+                    if (data.progress >= 1) {
+                        eventSource.close();
+                        resetUploadState();
+                    }
+                } else if (data.error) {
+                    transcriptionArea.textContent = `שגיאה: ${data.error}`;
                     eventSource.close();
                     resetUploadState();
                 }
