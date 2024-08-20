@@ -178,28 +178,43 @@
             transcriptionArea.textContent = 'מעלה את הקובץ...';
             transcriptionSegments = [];
 
-            fetch('/upload', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    transcriptionArea.textContent = `שגיאה: ${data.error}`;
-                    resetUploadState();
-                } else {
-                    if (data.queued) {
-                        transcriptionArea.textContent = `קובץ הועלה. ממתין בתור... מיקום: ${data.queued}`;
-                    } else {
-                        transcriptionArea.textContent = 'קובץ הועלה. מתחיל בתמלול...';
-                    }
-                    startStreaming(data.job_id);
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/upload', true);
+
+            xhr.upload.onprogress = function(event) {
+                if (event.lengthComputable) {
+                    const percentComplete = (event.loaded / event.total) * 100;
+                    progressBar.style.width = percentComplete + '%';
+                    transcriptionArea.textContent = `מעלה את הקובץ... ${percentComplete.toFixed(1)}%`;
                 }
-            })
-            .catch(error => {
-                transcriptionArea.textContent = `שגיאה: ${error.message}`;
+            };
+
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    const response = JSON.parse(xhr.responseText);
+                    if (response.error) {
+                        transcriptionArea.textContent = `שגיאה: ${response.error}`;
+                        resetUploadState();
+                    } else {
+                        if (response.queued) {
+                            transcriptionArea.textContent = `קובץ הועלה. ממתין בתור... מיקום: ${response.queued}`;
+                        } else {
+                            transcriptionArea.textContent = 'קובץ הועלה. מתחיל בתמלול...';
+                        }
+                        startStreaming(response.job_id);
+                    }
+                } else {
+                    transcriptionArea.textContent = `שגיאה: ${xhr.statusText}`;
+                    resetUploadState();
+                }
+            };
+
+            xhr.onerror = function() {
+                transcriptionArea.textContent = 'שגיאה בהעלאת הקובץ';
                 resetUploadState();
-            });
+            };
+
+            xhr.send(formData);
         }
 
         function startStreaming(jobId) {
