@@ -72,14 +72,37 @@
             border-radius: 4px;
             transition: width 0.3s;
         }
-        #transcription {
+        #transcription-container {
+            position: relative;
             margin-top: 1rem;
+        }
+        #transcription {
             width: 100%;
-            min-height: 100px;
+            height: 200px;
             border: 1px solid #ccc;
             padding: 0.5rem;
             text-align: right;
             white-space: pre-wrap;
+            overflow-y: auto;
+            resize: none;
+            font-size: 1rem;
+        }
+        #copy-btn {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            background-color: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 5px;
+        }
+        #copy-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #copy-btn svg {
+            width: 20px;
+            height: 20px;
         }
     </style>
 </head>
@@ -95,7 +118,15 @@
         <div id="progress-container">
             <div id="progress-bar"></div>
         </div>
-        <div id="transcription"></div>
+        <div id="transcription-container">
+            <textarea id="transcription" readonly></textarea>
+            <button id="copy-btn" disabled title="העתק את הטקסט">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+            </button>
+        </div>
     </div>
     <script>
         const dropArea = document.getElementById('drop-area');
@@ -105,6 +136,7 @@
         const progressContainer = document.getElementById('progress-container');
         const progressBar = document.getElementById('progress-bar');
         const transcriptionArea = document.getElementById('transcription');
+        const copyBtn = document.getElementById('copy-btn');
 
         let selectedFile = null;
         const MAX_FILE_SIZE = 250 * 1024 * 1024; // 250MB in bytes
@@ -175,8 +207,9 @@
             transcribeBtn.disabled = true;
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
-            transcriptionArea.textContent = 'מעלה את הקובץ...';
+            transcriptionArea.value = 'מעלה את הקובץ...';
             transcriptionSegments = [];
+            copyBtn.disabled = true;
 
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/upload', true);
@@ -185,7 +218,7 @@
                 if (event.lengthComputable) {
                     const percentComplete = (event.loaded / event.total) * 100;
                     progressBar.style.width = percentComplete + '%';
-                    transcriptionArea.textContent = `מעלה את הקובץ... ${percentComplete.toFixed(1)}%`;
+                    transcriptionArea.value = `מעלה את הקובץ... ${percentComplete.toFixed(1)}%`;
                 }
             };
 
@@ -193,24 +226,24 @@
                 if (xhr.status === 200) {
                     const response = JSON.parse(xhr.responseText);
                     if (response.error) {
-                        transcriptionArea.textContent = `שגיאה: ${response.error}`;
+                        transcriptionArea.value = `שגיאה: ${response.error}`;
                         resetUploadState();
                     } else {
                         if (response.queued) {
-                            transcriptionArea.textContent = `קובץ הועלה. ממתין בתור... מיקום: ${response.queued}`;
+                            transcriptionArea.value = `קובץ הועלה. ממתין בתור... מיקום: ${response.queued}`;
                         } else {
-                            transcriptionArea.textContent = 'קובץ הועלה. מתחיל בתמלול...';
+                            transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
                         }
                         startStreaming(response.job_id);
                     }
                 } else {
-                    transcriptionArea.textContent = `שגיאה: ${xhr.statusText}`;
+                    transcriptionArea.value = `שגיאה: ${xhr.statusText}`;
                     resetUploadState();
                 }
             };
 
             xhr.onerror = function() {
-                transcriptionArea.textContent = 'שגיאה בהעלאת הקובץ';
+                transcriptionArea.value = 'שגיאה בהעלאת הקובץ';
                 resetUploadState();
             };
 
@@ -224,25 +257,26 @@
                 const data = JSON.parse(event.data);
                 
                 if (data.queue_position) {
-                    transcriptionArea.textContent = `ממתין בתור... מיקום: ${data.queue_position}`;
+                    transcriptionArea.value = `ממתין בתור... מיקום: ${data.queue_position}`;
                     progressBar.style.width = '0%';
                 } else if (data.waiting) {
-                    transcriptionArea.textContent = 'ממתין לעיבוד...';
+                    transcriptionArea.value = 'ממתין לעיבוד...';
                     progressBar.style.width = '0%';
                 } else if (data.progress) {
                     progressBar.style.width = `${data.progress * 100}%`;
+                    transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
                     
                     if (data.segment) {
                         transcriptionSegments.push(data.segment);
-                        updateTranscriptionDisplay();
                     }
 
                     if (data.progress >= 1) {
                         eventSource.close();
+                        updateTranscriptionDisplay();
                         resetUploadState();
                     }
                 } else if (data.error) {
-                    transcriptionArea.textContent = `שגיאה: ${data.error}`;
+                    transcriptionArea.value = `שגיאה: ${data.error}`;
                     eventSource.close();
                     resetUploadState();
                 }
@@ -250,13 +284,14 @@
 
             eventSource.onerror = function() {
                 eventSource.close();
-                transcriptionArea.textContent += '\nהזרמת התמלול הסתיימה או נכשלה.';
+                transcriptionArea.value += '\nהזרמת התמלול הסתיימה או נכשלה.';
                 resetUploadState();
             };
         }
 
         function updateTranscriptionDisplay() {
-            transcriptionArea.textContent = transcriptionSegments.map(segment => segment.text).join(' ');
+            transcriptionArea.value = transcriptionSegments.map(segment => segment.text).join(' ');
+            copyBtn.disabled = false;
         }
 
         function resetUploadState() {
@@ -266,6 +301,12 @@
             progressContainer.style.display = 'none';
             progressBar.style.width = '0%';
         }
+
+        copyBtn.addEventListener('click', function() {
+            transcriptionArea.select();
+            document.execCommand('copy');
+            alert('הטקסט הועתק ללוח');
+        });
     </script>
 </body>
 </html>
