@@ -4,13 +4,32 @@ import os
 import time
 import json
 import uuid
+import dotenv
 import random
 import tempfile
 import threading
 import queue
 
 import faster_whisper
+import posthog
 import pydub
+
+dotenv.load_dotenv()
+
+ph = None
+if 'POSTHOG_API_KEY' in os.environ:
+    ph = posthog.Posthog(project_api_key=os.environ['POSTHOG_API_KEY'], host='https://us.i.posthog.com')
+
+def capture_event(distinct_id, event, props=None):
+    global ph
+
+    if not ph:
+        return
+
+    props = {} if not props else props
+    props['source'] = 'transcribe.ivrit.ai'
+
+    ph.capture(distinct_id=distinct_id, event=event, properties=props)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 250 * 1024 * 1024  # 250MB max file size
@@ -43,6 +62,10 @@ def index():
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
+    job_id = str(uuid.uuid4())
+
+    capture_event(job_id, 'file-upload')
+
     if "file" not in request.files:
         return jsonify({"error": "No file part"}), 400
 
@@ -63,13 +86,13 @@ def upload_file():
         except Exception as e:
             return jsonify({"error": f"File upload failed: {str(e)}"}), 500
 
-        job_id = str(uuid.uuid4())
-
         # Store the temporary file path
         temp_files[job_id] = temp_file_path
 
         # Try to add the job to the queue
         try:
+            capture_event(job_id, 'job-queued', {'queue-depth': job_queue.qsize()})
+
             job_queue.put_nowait(job_id)
             return jsonify({"job_id": job_id, "queued": job_queue.qsize()})
         except queue.Full:
@@ -85,6 +108,9 @@ def stream(job_id):
         return jsonify({"error": "Invalid job ID"}), 400
 
     def generate():
+        stream_start_time = time.time()
+        capture_event(job_id, 'stream-start')
+
         queue_position = list(job_queue.queue).index(job_id) + 1 if job_id in job_queue.queue else 0
         yield f"data: {json.dumps({'queue_position': queue_position})}\n\n"
 
@@ -97,6 +123,9 @@ def stream(job_id):
 
         temp_file_path = temp_files[job_id]
         duration = pydub.AudioSegment.from_file(temp_file_path).duration_seconds
+
+        transcribe_start_time = time.time()
+        capture_event(job_id, 'transcribe-start', {'queued_seconds' : transcribe_start_time - stream_start_time})
 
         try:
             segs, _ = fw.transcribe(temp_file_path, language="he")
@@ -120,6 +149,9 @@ def stream(job_id):
 
                 data = json.dumps(reply)
                 yield f"data: {data}\n\n"
+
+            transcribe_done_time = time.time()
+            capture_event(job_id, 'transcribe-done', {'transcription_seconds' : transcribe_done_time - transcribe_start_time, 'audio_duration_seconds' : duration})
 
             reply = {"progress": 1.0}
             if verbose:
