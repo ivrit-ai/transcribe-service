@@ -270,7 +270,7 @@
                         transcriptionSegments.push(data.segment);
                     }
 
-                    if (data.progress >= 1) {
+                    if (data.progress >= 1.0) {
                         eventSource.close();
                         updateTranscriptionDisplay();
                         resetUploadState();
