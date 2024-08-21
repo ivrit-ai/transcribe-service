@@ -123,7 +123,7 @@ def stream(job_id):
 
             reply = {"progress": 1.0}
             if verbose:
-                print(f"{job_id}: {reply"})
+                print(f"{job_id}: {reply}")
 
             data = json.dumps(reply)
             yield f"data: {data}\n\n"
