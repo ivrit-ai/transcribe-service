@@ -4,7 +4,9 @@ import os
 import time
 import json
 import uuid
+import box
 import dotenv
+import magic
 import random
 import tempfile
 import threading
@@ -35,7 +37,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 250 * 1024 * 1024  # 250MB max file size
 
 MAX_PARALLEL_JOBS = 3
-MAX_QUEUED_JOBS = 5
+MAX_QUEUED_JOBS = 10
 
 verbose = "VERBOSE" in os.environ
 
@@ -49,11 +51,47 @@ temp_files = {}
 job_queue = queue.Queue(maxsize=MAX_QUEUED_JOBS)
 
 # Set to keep track of currently running jobs
-running_jobs = set()
+running_jobs = {}
+
+# Keep track of job results
+job_results = {}
 
 # Lock for thread-safe operations
 lock = threading.Lock()
 
+ffmpeg_supported_mimes = [
+    'video/',
+    'audio/',
+    'application/mp4',
+    'application/x-matroska',
+    'application/mxf',
+]
+
+def is_ffmpeg_supported_mimetype(file_mime):
+    return any(file_mime.startswith(supported_mime) for supported_mime in ffmpeg_supported_mimes)
+
+def queue_job(job_id):
+    # Try to add the job to the queue
+    if verbose:
+        print(f'Queuing job {job_id}...')
+
+    try:
+        job_desc = box.Box()
+        job_desc.qtime = time.time()
+        job_desc.utime = time.time()
+        job_desc.id = job_id
+
+        queue_depth = job_queue.qsize()
+        job_queue.put_nowait(job_desc)
+
+        capture_event(job_id, 'job-queued', {'queue-depth': queue_depth})
+
+        return True, jsonify({"job_id": job_id, "queued": job_queue.qsize()})
+    except queue.Full:
+        capture_event(job_id, 'job-queue-failed', {'queue-depth': job_queue.qsize()})
+
+        cleanup_temp_file(job_id)
+        return False, jsonify({"error": "Server is busy. Please try again later."}), 503
 
 @app.route("/")
 def index():
@@ -74,100 +112,73 @@ def upload_file():
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
-    if file:
-        filename = secure_filename(file.filename)
+    if not file:
+        return jsonify({"error": "Invalid file"}), 400
 
-        # Create a temporary file
-        temp_file = tempfile.NamedTemporaryFile(delete=False)
-        temp_file_path = temp_file.name
+    filename = secure_filename(file.filename)
 
-        try:
-            file.save(temp_file_path)
-        except Exception as e:
-            return jsonify({"error": f"File upload failed: {str(e)}"}), 500
+    # Create a temporary file
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    temp_file_path = temp_file.name
 
-        # Store the temporary file path
-        temp_files[job_id] = temp_file_path
+    try:
+        file.save(temp_file_path)
+    except Exception as e:
+        return jsonify({"error": f"File upload failed: {str(e)}"}), 500
 
-        # Try to add the job to the queue
-        try:
-            capture_event(job_id, 'job-queued', {'queue-depth': job_queue.qsize()})
+    # Get the MIME type of the file
+    filetype = magic.Magic(mime=True).from_file(temp_file_path)
 
-            job_queue.put_nowait(job_id)
-            return jsonify({"job_id": job_id, "queued": job_queue.qsize()})
-        except queue.Full:
-            cleanup_temp_file(job_id)
-            return jsonify({"error": "Server is busy. Please try again later."}), 503
+    if not is_ffmpeg_supported_mimetype(filetype):
+        return jsonify({"error" : f"File uploaded is of type {filetype}, which is unsupported"})
 
-    return jsonify({"error": "Invalid file"}), 400
+    # Store the temporary file path
+    temp_files[job_id] = temp_file_path
 
+    queued, res = queue_job(job_id)
+    if queued:
+        job_results[job_id] = []
+
+    return res
 
 @app.route("/stream/<job_id>")
 def stream(job_id):
-    if job_id not in temp_files:
+    # Make sure the job has been queued
+    if job_id not in job_results:
         return jsonify({"error": "Invalid job ID"}), 400
 
     def generate():
-        stream_start_time = time.time()
-        capture_event(job_id, 'stream-start')
+        # Wait in line until it is out of the queue
+        while True:
+            queue_position = None
+            for idx, job_desc in enumerate(job_queue.queue):
+                if job_desc.id == job_id:
+                    queue_position = idx + 1
+                    break
+            
+            if queue_position:
+                yield f"data: {json.dumps({'queue_position': queue_position})}\n\n"
+            else:
+                break
 
-        queue_position = list(job_queue.queue).index(job_id) + 1 if job_id in job_queue.queue else 0
-        yield f"data: {json.dumps({'queue_position': queue_position})}\n\n"
-
-        while job_id in job_queue.queue:
+        # Stream results back from job_results
+        result_idx = 0
+        done = False
+        while not done:
             time.sleep(1)
-            queue_position = list(job_queue.queue).index(job_id) + 1
-            yield f"data: {json.dumps({'queue_position': queue_position})}\n\n"
+            if len(job_results[job_id]) <= result_idx:
+                continue
 
-            process_queue()
+            curr_result = job_results[job_id][result_idx]
 
-        temp_file_path = temp_files[job_id]
-        duration = pydub.AudioSegment.from_file(temp_file_path).duration_seconds
+            done = (curr_result['progress'] == 1.0)
 
-        transcribe_start_time = time.time()
-        capture_event(job_id, 'transcribe-start', {'queued_seconds' : transcribe_start_time - stream_start_time})
-
-        try:
-            segs, _ = fw.transcribe(temp_file_path, language="he")
-
-            for seg in segs:
-                segment = {
-                    "id": seg.id,
-                    "start": seg.start,
-                    "end": seg.end,
-                    "text": seg.text,
-                    "avg_logprob": seg.avg_logprob,
-                    "compression_ratio": seg.compression_ratio,
-                    "no_speech_prob": seg.no_speech_prob,
-                }
-
-                current_time = seg.end
-
-                reply = {"progress": current_time / duration, "segment": segment}
-                if verbose:
-                    print(f"{job_id}: {reply}")
-
-                data = json.dumps(reply)
-                yield f"data: {data}\n\n"
-
-            transcribe_done_time = time.time()
-            capture_event(job_id, 'transcribe-done', {'transcription_seconds' : transcribe_done_time - transcribe_start_time, 'audio_duration_seconds' : duration})
-
-            reply = {"progress": 1.0}
-            if verbose:
-                print(f"{job_id}: {reply}")
-
-            data = json.dumps(reply)
+            data = json.dumps(curr_result)
             yield f"data: {data}\n\n"
 
-        except Exception as e:
-            print(f"{job_id}: {str(e)}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        finally:
-            # Clean up resources
-            cleanup_temp_file(job_id)
-            with lock:
-                running_jobs.remove(job_id)
+            result_idx += 1
+
+        del job_results[job_id]
 
     return Response(generate(), content_type="text/event-stream")
 
@@ -182,8 +193,42 @@ def cleanup_temp_file(job_id):
         finally:
             del temp_files[job_id]
 
+def transcribe_job(job_desc):
+    print(f'Beginning transcription of {job_desc}')
+    job_id = job_desc.id
+    temp_file_path = temp_files[job_id]
+    duration = pydub.AudioSegment.from_file(temp_file_path).duration_seconds
 
-def process_queue():
+    transcribe_start_time = time.time()
+    capture_event(job_id, 'transcribe-start', {'queued_seconds' : transcribe_start_time - job_desc.qtime})
+
+    try:
+        segs, _ = fw.transcribe(temp_file_path, language="he")
+
+        for seg in segs:
+            segment = {
+                "id": seg.id,
+                "start": seg.start,
+                "end": seg.end,
+                "text": seg.text,
+                "avg_logprob": seg.avg_logprob,
+                "compression_ratio": seg.compression_ratio,
+                "no_speech_prob": seg.no_speech_prob,
+            }
+
+            reply = {"progress": seg.end / duration, "segment": segment}
+            job_results[job_id].append(reply)
+
+        transcribe_done_time = time.time()
+        capture_event(job_id, 'transcribe-done', {'transcription_seconds' : transcribe_done_time - transcribe_start_time, 'audio_duration_seconds' : duration})
+
+        reply = {"progress": 1.0}
+        job_results[job_id].append(reply)
+    finally:
+        del running_jobs[job_id]
+        cleanup_temp_file(job_id)
+
+def queue_heartbeat():
     with lock:
         if len(running_jobs) >= MAX_PARALLEL_JOBS:
             return
@@ -191,15 +236,19 @@ def process_queue():
         if job_queue.empty():
             return
 
-        job_id = job_queue.get()
-        running_jobs.add(job_id)
+        job_desc = job_queue.get()
+        running_jobs[job_desc.id] = job_desc
 
+        t_thread = threading.Thread(target=transcribe_job, args=(job_desc,))
+        t_thread.start()
 
-def process_job(job_id):
-    # This function would typically start the actual transcription process
-    # For now, it's just a placeholder
-    pass
-
+def event_loop():
+    while True:
+        queue_heartbeat()
+        time.sleep(0.1)
 
 if __name__ == "__main__":
+    el_thread = threading.Thread(target=event_loop)
+    el_thread.start()
+
     app.run(host="0.0.0.0", port=4500, ssl_context=("secrets/fullchain.pem", "secrets/privkey.pem"), debug=True)
