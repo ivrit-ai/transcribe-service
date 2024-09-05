@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, render_template, Response
+from flask import Flask, request, jsonify, render_template, Response, redirect, url_for, session
+from flask_oauthlib.client import OAuth
 from werkzeug.utils import secure_filename
 import os
 import time
@@ -18,10 +19,31 @@ import pydub
 
 dotenv.load_dotenv()
 
+in_dev = 'TS_STAGING_MODE' in os.environ
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 250 * 1024 * 1024  # 250MB max file size
+app.secret_key = os.environ['FLASK_APP_SECRET']
+
+# Configure Google OAuth
+oauth = OAuth(app)
+google = oauth.remote_app(
+    'google',
+    consumer_key=os.environ['GOOGLE_CLIENT_ID'],
+    consumer_secret=os.environ['GOOGLE_CLIENT_SECRET'],
+    request_token_params={
+        'scope': 'email'
+    },
+    base_url='https://www.googleapis.com/oauth2/v1/',
+    request_token_url=None,
+    access_token_method='POST',
+    access_token_url='https://accounts.google.com/o/oauth2/token',
+    authorize_url='https://accounts.google.com/o/oauth2/auth',
+)
+
 ph = None
 if "POSTHOG_API_KEY" in os.environ:
     ph = posthog.Posthog(project_api_key=os.environ["POSTHOG_API_KEY"], host="https://us.i.posthog.com")
-
 
 def capture_event(distinct_id, event, props=None):
     global ph
@@ -33,10 +55,6 @@ def capture_event(distinct_id, event, props=None):
     props["source"] = "transcribe.ivrit.ai"
 
     ph.capture(distinct_id=distinct_id, event=event, properties=props)
-
-
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 250 * 1024 * 1024  # 250MB max file size
 
 MAX_PARALLEL_JOBS = 3
 MAX_QUEUED_JOBS = 10
@@ -100,7 +118,38 @@ def queue_job(job_id):
 
 @app.route("/")
 def index():
+    if in_dev:
+        session['user_email'] = os.environ['FTC_USER_EMAIL']
+
+    if not 'user_email' in session:
+        return redirect(url_for('login'))
+
     return render_template("index.html")
+
+@app.route('/login')
+def login():
+    return render_template('login.html',
+                           google_analytics_tag=os.environ['GOOGLE_ANALYTICS_TAG'])
+
+@app.route('/authorize')
+def authorize():
+    return google.authorize(callback=url_for('authorized', _external=True))
+
+@app.route('/login/authorized')
+def authorized():
+    resp = google.authorized_response()
+    if resp is None or resp.get('access_token') is None:
+        return 'Access denied: reason={0} error={1}'.format(
+            request.args['error_reason'],
+            request.args['error_description']
+        )
+
+    session['google_token'] = (resp['access_token'], '')
+    session['user_email'] = google.get('userinfo').data["email"]
+ 
+    session.pop('google_token')
+
+    return redirect(url_for('index'))
 
 
 @app.route("/upload", methods=["POST"])
