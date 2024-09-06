@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login Result</title>
+    <script>
+    window.onload = function() {
+        if ({{ success|tojson }}) {
+            window.opener.postMessage({type: 'login_success'}, '*');
+        } else {
+            window.opener.postMessage({type: 'login_failure', message: {{ message|default('Login failed')|tojson }}}, '*');
+        }
+        window.close();
+    }
+    </script>
+</head>
+<body>
+    <p>{{ 'Login successful' if success else 'Login failed' }}</p>
+    <p>This window will close automatically.</p>
+</body>
+</html>
