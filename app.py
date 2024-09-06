@@ -12,6 +12,8 @@ import random
 import tempfile
 import threading
 import queue
+import logging
+from datetime import datetime
 
 import faster_whisper
 import posthog
@@ -24,6 +26,20 @@ in_dev = 'TS_STAGING_MODE' in os.environ
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 250 * 1024 * 1024  # 250MB max file size
 app.secret_key = os.environ['FLASK_APP_SECRET']
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
+logger = logging.getLogger(__name__)
+
+verbose = "VERBOSE" in os.environ
+
+def log_message(message):
+    if verbose:
+        user_email = session.get('user_email')
+        if user_email: 
+            logger.info(f"{user_email}: {message}")
+        else:
+            logger.info(f"{message}")
 
 # Configure Google OAuth
 oauth = OAuth(app)
@@ -59,8 +75,6 @@ def capture_event(distinct_id, event, props=None):
 MAX_PARALLEL_JOBS = 3
 MAX_QUEUED_JOBS = 10
 
-verbose = "VERBOSE" in os.environ
-
 # faster_whisper model
 fw = faster_whisper.WhisperModel("ivrit-ai/faster-whisper-v2-d3-e3")
 
@@ -92,8 +106,7 @@ def is_ffmpeg_supported_mimetype(file_mime):
 
 def queue_job(job_id):
     # Try to add the job to the queue
-    if verbose:
-        print(f"Queuing job {job_id}...")
+    log_message(f"Queuing job {job_id}...")
 
     try:
         job_desc = box.Box()
@@ -106,15 +119,13 @@ def queue_job(job_id):
 
         capture_event(job_id, "job-queued", {"queue-depth": queue_depth})
 
-        if verbose:
-            print(f"Job queued successfully: {job_id}, queue depth: {queue_depth}")
+        log_message(f"Job queued successfully: {job_id}, queue depth: {queue_depth}")
 
         return True, (jsonify({"job_id": job_id, "queued": job_queue.qsize()}))
     except queue.Full:
         capture_event(job_id, "job-queue-failed", {"queue-depth": job_queue.qsize()})
 
-        if verbose:
-            print(f"Job queuing failed: {job_id}")
+        log_message(f"Job queuing failed: {job_id}")
 
         cleanup_temp_file(job_id)
         return False, (jsonify({"error": "Server is busy. Please try again later."}), 503)
@@ -257,7 +268,7 @@ def cleanup_temp_file(job_id):
         try:
             os.unlink(temp_file_path)
         except Exception as e:
-            print(f"Error deleting temporary file: {str(e)}")
+            log_message(f"Error deleting temporary file: {str(e)}")
         finally:
             del temp_files[job_id]
 
@@ -265,14 +276,15 @@ def transcribe_job(job_desc):
     job_id = job_desc.id
 
     try:
-        if verbose:
-            print(f"Beginning transcription of {job_desc}")
+        log_message(f"Beginning transcription of {job_desc}")
 
         temp_file_path = temp_files[job_id]
         duration = pydub.AudioSegment.from_file(temp_file_path).duration_seconds
 
         transcribe_start_time = time.time()
         capture_event(job_id, "transcribe-start", {"queued_seconds": transcribe_start_time - job_desc.qtime})
+
+        log_message(f"Job {job_desc} has a duration of {duration} seconds")
 
         segs, _ = fw.transcribe(temp_file_path, language="he")
 
@@ -290,8 +302,7 @@ def transcribe_job(job_desc):
             reply = {"progress": seg.end / duration, "segment": segment}
             job_results[job_id].append(reply)
 
-        if verbose:
-            print(f"Done transcribing job {job_id}, audio duration was {duration}.")
+        log_message(f"Done transcribing job {job_id}, audio duration was {duration}.")
 
         transcribe_done_time = time.time()
         capture_event(
