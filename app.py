@@ -137,15 +137,15 @@ def authorized():
     resp = google.authorized_response()
     if resp is None or resp.get('access_token') is None:
         error_message = 'Access denied: reason={0} error={1}'.format(
-            request.args['error_reason'],
-            request.args['error_description']
+            request.args.get('error_reason', 'Unknown'),
+            request.args.get('error_description', 'Unknown')
         )
         return render_template('close_window.html', success=False, message=error_message)
 
     session['google_token'] = (resp['access_token'], '')
     user_info = google.get('userinfo')
     session['user_email'] = user_info.data["email"]
- 
+
     session.pop('google_token')
 
     return render_template('close_window.html', success=True)

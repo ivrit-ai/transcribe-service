@@ -7,7 +7,7 @@
         if ({{ success|tojson }}) {
             window.opener.postMessage({type: 'login_success'}, '*');
         } else {
-            window.opener.postMessage({type: 'login_failure', message: {{ message|tojson }}}, '*');
+            window.opener.postMessage({type: 'login_failure', message: {{ message|default('Login failed')|tojson }}}, '*');
         }
         window.close();
     }

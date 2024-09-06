@@ -4,6 +4,50 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>התחברות - שירות התמלול החופשי של ivrit.ai</title>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            text-align: center;
+            padding: 0 20px;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+        p {
+            margin-bottom: 15px;
+        }
+        .login-button {
+            margin-top: 20px;
+        }
+        .custom-google-button {
+            display: inline-block;
+            background: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 2px;
+            box-shadow: 0 2px 4px 0 rgba(0,0,0,.25);
+            padding: 10px 12px;
+            font-size: 14px;
+            font-weight: bold;
+            font-family: 'Roboto', sans-serif;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .custom-google-button:hover {
+            box-shadow: 0 0 3px 3px rgba(66,133,244,.3);
+        }
+    </style>
     <script>
     function openLoginWindow() {
         var width = 600;
@@ -35,11 +79,18 @@
         <p>קראתי את <a href="https://www.ivrit.ai/en/privacy/" target="_blank">מסמך הפרטיות ותנאי השימוש</a>, ואני מאשר/ת אותו.</p>
         <p>בנוסף, אני מאשר/ת ליצור איתי קשר בנושאים הקשורים לפרויקט.</p>
         <div class="login-button">
-            <img src="https://developers.google.com/identity/images/btn_google_signin_dark_normal_web.png" 
-                 alt="Sign in with Google" 
-                 onclick="openLoginWindow()" 
-                 style="cursor: pointer;">
+            <a href="#" onclick="openLoginWindow(); return false;" class="custom-google-button">
+                התחברות עם Google
+            </a>
         </div>
     </div>
+    <!-- Google Analytics Tag -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id={{ google_analytics_tag }}"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', '{{ google_analytics_tag }}');
+    </script>
 </body>
 </html>
