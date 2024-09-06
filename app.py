@@ -33,13 +33,16 @@ logger = logging.getLogger(__name__)
 
 verbose = "VERBOSE" in os.environ
 
+def log_message_in_session(message):
+    user_email = session.get('user_email')
+    if user_email: 
+        logger.info(f"{user_email}: {message}")
+    else:
+        logger.info(f"{message}")
+
 def log_message(message):
-    if verbose:
-        user_email = session.get('user_email')
-        if user_email: 
-            logger.info(f"{user_email}: {message}")
-        else:
-            logger.info(f"{message}")
+    logger.info(f"{message}")
+
 
 # Configure Google OAuth
 oauth = OAuth(app)
@@ -104,28 +107,30 @@ ffmpeg_supported_mimes = [
 def is_ffmpeg_supported_mimetype(file_mime):
     return any(file_mime.startswith(supported_mime) for supported_mime in ffmpeg_supported_mimes)
 
-def queue_job(job_id):
+def queue_job(job_id, user_email, filename):
     # Try to add the job to the queue
-    log_message(f"Queuing job {job_id}...")
+    log_message_in_session(f"Queuing job {job_id}...")
 
     try:
         job_desc = box.Box()
         job_desc.qtime = time.time()
         job_desc.utime = time.time()
         job_desc.id = job_id
+        job_desc.user_email = user_email
+        job_desc.filename = filename
 
         queue_depth = job_queue.qsize()
         job_queue.put_nowait(job_desc)
 
         capture_event(job_id, "job-queued", {"queue-depth": queue_depth})
 
-        log_message(f"Job queued successfully: {job_id}, queue depth: {queue_depth}")
+        log_message_in_session(f"Job queued successfully: {job_id}, queue depth: {queue_depth}")
 
         return True, (jsonify({"job_id": job_id, "queued": job_queue.qsize()}))
     except queue.Full:
         capture_event(job_id, "job-queue-failed", {"queue-depth": job_queue.qsize()})
 
-        log_message(f"Job queuing failed: {job_id}")
+        log_message_in_session(f"Job queuing failed: {job_id}")
 
         cleanup_temp_file(job_id)
         return False, (jsonify({"error": "Server is busy. Please try again later."}), 503)
@@ -209,7 +214,7 @@ def upload_file():
     with lock:
         temp_files[job_id] = temp_file_path
 
-        queued, res = queue_job(job_id)
+        queued, res = queue_job(job_id, session.get('user_email'), filename)
         if queued:
             job_results[job_id] = []
 
@@ -276,7 +281,7 @@ def transcribe_job(job_desc):
     job_id = job_desc.id
 
     try:
-        log_message(f"Beginning transcription of {job_desc}")
+        log_message(f"{job_desc.user_email}: beginning transcription of {job_desc}, file name={job_desc.filename}")
 
         temp_file_path = temp_files[job_id]
         duration = pydub.AudioSegment.from_file(temp_file_path).duration_seconds
@@ -284,7 +289,7 @@ def transcribe_job(job_desc):
         transcribe_start_time = time.time()
         capture_event(job_id, "transcribe-start", {"queued_seconds": transcribe_start_time - job_desc.qtime})
 
-        log_message(f"Job {job_desc} has a duration of {duration} seconds")
+        log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
 
         segs, _ = fw.transcribe(temp_file_path, language="he")
 
@@ -302,7 +307,7 @@ def transcribe_job(job_desc):
             reply = {"progress": seg.end / duration, "segment": segment}
             job_results[job_id].append(reply)
 
-        log_message(f"Done transcribing job {job_id}, audio duration was {duration}.")
+        log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
         transcribe_done_time = time.time()
         capture_event(
