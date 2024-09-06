@@ -116,7 +116,7 @@ def queue_job(job_id):
 @app.route("/")
 def index():
     if in_dev:
-        session['user_email'] = os.environ['FTC_USER_EMAIL']
+        session['user_email'] = os.environ['TS_USER_EMAIL']
 
     if 'user_email' not in session:
         return redirect(url_for('login'))
