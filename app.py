@@ -106,12 +106,18 @@ def queue_job(job_id):
 
         capture_event(job_id, "job-queued", {"queue-depth": queue_depth})
 
-        return True, jsonify({"job_id": job_id, "queued": job_queue.qsize()})
+        if verbose:
+            print(f"Job queued successfully: {job_id}, queue depth: {queue_depth}")
+
+        return True, (jsonify({"job_id": job_id, "queued": job_queue.qsize()}))
     except queue.Full:
         capture_event(job_id, "job-queue-failed", {"queue-depth": job_queue.qsize()})
 
+        if verbose:
+            print(f"Job queuing failed: {job_id}")
+
         cleanup_temp_file(job_id)
-        return False, jsonify({"error": "Server is busy. Please try again later."}), 503
+        return False, (jsonify({"error": "Server is busy. Please try again later."}), 503)
 
 @app.route("/")
 def index():
@@ -186,14 +192,15 @@ def upload_file():
     filetype = magic.Magic(mime=True).from_file(temp_file_path)
 
     if not is_ffmpeg_supported_mimetype(filetype):
-        return jsonify({"error": f"File uploaded is of type {filetype}, which is unsupported"})
+        return jsonify({"error": f"File uploaded is of type {filetype}, which is unsupported"}), 400
 
     # Store the temporary file path
-    temp_files[job_id] = temp_file_path
+    with lock:
+        temp_files[job_id] = temp_file_path
 
-    queued, res = queue_job(job_id)
-    if queued:
-        job_results[job_id] = []
+        queued, res = queue_job(job_id)
+        if queued:
+            job_results[job_id] = []
 
     return res
 
@@ -207,10 +214,11 @@ def stream(job_id):
         # Wait in line until it is out of the queue
         while True:
             queue_position = None
-            for idx, job_desc in enumerate(job_queue.queue):
-                if job_desc.id == job_id:
-                    queue_position = idx + 1
-                    break
+            with lock:
+                for idx, job_desc in enumerate(job_queue.queue):
+                    if job_desc.id == job_id:
+                        queue_position = idx + 1
+                        break
 
             if queue_position:
                 yield f"data: {json.dumps({'queue_position': queue_position})}\n\n"
@@ -222,10 +230,14 @@ def stream(job_id):
         done = False
         while not done:
             time.sleep(1)
-            if len(job_results[job_id]) <= result_idx:
+
+            with lock:
+                job_result = job_results[job_id]
+
+            if len(job_result) <= result_idx:
                 continue
 
-            curr_result = job_results[job_id][result_idx]
+            curr_result = job_result[result_idx]
 
             done = curr_result["progress"] == 1.0
 
@@ -234,7 +246,8 @@ def stream(job_id):
 
             result_idx += 1
 
-        del job_results[job_id]
+        with lock:
+            del job_results[job_id]
 
     return Response(generate(), content_type="text/event-stream")
 
@@ -252,7 +265,8 @@ def transcribe_job(job_desc):
     job_id = job_desc.id
 
     try:
-        print(f"Beginning transcription of {job_desc}")
+        if verbose:
+            print(f"Beginning transcription of {job_desc}")
 
         temp_file_path = temp_files[job_id]
         duration = pydub.AudioSegment.from_file(temp_file_path).duration_seconds
@@ -275,6 +289,9 @@ def transcribe_job(job_desc):
 
             reply = {"progress": seg.end / duration, "segment": segment}
             job_results[job_id].append(reply)
+
+        if verbose:
+            print(f"Done transcribing job {job_id}, audio duration was {duration}.")
 
         transcribe_done_time = time.time()
         capture_event(
@@ -308,9 +325,10 @@ def event_loop():
         queue_heartbeat()
         time.sleep(0.1)
 
+el_thread = threading.Thread(target=event_loop)
+el_thread.start()
+
 if __name__ == "__main__":
-    el_thread = threading.Thread(target=event_loop)
-    el_thread.start()
 
     port = 4600 if in_dev else 4500
 
