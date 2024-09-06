@@ -87,10 +87,8 @@ ffmpeg_supported_mimes = [
     "application/mxf",
 ]
 
-
 def is_ffmpeg_supported_mimetype(file_mime):
     return any(file_mime.startswith(supported_mime) for supported_mime in ffmpeg_supported_mimes)
-
 
 def queue_job(job_id):
     # Try to add the job to the queue
@@ -115,13 +113,12 @@ def queue_job(job_id):
         cleanup_temp_file(job_id)
         return False, jsonify({"error": "Server is busy. Please try again later."}), 503
 
-
 @app.route("/")
 def index():
     if in_dev:
         session['user_email'] = os.environ['FTC_USER_EMAIL']
 
-    if not 'user_email' in session:
+    if 'user_email' not in session:
         return redirect(url_for('login'))
 
     return render_template("index.html")
@@ -139,18 +136,23 @@ def authorize():
 def authorized():
     resp = google.authorized_response()
     if resp is None or resp.get('access_token') is None:
-        return 'Access denied: reason={0} error={1}'.format(
+        error_message = 'Access denied: reason={0} error={1}'.format(
             request.args['error_reason'],
             request.args['error_description']
         )
+        return render_template('close_window.html', success=False, message=error_message)
 
     session['google_token'] = (resp['access_token'], '')
-    session['user_email'] = google.get('userinfo').data["email"]
+    user_info = google.get('userinfo')
+    session['user_email'] = user_info.data["email"]
  
     session.pop('google_token')
 
-    return redirect(url_for('index'))
+    return render_template('close_window.html', success=True)
 
+@google.tokengetter
+def get_google_oauth_token():
+    return session.get('google_token')
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
@@ -195,7 +197,6 @@ def upload_file():
 
     return res
 
-
 @app.route("/stream/<job_id>")
 def stream(job_id):
     # Make sure the job has been queued
@@ -237,7 +238,6 @@ def stream(job_id):
 
     return Response(generate(), content_type="text/event-stream")
 
-
 def cleanup_temp_file(job_id):
     if job_id in temp_files:
         temp_file_path = temp_files[job_id]
@@ -247,7 +247,6 @@ def cleanup_temp_file(job_id):
             print(f"Error deleting temporary file: {str(e)}")
         finally:
             del temp_files[job_id]
-
 
 def transcribe_job(job_desc):
     job_id = job_desc.id
@@ -290,7 +289,6 @@ def transcribe_job(job_desc):
         del running_jobs[job_id]
         cleanup_temp_file(job_id)
 
-
 def queue_heartbeat():
     with lock:
         if len(running_jobs) >= MAX_PARALLEL_JOBS:
@@ -305,15 +303,15 @@ def queue_heartbeat():
         t_thread = threading.Thread(target=transcribe_job, args=(job_desc,))
         t_thread.start()
 
-
 def event_loop():
     while True:
         queue_heartbeat()
         time.sleep(0.1)
 
-
 if __name__ == "__main__":
     el_thread = threading.Thread(target=event_loop)
     el_thread.start()
 
-    app.run(host="0.0.0.0", port=4500, ssl_context=("secrets/fullchain.pem", "secrets/privkey.pem"), debug=True)
+    port = 4600 if in_dev else 4500
+
+    app.run(host="0.0.0.0", port=port, ssl_context=("secrets/fullchain.pem", "secrets/privkey.pem"), debug=True)

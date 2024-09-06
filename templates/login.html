@@ -1,77 +1,45 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="he" dir="rtl">
 <head>
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id={{ google_analytics_tag }}"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>התחברות - שירות התמלול החופשי של ivrit.ai</title>
     <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
+    function openLoginWindow() {
+        var width = 600;
+        var height = 600;
+        var left = (screen.width / 2) - (width / 2);
+        var top = (screen.height / 2) - (height / 2);
+        
+        var loginUrl = '{{ url_for('authorize', _external=True) }}';
+        
+        window.open(loginUrl, 'GoogleLogin', 'width=' + width + ',height=' + height + ',top=' + top + ',left=' + left);
+    }
 
-    gtag('config', '{{ google_analytics_tag }}');
+    // Listen for messages from the popup window
+    window.addEventListener('message', function(event) {
+        if (event.origin !== window.location.origin) return;
+        
+        if (event.data.type === 'login_success') {
+            // Redirect to the main page or refresh the current page
+            window.location.href = '{{ url_for('index') }}';
+        }
+    }, false);
     </script>
-
-    <title>תמלול בעזרת ivrit.ai</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            margin-top: 50px;
-        }
-
-        .container {
-            max-width: 600px;
-            margin: auto;
-            padding: 20px;
-            direction: rtl;
-            /* Right-to-left direction */
-            text-align: center;
-            /* Right align for RTL text */
-        }
-
-        .login-button {
-            margin-top: 20px;
-            text-align: center;
-
-        }
-    </style>
-    <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
 </head>
-
 <body>
     <div class="container">
         <h1>ברוכים הבאים לשירות התמלול החופשי של ivrit.ai!</h1>
-        <p>למען שמירה על איכות השירות, נודה שתתחברו בעזרת חשבון גוגל.<br><br>
-            רוצים לדעת עוד על הפרויקט? מוזמנים לקרוא עוד ב-<a href="https://ivrit.ai" target="_blank">ivrit.ai</a>.
-        </p>
-        <!-- Checkbox for Privacy and Terms agreement -->
-        <label class="checkbox-label">
-            <input type="checkbox" id="terms-checkbox">
-            קראתי את <a href="https://www.ivrit.ai/en/privacy/" target="_blank">מסמך הפרטיות ותנאי השימוש</a>, ואני
-            מאשר/ת אותו.<br>
-            בנוסף, אני מאשר/ת ליצור איתי קשר בנושאים הקשורים לפרויקט.
-        </label>
+        <p>למען שמירה על איכות השירות, נודה שתתחברו בעזרת חשבון גוגל.</p>
+        <p>רוצים לדעת עוד על הפרויקט? מוזמנים לקרוא עוד ב-<a href="https://ivrit.ai" target="_blank">ivrit.ai</a>.</p>
+        <p>קראתי את <a href="https://www.ivrit.ai/en/privacy/" target="_blank">מסמך הפרטיות ותנאי השימוש</a>, ואני מאשר/ת אותו.</p>
+        <p>בנוסף, אני מאשר/ת ליצור איתי קשר בנושאים הקשורים לפרויקט.</p>
         <div class="login-button">
-            <a href="{{ url_for('authorize') }}" id="login-link">
-                <img src="https://developers.google.com/identity/images/btn_google_signin_dark_normal_web.png"
-                    alt="Sign in with Google" />
-            </a>
+            <img src="https://developers.google.com/identity/images/btn_google_signin_dark_normal_web.png" 
+                 alt="Sign in with Google" 
+                 onclick="openLoginWindow()" 
+                 style="cursor: pointer;">
         </div>
     </div>
-
-    <script>
-        const checkbox = document.getElementById('terms-checkbox');
-        const loginLink = document.getElementById('login-link');
-
-        // Add an event listener to the login link
-        loginLink.addEventListener('click', function (event) {
-            if (!checkbox.checked) {
-                event.preventDefault(); // Prevent the link from being followed
-                alert('אנא אשר/י את תנאי השימוש.');
-            }
-        });
-    </script>
 </body>
-
 </html>
