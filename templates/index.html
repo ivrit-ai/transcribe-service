@@ -230,12 +230,8 @@
                         transcriptionArea.value = `שגיאה: ${response.error}`;
                         resetUploadState();
                     } else {
-                        if (response.queued) {
-                            transcriptionArea.value = `קובץ הועלה. ממתין בתור... מיקום: ${response.queued}`;
-                        } else {
-                            transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
-                        }
-                        startStreaming(response.job_id);
+                        transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
+                        pollJobStatus(response.job_id);
                     }
                 } else {
                     transcriptionArea.value = `שגיאה: ${xhr.statusText}`;
@@ -251,47 +247,58 @@
             xhr.send(formData);
         }
 
-        function startStreaming(jobId) {
-            const eventSource = new EventSource(`/stream/${jobId}`);
+        function pollJobStatus(jobId) {
+            let retryCount = 0;
+            const maxRetries = 5;
 
-            eventSource.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                
-                if (data.queue_position) {
-                    transcriptionArea.value = `ממתין בתור... מיקום: ${data.queue_position}`;
-                    progressBar.style.width = '0%';
-                } else if (data.waiting) {
-                    transcriptionArea.value = 'ממתין לעיבוד...';
-                    progressBar.style.width = '0%';
-                } else if (data.progress) {
-                    progressBar.style.width = `${data.progress * 100}%`;
-                    transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
-                    
-                    if (data.segment) {
-                        transcriptionSegments.push(data.segment);
-                    }
+            function poll() {
+                fetch(`/job_status/${jobId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.queue_position) {
+                            transcriptionArea.value = `ממתין בתור... מיקום: ${data.queue_position}`;
+                            progressBar.style.width = '0%';
+                        } else if (data.progress !== undefined) {
+                            progressBar.style.width = `${data.progress * 100}%`;
+                            transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
+                            
+                            if (data.results) {
+                                transcriptionSegments = data.results;
+                            }
 
-                    if (data.progress >= 1.0) {
-                        eventSource.close();
-                        updateTranscriptionDisplay();
-                        resetUploadState();
-                    }
-                } else if (data.error) {
-                    transcriptionArea.value = `שגיאה: ${data.error}`;
-                    eventSource.close();
-                    resetUploadState();
-                }
-            };
+                            if (data.progress >= 1.0) {
+                                updateTranscriptionDisplay();
+                                resetUploadState();
+                                return;
+                            }
+                        } else if (data.error) {
+                            transcriptionArea.value = `שגיאה: ${data.error}`;
+                            resetUploadState();
+                            return;
+                        }
 
-            eventSource.onerror = function() {
-                eventSource.close();
-                transcriptionArea.value += '\nהזרמת התמלול הסתיימה או נכשלה.';
-                resetUploadState();
-            };
+                        setTimeout(poll, 2000);
+                    })
+                    .catch(error => {
+                        console.error('Error polling job status:', error);
+                        retryCount++;
+                        if (retryCount < maxRetries) {
+                            setTimeout(poll, 2000);
+                        } else {
+                            transcriptionArea.value = 'שגיאה בקבלת סטטוס העבודה';
+                            resetUploadState();
+                        }
+                    });
+            }
+
+            poll();
         }
 
         function updateTranscriptionDisplay() {
-            transcriptionArea.value = transcriptionSegments.map(segment => segment.text).join(' ');
+            transcriptionArea.value = transcriptionSegments
+                .filter(segment => segment.segment && segment.segment.text)
+                .map(segment => segment.segment.text)
+                .join(' ');
             copyBtn.disabled = false;
         }
 

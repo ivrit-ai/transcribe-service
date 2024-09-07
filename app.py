@@ -13,7 +13,7 @@ import tempfile
 import threading
 import queue
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import faster_whisper
 import posthog
@@ -216,56 +216,37 @@ def upload_file():
 
         queued, res = queue_job(job_id, session.get('user_email'), filename)
         if queued:
-            job_results[job_id] = []
+            job_results[job_id] = {
+                'results': [],
+                'completion_time': None,
+                'progress': 0
+            }
 
     return res
 
-@app.route("/stream/<job_id>")
-def stream(job_id):
+@app.route("/job_status/<job_id>")
+def job_status(job_id):
     # Make sure the job has been queued
     if job_id not in job_results:
         return jsonify({"error": "Invalid job ID"}), 400
 
-    def generate():
-        # Wait in line until it is out of the queue
-        while True:
-            queue_position = None
-            with lock:
-                for idx, job_desc in enumerate(job_queue.queue):
-                    if job_desc.id == job_id:
-                        queue_position = idx + 1
-                        break
-
-            if queue_position:
-                yield f"data: {json.dumps({'queue_position': queue_position})}\n\n"
-            else:
+    with lock:
+        # Check if the job is in the queue
+        queue_position = None
+        for idx, job_desc in enumerate(job_queue.queue):
+            if job_desc.id == job_id:
+                queue_position = idx + 1
                 break
 
-        # Stream results back from job_results
-        result_idx = 0
-        done = False
-        while not done:
-            time.sleep(1)
+        if queue_position:
+            return jsonify({'queue_position': queue_position})
 
-            with lock:
-                job_result = job_results[job_id]
+        # If job is complete, return the entire job_result data structure
+        if job_results[job_id]['progress'] == 1.0:
+            return jsonify(job_results[job_id])
 
-            if len(job_result) <= result_idx:
-                continue
-
-            curr_result = job_result[result_idx]
-
-            done = curr_result["progress"] == 1.0
-
-            data = json.dumps(curr_result)
-            yield f"data: {data}\n\n"
-
-            result_idx += 1
-
-        with lock:
-            del job_results[job_id]
-
-    return Response(generate(), content_type="text/event-stream")
+        # If job is in progress, return only the progress
+        return jsonify({'progress': job_results[job_id]['progress']})
 
 def cleanup_temp_file(job_id):
     if job_id in temp_files:
@@ -304,8 +285,11 @@ def transcribe_job(job_desc):
                 "no_speech_prob": seg.no_speech_prob,
             }
 
-            reply = {"progress": seg.end / duration, "segment": segment}
-            job_results[job_id].append(reply)
+            progress = seg.end / duration
+            job_results[job_id]['progress'] = progress
+            job_results[job_id]['results'].append({"progress": progress, "segment": segment})
+
+        log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
@@ -316,29 +300,37 @@ def transcribe_job(job_desc):
             {"transcription_seconds": transcribe_done_time - transcribe_start_time, "audio_duration_seconds": duration},
         )
 
-        reply = {"progress": 1.0}
-        job_results[job_id].append(reply)
+        job_results[job_id]['progress'] = 1.0
+        job_results[job_id]['results'].append({"progress": 1.0})
+        job_results[job_id]['completion_time'] = datetime.now()
     finally:
         del running_jobs[job_id]
         cleanup_temp_file(job_id)
 
-def queue_heartbeat():
+def submit_next_task():
     with lock:
-        if len(running_jobs) >= MAX_PARALLEL_JOBS:
-            return
+        if len(running_jobs) < MAX_PARALLEL_JOBS and not job_queue.empty():
+            job_desc = job_queue.get()
+            running_jobs[job_desc.id] = job_desc
 
-        if job_queue.empty():
-            return
+            t_thread = threading.Thread(target=transcribe_job, args=(job_desc,))
+            t_thread.start()
 
-        job_desc = job_queue.get()
-        running_jobs[job_desc.id] = job_desc
+def cleanup_old_results():
+    with lock:
+        current_time = datetime.now()
+        jobs_to_delete = []
+        for job_id, job_data in job_results.items():
+            if job_data['completion_time'] and (current_time - job_data['completion_time']) > timedelta(minutes=30):
+                jobs_to_delete.append(job_id)
 
-        t_thread = threading.Thread(target=transcribe_job, args=(job_desc,))
-        t_thread.start()
+        for job_id in jobs_to_delete:
+            del job_results[job_id]
 
 def event_loop():
     while True:
-        queue_heartbeat()
+        submit_next_task()
+        cleanup_old_results()
         time.sleep(0.1)
 
 el_thread = threading.Thread(target=event_loop)
