@@ -231,7 +231,7 @@
                         resetUploadState();
                     } else {
                         transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
-                        pollJobStatus(response.job_id);
+                        startStreaming(response.job_id);
                     }
                 } else {
                     transcriptionArea.value = `שגיאה: ${xhr.statusText}`;
@@ -247,51 +247,53 @@
             xhr.send(formData);
         }
 
-        function pollJobStatus(jobId) {
-            let retryCount = 0;
-            const maxRetries = 5;
+        function startStreaming(jobId) {
+            let consecutiveErrorCount = 0;
+            const maxConsecutiveErrors = 5;
 
-            function poll() {
-                fetch(`/job_status/${jobId}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.queue_position) {
-                            transcriptionArea.value = `ממתין בתור... מיקום: ${data.queue_position}`;
-                            progressBar.style.width = '0%';
-                        } else if (data.progress !== undefined) {
-                            progressBar.style.width = `${data.progress * 100}%`;
-                            transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
-                            
-                            if (data.results) {
-                                transcriptionSegments = data.results;
-                            }
+            function stream() {
+                const eventSource = new EventSource(`/job_status/${jobId}`);
 
-                            if (data.progress >= 1.0) {
-                                updateTranscriptionDisplay();
-                                resetUploadState();
-                                return;
-                            }
-                        } else if (data.error) {
-                            transcriptionArea.value = `שגיאה: ${data.error}`;
-                            resetUploadState();
-                            return;
+                eventSource.onmessage = function(event) {
+                    consecutiveErrorCount = 0; // Reset error count on successful message
+                    const data = JSON.parse(event.data);
+
+                    if (data.queue_position) {
+                        transcriptionArea.value = `ממתין בתור... מיקום: ${data.queue_position}`;
+                        progressBar.style.width = '0%';
+                    } else if (data.progress !== undefined) {
+                        progressBar.style.width = `${data.progress * 100}%`;
+                        transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
+                        
+                        if (data.results) {
+                            transcriptionSegments = data.results;
+                            updateTranscriptionDisplay();
                         }
 
-                        setTimeout(poll, 2000);
-                    })
-                    .catch(error => {
-                        console.error('Error polling job status:', error);
-                        retryCount++;
-                        if (retryCount < maxRetries) {
-                            setTimeout(poll, 2000);
-                        } else {
-                            transcriptionArea.value = 'שגיאה בקבלת סטטוס העבודה';
+                        if (data.progress >= 1.0) {
+                            eventSource.close();
                             resetUploadState();
                         }
-                    });
+                    } else if (data.error) {
+                        transcriptionArea.value = `שגיאה: ${data.error}`;
+                        eventSource.close();
+                        resetUploadState();
+                    }
+                };
+
+                eventSource.onerror = function() {
+                    eventSource.close();
+                    consecutiveErrorCount++;
+                    if (consecutiveErrorCount < maxConsecutiveErrors) {
+                        setTimeout(stream, 2000);
+                    } else {
+                        transcriptionArea.value = 'שגיאה בקבלת סטטוס העבודה';
+                        resetUploadState();
+                    }
+                };
             }
 
-            poll();
+            stream();
         }
 
         function updateTranscriptionDisplay() {

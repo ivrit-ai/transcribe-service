@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, Response, redirect, url_for, session
+from flask import Flask, request, jsonify, render_template, Response, redirect, url_for, session, stream_with_context
 from flask_oauthlib.client import OAuth
 from werkzeug.utils import secure_filename
 import os
@@ -230,23 +230,39 @@ def job_status(job_id):
     if job_id not in job_results:
         return jsonify({"error": "Invalid job ID"}), 400
 
-    with lock:
-        # Check if the job is in the queue
-        queue_position = None
-        for idx, job_desc in enumerate(job_queue.queue):
-            if job_desc.id == job_id:
-                queue_position = idx + 1
-                break
+    def generate():
+        last_index = 0
+        while True:
+            with lock:
+                # Check if the job is in the queue
+                queue_position = None
+                for idx, job_desc in enumerate(job_queue.queue):
+                    if job_desc.id == job_id:
+                        queue_position = idx + 1
+                        break
 
-        if queue_position:
-            return jsonify({'queue_position': queue_position})
+                if queue_position:
+                    yield json.dumps({'queue_position': queue_position}) + '\n'
+                    time.sleep(1)
+                    continue
 
-        # If job is complete, return the entire job_result data structure
-        if job_results[job_id]['progress'] == 1.0:
-            return jsonify(job_results[job_id])
+                # If job is complete, return the entire job_result data structure
+                if job_results[job_id]['progress'] == 1.0:
+                    yield json.dumps(job_results[job_id]) + '\n'
+                    break
 
-        # If job is in progress, return only the progress
-        return jsonify({'progress': job_results[job_id]['progress']})
+                # If job is in progress, return new results
+                current_results = job_results[job_id]['results']
+                if last_index < len(current_results):
+                    new_results = current_results[last_index:]
+                    yield json.dumps(new_results) + '\n'
+                    last_index = len(current_results)
+                else:
+                    yield json.dumps({'progress': job_results[job_id]['progress']}) + '\n'
+
+            time.sleep(0.5)
+
+    return Response(stream_with_context(generate()), content_type='application/json')
 
 def cleanup_temp_file(job_id):
     if job_id in temp_files:
@@ -288,8 +304,6 @@ def transcribe_job(job_desc):
             progress = seg.end / duration
             job_results[job_id]['progress'] = progress
             job_results[job_id]['results'].append({"progress": progress, "segment": segment})
-
-        log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
