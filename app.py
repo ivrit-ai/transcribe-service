@@ -291,6 +291,8 @@ def transcribe_job(job_desc):
 
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
+        log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
+
         transcribe_done_time = time.time()
         capture_event(
             job_id,
