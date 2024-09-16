@@ -78,7 +78,7 @@ MAX_PARALLEL_SHORT_JOBS = 2
 MAX_PARALLEL_LONG_JOBS = 1
 MAX_QUEUED_JOBS = 20
 SHORT_JOB_THRESHOLD = 20 * 60
-JOB_TIMEOUT = 2 * 60
+JOB_TIMEOUT = 1 * 60
 
 # faster_whisper model
 fw = faster_whisper.WhisperModel("ivrit-ai/faster-whisper-v2-d4")
@@ -138,7 +138,7 @@ def queue_job(job_id, user_email, filename, duration):
     with lock:
         # Check if user already has a job queued or running
         if user_email in user_jobs:
-            return False, (jsonify({"error": "You already have a job in progress. Please wait for it to complete."}), 400)
+            return False, (jsonify({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}), 400)
 
         try:
             job_desc = box.Box()
@@ -177,7 +177,7 @@ def queue_job(job_id, user_email, filename, duration):
 
             capture_event(job_id, "job-queued", {"queue-depth": queue_depth, "job-type": job_type})
 
-            log_message_in_session(f"Job queued successfully: {job_id}, queue depth: {queue_depth}, job type: {job_type}")
+            log_message_in_session(f"Job queued successfully: {job_id}, queue depth: {queue_depth}, job type: {job_type}, job desc: {job_desc}")
 
             return True, (jsonify({"job_id": job_id, "queued": queue_depth, "job_type": job_type, "time_ahead": time_ahead_str}))
         except queue.Full:
@@ -186,7 +186,7 @@ def queue_job(job_id, user_email, filename, duration):
             log_message_in_session(f"Job queuing failed: {job_id}")
 
             cleanup_temp_file(job_id)
-            return False, (jsonify({"error": "Server is busy. Please try again later."}), 503)
+            return False, (jsonify({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}), 503)
 
 @app.route("/")
 def index():
@@ -237,15 +237,15 @@ def upload_file():
     capture_event(job_id, "file-upload")
 
     if "file" not in request.files:
-        return jsonify({"error": "No file part"}), 400
+        return jsonify({"error": "לא נבחר קובץ. אנא בחר קובץ להעלאה."}), 400
 
     file = request.files["file"]
 
     if file.filename == "":
-        return jsonify({"error": "No selected file"}), 400
+        return jsonify({"error": "שם הקובץ ריק. אנא בחר קובץ תקין."}), 400
 
     if not file:
-        return jsonify({"error": "Invalid file"}), 400
+        return jsonify({"error": "הקובץ שנבחר אינו תקין. אנא נסה קובץ אחר."}), 400
 
     filename = secure_filename(file.filename)
 
@@ -256,16 +256,19 @@ def upload_file():
     try:
         file.save(temp_file_path)
     except Exception as e:
-        return jsonify({"error": f"File upload failed: {str(e)}"}), 500
+        return jsonify({"error": f"העלאת הקובץ נכשלה: {str(e)}"}), 500
 
     # Get the MIME type of the file
     filetype = magic.Magic(mime=True).from_file(temp_file_path)
 
     if not is_ffmpeg_supported_mimetype(filetype):
-        return jsonify({"error": f"File uploaded is of type {filetype}, which is unsupported"}), 400
+        return jsonify({"error": f"סוג הקובץ {filetype} אינו נתמך. אנא העלה קובץ אודיו או וידאו תקין."}), 400
 
     # Get the duration of the audio file
     duration = get_media_duration(temp_file_path)
+
+    if duration is None:
+        return jsonify({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}), 400
 
     # Store the temporary file path
     with lock:
@@ -278,6 +281,8 @@ def upload_file():
                 'completion_time': None,
                 'progress': 0
             }
+        else:
+            cleanup_temp_file(job_id)
 
     return res
 
@@ -285,7 +290,7 @@ def upload_file():
 def job_status(job_id):
     # Make sure the job has been queued
     if job_id not in job_results:
-        return jsonify({"error": "Invalid job ID"}), 400
+        return jsonify({"error": "מזהה העבודה אינו תקין. אנא נסה להעלות את הקובץ מחדש."}), 400
 
     with lock:
         # Check if the job is in the queue
@@ -433,19 +438,13 @@ def terminate_inactive_jobs():
         current_time = time.time()
         jobs_to_terminate = []
 
-        # Check queued jobs
+        # Check queued jobs.
+        # Running jobs are handled in transcribe_job.
         for queue_to_check in [short_job_queue, long_job_queue]:
             for job in list(queue_to_check.queue):
                 if current_time - job_last_accessed.get(job.id, 0) > JOB_TIMEOUT:
                     jobs_to_terminate.append(job.id)
                     queue_to_check.queue.remove(job)
-
-        # Check running jobs
-        for running_jobs in [running_short_jobs, running_long_jobs]:
-            for job_id, job in list(running_jobs.items()):
-                if current_time - job_last_accessed.get(job_id, 0) > JOB_TIMEOUT:
-                    jobs_to_terminate.append(job_id)
-                    del running_jobs[job_id]
 
         # Terminate and clean up jobs
         for job_id in jobs_to_terminate:

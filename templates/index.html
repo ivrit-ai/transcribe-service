@@ -227,21 +227,18 @@
                 if (xhr.status === 200) {
                     const response = JSON.parse(xhr.responseText);
                     if (response.error) {
-                        transcriptionArea.value = `שגיאה: ${response.error}`;
-                        resetUploadState();
+                        showError(response.error);
                     } else {
                         transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
                         pollJobStatus(response.job_id);
                     }
                 } else {
-                    transcriptionArea.value = `שגיאה: ${xhr.statusText}`;
-                    resetUploadState();
+                    showError(`שגיאה: ${xhr.statusText}`);
                 }
             };
 
             xhr.onerror = function() {
-                transcriptionArea.value = 'שגיאה בהעלאת הקובץ';
-                resetUploadState();
+                showError('שגיאה בהעלאת הקובץ. אנא נסה שוב.');
             };
 
             xhr.send(formData);
@@ -254,7 +251,9 @@
                 fetch(`/job_status/${jobId}`)
                     .then(response => response.json())
                     .then(data => {
-                        if (data.queue_position) {
+                        if (data.error) {
+                            showError(data.error);
+                        } else if (data.queue_position) {
                             let statusMessage = `ממתין בתור... מיקום: ${data.queue_position}`;
                             if (data.time_ahead) {
                                 statusMessage += `, זמן משוער לפניך: ${data.time_ahead}`;
@@ -277,18 +276,19 @@
                                 updateTranscriptionDisplay();
                                 resetUploadState();
                             }
-                        } else if (data.error) {
-                            transcriptionArea.value = `שגיאה: ${data.error}`;
-                            resetUploadState();
                         }
                     })
                     .catch(error => {
-                        transcriptionArea.value = 'שגיאה בקבלת סטטוס העבודה';
-                        resetUploadState();
+                        showError('שגיאה בקבלת סטטוס העבודה. אנא נסה להעלות את הקובץ מחדש.');
                     });
             }
 
             poll();
+        }
+
+        function showError(message) {
+            transcriptionArea.value = `שגיאה: ${message}`;
+            resetUploadState();
         }
 
         function updateTranscriptionDisplay() {
