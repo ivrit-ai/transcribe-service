@@ -260,6 +260,9 @@
 
                     if (data.queue_position) {
                         transcriptionArea.value = `ממתין בתור... מיקום: ${data.queue_position}`;
+                        if (data.time_ahead) {
+                            transcriptionArea.value += `, זמן תמלול לפניך: ${data.time_ahead}`;
+                        }
                         progressBar.style.width = '0%';
                     } else if (data.progress !== undefined) {
                         progressBar.style.width = `${data.progress * 100}%`;
