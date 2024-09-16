@@ -81,7 +81,7 @@ SHORT_JOB_THRESHOLD = 20 * 60
 JOB_TIMEOUT = 2 * 60
 
 # faster_whisper model
-fw = faster_whisper.WhisperModel("ivrit-ai/faster-whisper-v2-d3-e3")
+fw = faster_whisper.WhisperModel("ivrit-ai/faster-whisper-v2-d4")
 
 # Dictionary to store temporary file paths
 temp_files = {}
@@ -129,6 +129,8 @@ def get_media_duration(file_path):
         print(f"Error: {e.stderr}")
         return None
 
+SPEEDUP_FACTOR = 5
+
 def queue_job(job_id, user_email, filename, duration):
     # Try to add the job to the queue
     log_message_in_session(f"Queuing job {job_id}...")
@@ -150,12 +152,22 @@ def queue_job(job_id, user_email, filename, duration):
             if duration <= SHORT_JOB_THRESHOLD:
                 queue_to_use = short_job_queue
                 job_type = "short"
+                running_jobs = running_short_jobs
             else:
                 queue_to_use = long_job_queue
                 job_type = "long"
+                running_jobs = running_long_jobs
 
             queue_depth = queue_to_use.qsize()
             queue_to_use.put_nowait(job_desc)
+
+            # Calculate time ahead only for the relevant queue
+            time_ahead = sum(job.duration for job in running_jobs.values())
+            time_ahead += sum(job.duration for job in list(queue_to_use.queue)[:-1])  # Exclude the job we just added
+            time_ahead /= SPEEDUP_FACTOR
+
+            # Convert time_ahead to HH:MM:SS format
+            time_ahead_str = str(datetime.timedelta(seconds=int(time_ahead)))
 
             # Add job to user's active jobs
             user_jobs[user_email] = job_id
@@ -167,7 +179,7 @@ def queue_job(job_id, user_email, filename, duration):
 
             log_message_in_session(f"Job queued successfully: {job_id}, queue depth: {queue_depth}, job type: {job_type}")
 
-            return True, (jsonify({"job_id": job_id, "queued": queue_depth, "job_type": job_type}))
+            return True, (jsonify({"job_id": job_id, "queued": queue_depth, "job_type": job_type, "time_ahead": time_ahead_str}))
         except queue.Full:
             capture_event(job_id, "job-queue-failed", {"queue-depth": queue_depth, "job-type": job_type})
 
@@ -275,49 +287,47 @@ def job_status(job_id):
     if job_id not in job_results:
         return jsonify({"error": "Invalid job ID"}), 400
 
-    # Update last access time
-    job_last_accessed[job_id] = time.time()
+    with lock:
+        # Check if the job is in the queue
+        queue_position = None
+        time_ahead = 0
+        job_type = None
+        
+        # Check short queue
+        for idx, job_desc in enumerate(short_job_queue.queue):
+            if job_desc.id == job_id:
+                queue_position = idx + 1
+                job_type = "short"
+                break
+            time_ahead += job_desc.duration
 
-    def generate():
-        last_index = 0
-        while True:
-            with lock:
-                # Check if the job is in either queue
-                queue_position = None
-                time_ahead = 0
-                for idx, job_desc in enumerate(list(short_job_queue.queue) + list(long_job_queue.queue)):
-                    if job_desc.id == job_id:
-                        queue_position = idx + 1
-                        break
-                    time_ahead += job_desc.duration
-
-                # Add duration of running jobs
-                for running_job in list(running_short_jobs.values()) + list(running_long_jobs.values()):
-                    time_ahead += running_job.duration
-
-                if queue_position:
-                    time_ahead_str = str(timedelta(seconds=int(time_ahead / 5)))
-                    yield json.dumps({'queue_position': queue_position, 'time_ahead': time_ahead_str}) + '\n'
-                    time.sleep(1)
-                    continue
-
-                # If job is complete, return the entire job_result data structure
-                if job_results[job_id]['progress'] == 1.0:
-                    yield json.dumps(job_results[job_id]) + '\n'
+        # If not found in short queue, check long queue
+        if not queue_position:
+            time_ahead = 0  # Reset time_ahead for long queue
+            for idx, job_desc in enumerate(long_job_queue.queue):
+                if job_desc.id == job_id:
+                    queue_position = idx + 1
+                    job_type = "long"
                     break
+                time_ahead += job_desc.duration
 
-                # If job is in progress, return new results
-                current_results = job_results[job_id]['results']
-                if last_index < len(current_results):
-                    new_results = current_results[last_index:]
-                    yield json.dumps(new_results) + '\n'
-                    last_index = len(current_results)
-                else:
-                    yield json.dumps({'progress': job_results[job_id]['progress']}) + '\n'
+        if queue_position:
+            # Add duration of currently running jobs for the relevant queue
+            if job_type == "short":
+                time_ahead += sum(job.duration for job in running_short_jobs.values())
+            else:
+                time_ahead += sum(job.duration for job in running_long_jobs.values())
+            
+            # Apply speedup factor
+            time_ahead /= SPEEDUP_FACTOR
+            
+            # Convert time_ahead to HH:MM:SS format
+            time_ahead_str = str(datetime.timedelta(seconds=int(time_ahead)))
+            
+            return jsonify({'queue_position': queue_position, 'time_ahead': time_ahead_str, 'job_type': job_type})
 
-            time.sleep(0.5)
-
-    return Response(stream_with_context(generate()), content_type='application/json')
+        # If job is complete or in progress, return the job_result data
+        return jsonify(job_results[job_id])
 
 def cleanup_temp_file(job_id):
     if job_id in temp_files:
@@ -363,8 +373,9 @@ def transcribe_job(job_desc):
             }
 
             progress = seg.end / duration
-            job_results[job_id]['progress'] = progress
-            job_results[job_id]['results'].append({"progress": progress, "segment": segment})
+            with lock:
+                job_results[job_id]['progress'] = progress
+                job_results[job_id]['results'].append(segment)
 
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
@@ -375,9 +386,9 @@ def transcribe_job(job_desc):
             {"transcription_seconds": transcribe_done_time - transcribe_start_time, "audio_duration_seconds": duration},
         )
 
-        job_results[job_id]['progress'] = 1.0
-        job_results[job_id]['results'].append({"progress": 1.0})
-        job_results[job_id]['completion_time'] = datetime.now()
+        with lock:
+            job_results[job_id]['progress'] = 1.0
+            job_results[job_id]['completion_time'] = datetime.now()
     finally:
         if job_desc.duration <= SHORT_JOB_THRESHOLD:
             del running_short_jobs[job_id]

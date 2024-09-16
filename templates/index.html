@@ -212,91 +212,70 @@
             transcriptionSegments = [];
             copyBtn.disabled = true;
 
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/upload', true);
-
-            xhr.upload.onprogress = function(event) {
-                if (event.lengthComputable) {
-                    const percentComplete = (event.loaded / event.total) * 100;
-                    progressBar.style.width = percentComplete + '%';
-                    transcriptionArea.value = `מעלה את הקובץ... ${percentComplete.toFixed(1)}%`;
-                }
-            };
-
-            xhr.onload = function() {
-                if (xhr.status === 200) {
-                    const response = JSON.parse(xhr.responseText);
-                    if (response.error) {
-                        transcriptionArea.value = `שגיאה: ${response.error}`;
-                        resetUploadState();
-                    } else {
-                        transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
-                        startStreaming(response.job_id);
-                    }
-                } else {
-                    transcriptionArea.value = `שגיאה: ${xhr.statusText}`;
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    transcriptionArea.value = `שגיאה: ${data.error}`;
                     resetUploadState();
+                } else {
+                    transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
+                    pollJobStatus(data.job_id);
                 }
-            };
-
-            xhr.onerror = function() {
+            })
+            .catch(error => {
                 transcriptionArea.value = 'שגיאה בהעלאת הקובץ';
                 resetUploadState();
-            };
-
-            xhr.send(formData);
+            });
         }
 
-        function startStreaming(jobId) {
-            let consecutiveErrorCount = 0;
-            const maxConsecutiveErrors = 5;
+        function pollJobStatus(jobId) {
+            const pollInterval = 2000; // Poll every 2 seconds
 
-            function stream() {
-                const eventSource = new EventSource(`/job_status/${jobId}`);
+            function poll() {
+                fetch(`/job_status/${jobId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.queue_position) {
+                            let statusMessage = `ממתין בתור... מיקום: ${data.queue_position}`;
+                            if (data.time_ahead) {
+                                statusMessage += `, זמן משוער לפניך: ${data.time_ahead}`;
+                            }
+                            if (data.job_type) {
+                                statusMessage += `, סוג עבודה: ${data.job_type === 'short' ? 'קצרה' : 'ארוכה'}`;
+                            }
+                            transcriptionArea.value = statusMessage;
+                            progressBar.style.width = '0%';
+                            setTimeout(poll, pollInterval);
+                        } else if (data.progress !== undefined) {
+                            progressBar.style.width = `${data.progress * 100}%`;
+                            transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
+                            
+                            if (data.results) {
+                                transcriptionSegments = data.results;
+                                updateTranscriptionDisplay();
+                            }
 
-                eventSource.onmessage = function(event) {
-                    consecutiveErrorCount = 0; // Reset error count on successful message
-                    const data = JSON.parse(event.data);
-
-                    if (data.queue_position) {
-                        transcriptionArea.value = `ממתין בתור... מיקום: ${data.queue_position}`;
-                        if (data.time_ahead) {
-                            transcriptionArea.value += `, זמן תמלול לפניך: ${data.time_ahead}`;
-                        }
-                        progressBar.style.width = '0%';
-                    } else if (data.progress !== undefined) {
-                        progressBar.style.width = `${data.progress * 100}%`;
-                        transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
-                        
-                        if (data.results) {
-                            transcriptionSegments = data.results;
-                            updateTranscriptionDisplay();
-                        }
-
-                        if (data.progress >= 1.0) {
-                            eventSource.close();
+                            if (data.progress < 1.0) {
+                                setTimeout(poll, pollInterval);
+                            } else {
+                                resetUploadState();
+                            }
+                        } else if (data.error) {
+                            transcriptionArea.value = `שגיאה: ${data.error}`;
                             resetUploadState();
                         }
-                    } else if (data.error) {
-                        transcriptionArea.value = `שגיאה: ${data.error}`;
-                        eventSource.close();
-                        resetUploadState();
-                    }
-                };
-
-                eventSource.onerror = function() {
-                    eventSource.close();
-                    consecutiveErrorCount++;
-                    if (consecutiveErrorCount < maxConsecutiveErrors) {
-                        setTimeout(stream, 2000);
-                    } else {
+                    })
+                    .catch(error => {
                         transcriptionArea.value = 'שגיאה בקבלת סטטוס העבודה';
                         resetUploadState();
-                    }
-                };
+                    });
             }
 
-            stream();
+            poll();
         }
 
         function updateTranscriptionDisplay() {
