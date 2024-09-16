@@ -212,24 +212,39 @@
             transcriptionSegments = [];
             copyBtn.disabled = true;
 
-            fetch('/upload', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    transcriptionArea.value = `שגיאה: ${data.error}`;
-                    resetUploadState();
-                } else {
-                    transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
-                    pollJobStatus(data.job_id);
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/upload', true);
+
+            xhr.upload.onprogress = function(event) {
+                if (event.lengthComputable) {
+                    const percentComplete = (event.loaded / event.total) * 100;
+                    progressBar.style.width = percentComplete + '%';
+                    transcriptionArea.value = `מעלה את הקובץ... ${percentComplete.toFixed(1)}%`;
                 }
-            })
-            .catch(error => {
+            };
+
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    const response = JSON.parse(xhr.responseText);
+                    if (response.error) {
+                        transcriptionArea.value = `שגיאה: ${response.error}`;
+                        resetUploadState();
+                    } else {
+                        transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
+                        pollJobStatus(response.job_id);
+                    }
+                } else {
+                    transcriptionArea.value = `שגיאה: ${xhr.statusText}`;
+                    resetUploadState();
+                }
+            };
+
+            xhr.onerror = function() {
                 transcriptionArea.value = 'שגיאה בהעלאת הקובץ';
                 resetUploadState();
-            });
+            };
+
+            xhr.send(formData);
         }
 
         function pollJobStatus(jobId) {
@@ -254,14 +269,12 @@
                             progressBar.style.width = `${data.progress * 100}%`;
                             transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
                             
-                            if (data.results) {
-                                transcriptionSegments = data.results;
-                                updateTranscriptionDisplay();
-                            }
-
                             if (data.progress < 1.0) {
                                 setTimeout(poll, pollInterval);
                             } else {
+                                // Job is complete, update transcription display
+                                transcriptionSegments = data.results;
+                                updateTranscriptionDisplay();
                                 resetUploadState();
                             }
                         } else if (data.error) {
@@ -280,8 +293,7 @@
 
         function updateTranscriptionDisplay() {
             transcriptionArea.value = transcriptionSegments
-                .filter(segment => segment.segment && segment.segment.text)
-                .map(segment => segment.segment.text)
+                .map(segment => segment.text)
                 .join(' ');
             copyBtn.disabled = false;
         }

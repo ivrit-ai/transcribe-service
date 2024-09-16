@@ -98,7 +98,7 @@ running_long_jobs = {}
 job_results = {}
 
 # Lock for thread-safe operations
-lock = threading.Lock()
+lock = threading.RLock()
 
 # Dictionary to keep track of user's active jobs
 user_jobs = {}
@@ -167,7 +167,7 @@ def queue_job(job_id, user_email, filename, duration):
             time_ahead /= SPEEDUP_FACTOR
 
             # Convert time_ahead to HH:MM:SS format
-            time_ahead_str = str(datetime.timedelta(seconds=int(time_ahead)))
+            time_ahead_str = str(timedelta(seconds=int(time_ahead)))
 
             # Add job to user's active jobs
             user_jobs[user_email] = job_id
@@ -322,11 +322,15 @@ def job_status(job_id):
             time_ahead /= SPEEDUP_FACTOR
             
             # Convert time_ahead to HH:MM:SS format
-            time_ahead_str = str(datetime.timedelta(seconds=int(time_ahead)))
+            time_ahead_str = str(timedelta(seconds=int(time_ahead)))
             
             return jsonify({'queue_position': queue_position, 'time_ahead': time_ahead_str, 'job_type': job_type})
 
-        # If job is complete or in progress, return the job_result data
+        # If job is in progress, return only the progress
+        if job_results[job_id]['progress'] < 1.0:
+            return jsonify({'progress': job_results[job_id]['progress']})
+
+        # If job is complete, return the full job_result data
         return jsonify(job_results[job_id])
 
 def cleanup_temp_file(job_id):
