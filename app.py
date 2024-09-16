@@ -13,8 +13,8 @@ import tempfile
 import threading
 import queue
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
-import gzip
 
 import faster_whisper
 import posthog
@@ -33,14 +33,13 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 logger = logging.getLogger(__name__)
 
 # Configure file logging
-file_handler = logging.handlers.RotatingFileHandler(
-    filename='app.log.gz',
+file_handler = RotatingFileHandler(
+    filename='app.log',
     maxBytes=10*1024*1024,  # 10MB
     backupCount=5,
     encoding='utf-8'
 )
 file_handler.setFormatter(logging.Formatter('[%(asctime)s] %(message)s'))
-file_handler.rotator = GzipRotator()
 logger.addHandler(file_handler)
 
 verbose = "VERBOSE" in os.environ
