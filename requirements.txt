@@ -1,0 +1,4 @@
+flask_oauthlib
+mutagen
+faster-whisper
+ffmpeg-python

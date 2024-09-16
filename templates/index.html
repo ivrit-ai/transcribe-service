@@ -227,79 +227,73 @@
                 if (xhr.status === 200) {
                     const response = JSON.parse(xhr.responseText);
                     if (response.error) {
-                        transcriptionArea.value = `שגיאה: ${response.error}`;
-                        resetUploadState();
+                        showError(response.error);
                     } else {
                         transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
-                        startStreaming(response.job_id);
+                        pollJobStatus(response.job_id);
                     }
                 } else {
-                    transcriptionArea.value = `שגיאה: ${xhr.statusText}`;
-                    resetUploadState();
+                    showError(`שגיאה: ${xhr.statusText}`);
                 }
             };
 
             xhr.onerror = function() {
-                transcriptionArea.value = 'שגיאה בהעלאת הקובץ';
-                resetUploadState();
+                showError('שגיאה בהעלאת הקובץ. אנא נסה שוב.');
             };
 
             xhr.send(formData);
         }
 
-        function startStreaming(jobId) {
-            let consecutiveErrorCount = 0;
-            const maxConsecutiveErrors = 5;
+        function pollJobStatus(jobId) {
+            const pollInterval = 2000; // Poll every 2 seconds
 
-            function stream() {
-                const eventSource = new EventSource(`/job_status/${jobId}`);
-
-                eventSource.onmessage = function(event) {
-                    consecutiveErrorCount = 0; // Reset error count on successful message
-                    const data = JSON.parse(event.data);
-
-                    if (data.queue_position) {
-                        transcriptionArea.value = `ממתין בתור... מיקום: ${data.queue_position}`;
-                        progressBar.style.width = '0%';
-                    } else if (data.progress !== undefined) {
-                        progressBar.style.width = `${data.progress * 100}%`;
-                        transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
-                        
-                        if (data.results) {
-                            transcriptionSegments = data.results;
-                            updateTranscriptionDisplay();
+            function poll() {
+                fetch(`/job_status/${jobId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            showError(data.error);
+                        } else if (data.queue_position) {
+                            let statusMessage = `ממתין בתור... מיקום: ${data.queue_position}`;
+                            if (data.time_ahead) {
+                                statusMessage += `, זמן משוער לפניך: ${data.time_ahead}`;
+                            }
+                            if (data.job_type) {
+                                statusMessage += `, סוג עבודה: ${data.job_type === 'short' ? 'קצרה' : 'ארוכה'}`;
+                            }
+                            transcriptionArea.value = statusMessage;
+                            progressBar.style.width = '0%';
+                            setTimeout(poll, pollInterval);
+                        } else if (data.progress !== undefined) {
+                            progressBar.style.width = `${data.progress * 100}%`;
+                            transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
+                            
+                            if (data.progress < 1.0) {
+                                setTimeout(poll, pollInterval);
+                            } else {
+                                // Job is complete, update transcription display
+                                transcriptionSegments = data.results;
+                                updateTranscriptionDisplay();
+                                resetUploadState();
+                            }
                         }
-
-                        if (data.progress >= 1.0) {
-                            eventSource.close();
-                            resetUploadState();
-                        }
-                    } else if (data.error) {
-                        transcriptionArea.value = `שגיאה: ${data.error}`;
-                        eventSource.close();
-                        resetUploadState();
-                    }
-                };
-
-                eventSource.onerror = function() {
-                    eventSource.close();
-                    consecutiveErrorCount++;
-                    if (consecutiveErrorCount < maxConsecutiveErrors) {
-                        setTimeout(stream, 2000);
-                    } else {
-                        transcriptionArea.value = 'שגיאה בקבלת סטטוס העבודה';
-                        resetUploadState();
-                    }
-                };
+                    })
+                    .catch(error => {
+                        showError('שגיאה בקבלת סטטוס העבודה. אנא נסה להעלות את הקובץ מחדש.');
+                    });
             }
 
-            stream();
+            poll();
+        }
+
+        function showError(message) {
+            transcriptionArea.value = `שגיאה: ${message}`;
+            resetUploadState();
         }
 
         function updateTranscriptionDisplay() {
             transcriptionArea.value = transcriptionSegments
-                .filter(segment => segment.segment && segment.segment.text)
-                .map(segment => segment.segment.text)
+                .map(segment => segment.text)
                 .join(' ');
             copyBtn.disabled = false;
         }
