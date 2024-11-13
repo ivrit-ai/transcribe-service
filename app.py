@@ -377,23 +377,14 @@ def cleanup_temp_file(job_id):
 
 
 def clean_some_unicode_from_text(text):
-    # Using ranges to be more complete
-    return text.translate(
-        {
-            ord(c): None
-            for c in (
-                # Bidirectional formatting
-                "\u200E\u200F"  # LTR and RTL marks
-                "\u202A-\u202E"  # LTR/RTL embedding, pop, override
-                # Zero-width characters
-                "\u200B-\u200D"  # Zero-width space, non-joiner, joiner
-                "\uFEFF"  # Zero-width no-break space
-                # Other directional formatting
-                "\u061C"  # Arabic letter mark
-                "\u2066-\u2069"  # Isolate controls
-            )
-        }
-    )
+    chars_to_remove  = "\u061C"                          # Arabic letter mark
+    chars_to_remove += "\u200B\u200C\u200D"              # Zero-width space, non-joiner, joiner
+    chars_to_remove += "\u200E\u200F"                    # LTR and RTL marks
+    chars_to_remove += "\u202A\u202B\u202C\u202D\u202E"  # LTR/RTL embedding, pop, override
+    chars_to_remove += "\u2066\u2067\u2068\u2069"        # Isolate controls
+    chars_to_remove += "\uFEFF"                          # Zero-width no-break space
+
+    return text.translate({ord(c): None for c in chars_to_remove})
 
 
 def transcribe_job(job_desc):
