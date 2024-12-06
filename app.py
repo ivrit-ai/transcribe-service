@@ -176,6 +176,8 @@ def queue_job(job_id, user_email, filename, duration):
                 job_type = "long"
                 running_jobs = running_long_jobs
 
+            job_desc.job_type = job_type
+
             queue_depth = queue_to_use.qsize()
             queue_to_use.put_nowait(job_desc)
 
@@ -397,7 +399,7 @@ def transcribe_job(job_desc):
         duration = job_desc.duration
 
         transcribe_start_time = time.time()
-        capture_event(job_id, "transcribe-start", {"queued_seconds": transcribe_start_time - job_desc.qtime})
+        capture_event(job_id, "transcribe-start", {"queued_seconds": transcribe_start_time - job_desc.qtime, "job-type" : job_desc.job_type})
 
         log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
 
@@ -431,7 +433,8 @@ def transcribe_job(job_desc):
         capture_event(
             job_id,
             "transcribe-done",
-            {"transcription_seconds": transcribe_done_time - transcribe_start_time, "audio_duration_seconds": duration},
+            {"transcription_seconds": transcribe_done_time - transcribe_start_time, "audio_duration_seconds": duration,
+             "job-type" : job_desc.job_type},
         )
 
         with lock:
