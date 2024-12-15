@@ -105,6 +105,57 @@
             width: 20px;
             height: 20px;
         }
+        .support-link {
+            margin-top: 0.5rem;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+            color: #000000;
+            font-weight: bold;
+            transition: opacity 0.2s;
+            flex-direction: row-reverse;
+        }
+        .support-link:hover {
+            opacity: 0.8;
+        }
+        .support-link img {
+            width: 24px;
+            height: 24px;
+        }
+        .links-container {
+            margin-top: 1.5rem;
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            flex-direction: column;
+            align-items: center;
+        }
+        .contact-link {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+            color: #2196F3;
+            font-weight: bold;
+            transition: opacity 0.2s;
+            flex-direction: row-reverse;
+        }
+        .contact-link:hover {
+            opacity: 0.8;
+        }
+        .contact-link svg {
+            width: 24px;
+            height: 24px;
+        }
+        .divider {
+            width: 80%;
+            height: 1px;
+            background-color: #e0e0e0;
+            margin: 1rem 0;
+        }
     </style>
 </head>
 <body>
@@ -127,6 +178,19 @@
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                 </svg>
             </button>
+        </div>
+        <div class="links-container">
+            <a href="mailto:info@ivrit.ai" class="contact-link">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                    <polyline points="22,6 12,13 2,6"/>
+                </svg>
+                רוצים ליצור קשר? אנחנו כאן
+            </a>
+            <a href="https://www.patreon.com/ivrit_ai/membership" target="_blank" class="support-link">
+                <img src="{{ url_for('static', filename='patreon.png') }}" alt="Patreon">
+                רוצים לתרום לנו?
+            </a>
         </div>
     </div>
     <script>
