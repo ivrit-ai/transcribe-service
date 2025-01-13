@@ -309,7 +309,7 @@
         }
 
         function pollJobStatus(jobId) {
-            const pollInterval = 2000; // Poll every 2 seconds
+            const pollInterval = 4000; // Poll every 4 seconds
 
             function poll() {
                 fetch(`/job_status/${jobId}`)

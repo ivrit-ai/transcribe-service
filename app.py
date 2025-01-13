@@ -1,4 +1,15 @@
-from flask import Flask, request, jsonify, render_template, Response, redirect, url_for, session, stream_with_context
+from flask import (
+    Flask,
+    request,
+    jsonify,
+    render_template,
+    Response,
+    redirect,
+    url_for,
+    session,
+    stream_with_context,
+    send_file,
+)
 from flask_oauthlib.client import OAuth
 from werkzeug.utils import secure_filename
 import os
@@ -15,18 +26,22 @@ import queue
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
+from urllib.parse import urljoin
+from functools import wraps
 
-import faster_whisper
 import posthog
 import ffmpeg
+import runpod
+import base64
 
 dotenv.load_dotenv()
 
 in_dev = "TS_STAGING_MODE" in os.environ
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 250 * 1024 * 1024  # 250MB max file size
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 250MB max file size
 app.secret_key = os.environ["FLASK_APP_SECRET"]
+print(os.environ["FLASK_APP_SECRET"], app.secret_key)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
@@ -85,14 +100,11 @@ def capture_event(distinct_id, event, props=None):
     ph.capture(distinct_id=distinct_id, event=event, properties=props)
 
 
-MAX_PARALLEL_SHORT_JOBS = 2
+MAX_PARALLEL_SHORT_JOBS = 1
 MAX_PARALLEL_LONG_JOBS = 1
 MAX_QUEUED_JOBS = 20
 SHORT_JOB_THRESHOLD = 20 * 60
 JOB_TIMEOUT = 1 * 60
-
-# faster_whisper model
-fw = faster_whisper.WhisperModel("ivrit-ai/faster-whisper-v2-d4")
 
 # Dictionary to store temporary file paths
 temp_files = {}
@@ -144,6 +156,12 @@ def get_media_duration(file_path):
 
 
 SPEEDUP_FACTOR = 5
+
+
+@app.before_request
+def suppress_logging():
+    if request.path in ["/health", "/status"]:
+        return "", 204
 
 
 def queue_job(job_id, user_email, filename, duration):
@@ -215,6 +233,7 @@ def queue_job(job_id, user_email, filename, duration):
 
 @app.route("/")
 def index():
+    print(app.secret_key)
     if in_dev:
         session["user_email"] = os.environ["TS_USER_EMAIL"]
 
@@ -379,18 +398,53 @@ def cleanup_temp_file(job_id):
 
 
 def clean_some_unicode_from_text(text):
-    chars_to_remove  = "\u061C"                          # Arabic letter mark
-    chars_to_remove += "\u200B\u200C\u200D"              # Zero-width space, non-joiner, joiner
-    chars_to_remove += "\u200E\u200F"                    # LTR and RTL marks
+    chars_to_remove = "\u061C"  # Arabic letter mark
+    chars_to_remove += "\u200B\u200C\u200D"  # Zero-width space, non-joiner, joiner
+    chars_to_remove += "\u200E\u200F"  # LTR and RTL marks
     chars_to_remove += "\u202A\u202B\u202C\u202D\u202E"  # LTR/RTL embedding, pop, override
-    chars_to_remove += "\u2066\u2067\u2068\u2069"        # Isolate controls
-    chars_to_remove += "\uFEFF"                          # Zero-width no-break space
+    chars_to_remove += "\u2066\u2067\u2068\u2069"  # Isolate controls
+    chars_to_remove += "\uFEFF"  # Zero-width no-break space
 
     return text.translate({ord(c): None for c in chars_to_remove})
 
 
+@app.route("/download/<job_id>", methods=["GET"])
+def download_file(job_id):
+    if job_id not in temp_files:
+        return jsonify({"error": "File not found"}), 404
+
+    return send_file(temp_files[job_id])
+
+
+def process_segment(job_id, segment, duration):
+    """Process a single segment and update job results"""
+    with lock:
+        # Check if the job should be terminated
+        if time.time() - job_last_accessed.get(job_id, 0) > JOB_TIMEOUT:
+            log_message(f"Terminating inactive job: {job_id}")
+            return False
+
+        segment_data = {
+            "id": segment["id"],
+            "start": segment["start"],
+            "end": segment["end"],
+            "text": clean_some_unicode_from_text(segment["text"]),
+            "avg_logprob": segment["avg_logprob"],
+            "compression_ratio": segment["compression_ratio"],
+            "no_speech_prob": segment["no_speech_prob"],
+        }
+
+        progress = segment["end"] / duration
+        job_results[job_id]["progress"] = progress
+        job_results[job_id]["results"].append(segment_data)
+
+    return True
+
+
 def transcribe_job(job_desc):
     job_id = job_desc.id
+
+    run_request = None
 
     try:
         log_message(f"{job_desc.user_email}: beginning transcription of {job_desc}, file name={job_desc.filename}")
@@ -399,33 +453,48 @@ def transcribe_job(job_desc):
         duration = job_desc.duration
 
         transcribe_start_time = time.time()
-        capture_event(job_id, "transcribe-start", {"queued_seconds": transcribe_start_time - job_desc.qtime, "job-type" : job_desc.job_type})
+        capture_event(
+            job_id,
+            "transcribe-start",
+            {"queued_seconds": transcribe_start_time - job_desc.qtime, "job-type": job_desc.job_type},
+        )
 
         log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
 
-        segs, _ = fw.transcribe(temp_file_path, language="he")
+        # Create download URL for RunPod
+        base_url = os.environ["BASE_URL"]
+        download_url = urljoin(base_url, f"/download/{job_id}")
 
-        for seg in segs:
-            # Check if the job should be terminated
-            with lock:
-                if time.time() - job_last_accessed.get(job_id, 0) > JOB_TIMEOUT:
-                    log_message(f"Terminating inactive job: {job_id}")
-                    return
+        # Prepare and send request to RunPod
+        payload = {
+            "input": {"type": "url", "url": download_url, "model": "ivrit-ai/faster-whisper-v2-d4", "streaming": True}
+        }
 
-            segment = {
-                "id": seg.id,
-                "start": seg.start,
-                "end": seg.end,
-                "text": clean_some_unicode_from_text(seg.text),
-                "avg_logprob": seg.avg_logprob,
-                "compression_ratio": seg.compression_ratio,
-                "no_speech_prob": seg.no_speech_prob,
-            }
+        # Start streaming request
+        runpod.api_key = os.environ["RUNPOD_API_KEY"]
+        ep = runpod.Endpoint(os.environ["RUNPOD_ENDPOINT_ID"])
 
-            progress = seg.end / duration
-            with lock:
-                job_results[job_id]["progress"] = progress
-                job_results[job_id]["results"].append(segment)
+        log_message(payload)
+        run_request = ep.run(payload)
+
+        for i in range(30):
+            if run_request.status() == "IN_QUEUE":
+                time.sleep(10)
+                continue
+
+            break
+
+        # Process streaming results
+        for segment in run_request.stream():
+            if "error" in segment:
+                log_message(f"Error in RunPod transcription stream: {output['error']}")
+                return
+
+            # Process segment
+            if not process_segment(job_id, segment, duration):
+                # Job was terminated
+                run_request.cancel()
+                return
 
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
@@ -433,14 +502,25 @@ def transcribe_job(job_desc):
         capture_event(
             job_id,
             "transcribe-done",
-            {"transcription_seconds": transcribe_done_time - transcribe_start_time, "audio_duration_seconds": duration,
-             "job-type" : job_desc.job_type},
+            {
+                "transcription_seconds": transcribe_done_time - transcribe_start_time,
+                "audio_duration_seconds": duration,
+                "job-type": job_desc.job_type,
+            },
         )
 
         with lock:
             job_results[job_id]["progress"] = 1.0
             job_results[job_id]["completion_time"] = datetime.now()
+    except Exception as e:
+        log_message(f"Error in transcription job {job_id}: {str(e)}")
     finally:
+        if run_request:
+            try:
+                run_request.cancel()
+            except Exception as e:
+                log_message(f"Failed to terminate runpod job")
+
         if job_desc.duration <= SHORT_JOB_THRESHOLD:
             del running_short_jobs[job_id]
         else:
@@ -522,4 +602,4 @@ el_thread.start()
 
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500
-    app.run(host="0.0.0.0", port=port, ssl_context=("secrets/fullchain.pem", "secrets/privkey.pem"), debug=True)
+    app.run(host="0.0.0.0", port=port, ssl_context=("secrets/fullchain.pem", "secrets/privkey.pem"))
