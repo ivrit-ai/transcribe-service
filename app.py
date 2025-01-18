@@ -158,6 +158,47 @@ def get_media_duration(file_path):
 SPEEDUP_FACTOR = 5
 
 
+def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
+    """
+    Calculate the estimated time remaining for jobs in queue and running jobs
+
+    Args:
+        queue_to_use: The queue to check (short_job_queue or long_job_queue)
+        running_jobs: Dictionary of currently running jobs
+        exclude_last: Whether to exclude the last job in queue from calculation
+
+    Returns:
+        time_ahead_str: Formatted string of estimated time (HH:MM:SS)
+    """
+    with lock:
+        time_ahead = 0
+
+        # Add remaining time of currently running jobs
+        for running_job_id, running_job in running_jobs.items():
+            if running_job_id in job_results:
+                # Get progress of the running job
+                progress = job_results[running_job_id]["progress"]
+                # Add only the remaining duration
+                remaining_duration = running_job.duration * (1 - progress)
+                time_ahead += remaining_duration
+            else:
+                # If no progress info yet, add full duration
+                time_ahead += running_job.duration
+
+        # Add duration of queued jobs
+        queue_jobs = list(queue_to_use.queue)
+        if exclude_last and queue_jobs:
+            queue_jobs = queue_jobs[:-1]  # Exclude the last job
+
+        time_ahead += sum(job.duration for job in queue_jobs)
+
+        # Apply speedup factor
+        time_ahead /= SPEEDUP_FACTOR
+
+        # Convert time_ahead to HH:MM:SS format
+        return str(timedelta(seconds=int(time_ahead)))
+
+
 @app.before_request
 def suppress_logging():
     if request.path in ["/health", "/status"]:
@@ -200,12 +241,7 @@ def queue_job(job_id, user_email, filename, duration):
             queue_to_use.put_nowait(job_desc)
 
             # Calculate time ahead only for the relevant queue
-            time_ahead = sum(job.duration for job in running_jobs.values())
-            time_ahead += sum(job.duration for job in list(queue_to_use.queue)[:-1])  # Exclude the job we just added
-            time_ahead /= SPEEDUP_FACTOR
-
-            # Convert time_ahead to HH:MM:SS format
-            time_ahead_str = str(timedelta(seconds=int(time_ahead)))
+            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs, exclude_last=True)
 
             # Add job to user's active jobs
             user_jobs[user_email] = job_id
@@ -342,40 +378,29 @@ def job_status(job_id):
 
         # Check if the job is in the queue
         queue_position = None
-        time_ahead = 0
         job_type = None
+        queue_to_use = None
 
         # Check short queue
         for idx, job_desc in enumerate(short_job_queue.queue):
             if job_desc.id == job_id:
                 queue_position = idx + 1
                 job_type = "short"
+                queue_to_use = short_job_queue
                 break
-            time_ahead += job_desc.duration
 
         # If not found in short queue, check long queue
         if not queue_position:
-            time_ahead = 0  # Reset time_ahead for long queue
             for idx, job_desc in enumerate(long_job_queue.queue):
                 if job_desc.id == job_id:
                     queue_position = idx + 1
                     job_type = "long"
+                    queue_to_use = long_job_queue
                     break
-                time_ahead += job_desc.duration
 
         if queue_position:
-            # Add duration of currently running jobs for the relevant queue
-            if job_type == "short":
-                time_ahead += sum(job.duration for job in running_short_jobs.values())
-            else:
-                time_ahead += sum(job.duration for job in running_long_jobs.values())
-
-            # Apply speedup factor
-            time_ahead /= SPEEDUP_FACTOR
-
-            # Convert time_ahead to HH:MM:SS format
-            time_ahead_str = str(timedelta(seconds=int(time_ahead)))
-
+            running_jobs = running_short_jobs if job_type == "short" else running_long_jobs
+            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs)
             return jsonify({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
 
         # If job is in progress, return only the progress

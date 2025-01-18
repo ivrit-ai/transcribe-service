@@ -206,6 +206,7 @@
         let selectedFile = null;
         const MAX_FILE_SIZE = 250 * 1024 * 1024; // 250MB in bytes
         let transcriptionSegments = [];
+        let activeTranscription = false;
 
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             dropArea.addEventListener(eventName, preventDefaults, false);
@@ -309,7 +310,7 @@
         }
 
         function pollJobStatus(jobId) {
-            const pollInterval = 4000; // Poll every 4 seconds
+            const pollInterval = 2000; // Poll every 2 seconds
 
             function poll() {
                 fetch(`/job_status/${jobId}`)
@@ -317,20 +318,23 @@
                     .then(data => {
                         if (data.error) {
                             showError(data.error);
-                        } else if (data.queue_position) {
-                            let statusMessage = `ממתין בתור... מיקום: ${data.queue_position}`;
-                            if (data.time_ahead) {
-                                statusMessage += `, זמן משוער לפניך: ${data.time_ahead}`;
-                            }
+                            activeTranscription = false;
+                            return;
+                        }
+
+                        if (data.queue_position) {
+                            let statusMessage = `בתור במקום ${data.queue_position}. זמן משוער להתחלה: ${data.time_ahead}`;
                             if (data.job_type) {
                                 statusMessage += `, סוג עבודה: ${data.job_type === 'short' ? 'קצרה' : 'ארוכה'}`;
                             }
                             transcriptionArea.value = statusMessage;
                             progressBar.style.width = '0%';
+                            activeTranscription = true;
                             setTimeout(poll, pollInterval);
                         } else if (data.progress !== undefined) {
                             progressBar.style.width = `${data.progress * 100}%`;
                             transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
+                            activeTranscription = true;
                             
                             if (data.progress < 1.0) {
                                 setTimeout(poll, pollInterval);
@@ -339,11 +343,14 @@
                                 transcriptionSegments = data.results;
                                 updateTranscriptionDisplay();
                                 resetUploadState();
+                                activeTranscription = false;
                             }
                         }
                     })
                     .catch(error => {
-                        showError('שגיאה בקבלת סטטוס העבודה. אנא נסה להעלות את הקובץ מחדש.');
+                        console.error('Error:', error);
+                        showError('אירעה שגיאה בבדיקת סטטוס העבודה');
+                        activeTranscription = false;
                     });
             }
 
@@ -374,6 +381,45 @@
             transcriptionArea.select();
             document.execCommand('copy');
             alert('הטקסט הועתק ללוח');
+        });
+
+        // Custom confirmation dialog
+        function showExitWarning() {
+            return confirm('התמלול עדיין פעיל. יציאה מהדף תפסיק את התמלול. האם אתה בטוח שברצונך לצאת?');
+        }
+
+        window.addEventListener('beforeunload', function (e) {
+            if (activeTranscription) {
+                // Show confirmation dialog
+                e.preventDefault();
+                e.returnValue = 'התמלול עדיין פעיל. יציאה מהדף תפסיק את התמלול. האם אתה בטוח שברצונך לצאת?';
+                return e.returnValue;
+            }
+        });
+
+        // Handle refresh key combinations
+        window.addEventListener('keydown', function(e) {
+            if (activeTranscription && 
+                (e.key === 'F5' || 
+                 (e.key === 'r' && (e.ctrlKey || e.metaKey)))) {
+                if (!showExitWarning()) {
+                    e.preventDefault();
+                    return false;
+                }
+            }
+        });
+
+        // Handle clicks on links
+        document.addEventListener('click', function(e) {
+            if (!activeTranscription) return;
+            
+            const link = e.target.closest('a');
+            if (link && !link.hasAttribute('download')) {
+                if (!showExitWarning()) {
+                    e.preventDefault();
+                    return false;
+                }
+            }
         });
     </script>
 </body>
