@@ -249,7 +249,7 @@ def queue_job(job_id, user_email, filename, duration):
             # Set initial access time
             job_last_accessed[job_id] = time.time()
 
-            capture_event(job_id, "job-queued", {"queue-depth": queue_depth, "job-type": job_type})
+            capture_event(job_id, "job-queued", {"user": user_email, "queue-depth": queue_depth, "job-type": job_type})
 
             log_message_in_session(
                 f"Job queued successfully: {job_id}, queue depth: {queue_depth}, job type: {job_type}, job desc: {job_desc}"
@@ -317,7 +317,7 @@ def upload_file():
     job_id = str(uuid.uuid4())
     user_email = session.get("user_email")
 
-    capture_event(job_id, "file-upload")
+    capture_event(job_id, "file-upload", {"user": user_email})
 
     if "file" not in request.files:
         return jsonify({"error": "לא נבחר קובץ. אנא בחר קובץ להעלאה."}), 400
@@ -481,7 +481,7 @@ def transcribe_job(job_desc):
         capture_event(
             job_id,
             "transcribe-start",
-            {"queued_seconds": transcribe_start_time - job_desc.qtime, "job-type": job_desc.job_type},
+            {"user": job_desc.user_email, "queued_seconds": transcribe_start_time - job_desc.qtime, "job-type": job_desc.job_type},
         )
 
         log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
@@ -528,6 +528,7 @@ def transcribe_job(job_desc):
             job_id,
             "transcribe-done",
             {
+                "user": job_desc.user_email,
                 "transcription_seconds": transcribe_done_time - transcribe_start_time,
                 "audio_duration_seconds": duration,
                 "job-type": job_desc.job_type,
