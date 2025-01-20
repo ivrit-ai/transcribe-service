@@ -12,6 +12,7 @@ from flask import (
 )
 from flask_oauthlib.client import OAuth
 from werkzeug.utils import secure_filename
+import requests
 import os
 import time
 import json
@@ -41,7 +42,6 @@ in_dev = "TS_STAGING_MODE" in os.environ
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 250MB max file size
 app.secret_key = os.environ["FLASK_APP_SECRET"]
-print(os.environ["FLASK_APP_SECRET"], app.secret_key)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
@@ -199,12 +199,6 @@ def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
         return str(timedelta(seconds=int(time_ahead)))
 
 
-@app.before_request
-def suppress_logging():
-    if request.path in ["/health", "/status"]:
-        return "", 204
-
-
 def queue_job(job_id, user_email, filename, duration):
     # Try to add the job to the queue
     log_message_in_session(f"Queuing job {job_id}...")
@@ -269,7 +263,6 @@ def queue_job(job_id, user_email, filename, duration):
 
 @app.route("/")
 def index():
-    print(app.secret_key)
     if in_dev:
         session["user_email"] = os.environ["TS_USER_EMAIL"]
 
@@ -486,11 +479,11 @@ def transcribe_job(job_desc):
 
         log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
 
-        # Create download URL for RunPod
+        # Create download URL for runpod
         base_url = os.environ["BASE_URL"]
         download_url = urljoin(base_url, f"/download/{job_id}")
 
-        # Prepare and send request to RunPod
+        # Prepare and send request to runpod
         payload = {
             "input": {"type": "url", "url": download_url, "model": "ivrit-ai/faster-whisper-v2-d4", "streaming": True}
         }
@@ -510,16 +503,32 @@ def transcribe_job(job_desc):
             break
 
         # Process streaming results
-        for segment in run_request.stream():
-            if "error" in segment:
-                log_message(f"Error in RunPod transcription stream: {output['error']}")
-                return
+        timeouts = 0
+        while True:
+            try:
+                for segment in run_request.stream():
+                    if "error" in segment:
+                        log_message(f"Error in RunPod transcription stream: {segment['error']}")
+                        return
 
-            # Process segment
-            if not process_segment(job_id, segment, duration):
-                # Job was terminated
-                run_request.cancel()
-                return
+                    # Process segment
+                    if not process_segment(job_id, segment, duration):
+                        # Job was terminated
+                        log_message(f"Terminating runpod job due to process_segment error.")
+                        run_request.cancel()
+                        return
+
+                run_request = None
+
+                break
+
+            except requests.exceptions.ReadTimeout as e:
+                log_message(f"run_request.stream() time out #{timeouts}, trying again.")
+                timeouts += 1
+                pass
+
+            except Exception as e:
+                log_message(f"Exception during run_request.stream(): {e}")
 
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
@@ -543,6 +552,7 @@ def transcribe_job(job_desc):
     finally:
         if run_request:
             try:
+                log_message("Terminating run_request at end of transcribe_job::finally")
                 run_request.cancel()
             except Exception as e:
                 log_message(f"Failed to terminate runpod job")
