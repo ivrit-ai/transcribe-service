@@ -208,7 +208,7 @@ def queue_job(job_id, user_email, filename, duration):
         if user_email in user_jobs:
             return False, (
                 jsonify({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
-                400,
+                200,
             )
 
         try:
@@ -313,15 +313,15 @@ def upload_file():
     capture_event(job_id, "file-upload", {"user": user_email})
 
     if "file" not in request.files:
-        return jsonify({"error": "לא נבחר קובץ. אנא בחר קובץ להעלאה."}), 400
+        return jsonify({"error": "לא נבחר קובץ. אנא בחר קובץ להעלאה."}), 200
 
     file = request.files["file"]
 
     if file.filename == "":
-        return jsonify({"error": "שם הקובץ ריק. אנא בחר קובץ תקין."}), 400
+        return jsonify({"error": "שם הקובץ ריק. אנא בחר קובץ תקין."}), 200
 
     if not file:
-        return jsonify({"error": "הקובץ שנבחר אינו תקין. אנא נסה קובץ אחר."}), 400
+        return jsonify({"error": "הקובץ שנבחר אינו תקין. אנא נסה קובץ אחר."}), 200
 
     filename = secure_filename(file.filename)
 
@@ -332,19 +332,19 @@ def upload_file():
     try:
         file.save(temp_file_path)
     except Exception as e:
-        return jsonify({"error": f"העלאת הקובץ נכשלה: {str(e)}"}), 500
+        return jsonify({"error": f"העלאת הקובץ נכשלה: {str(e)}"}), 200
 
     # Get the MIME type of the file
     filetype = magic.Magic(mime=True).from_file(temp_file_path)
 
     if not is_ffmpeg_supported_mimetype(filetype):
-        return jsonify({"error": f"סוג הקובץ {filetype} אינו נתמך. אנא העלה קובץ אודיו או וידאו תקין."}), 400
+        return jsonify({"error": f"סוג הקובץ {filetype} אינו נתמך. אנא העלה קובץ אודיו או וידאו תקין."}), 200
 
     # Get the duration of the audio file
     duration = get_media_duration(temp_file_path)
 
     if duration is None:
-        return jsonify({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}), 400
+        return jsonify({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}), 200
 
     # Store the temporary file path
     with lock:
