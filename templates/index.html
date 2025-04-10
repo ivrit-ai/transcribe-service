@@ -105,6 +105,23 @@
             width: 20px;
             height: 20px;
         }
+        #download-btn {
+            position: absolute;
+            top: 5px;
+            left: 35px;
+            background-color: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 5px;
+        }
+        #download-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #download-btn svg {
+            width: 20px;
+            height: 20px;
+        }
         .support-link {
             margin-top: 0.5rem;
             display: flex;
@@ -178,6 +195,13 @@
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                 </svg>
             </button>
+            <button id="download-btn" disabled title="הורד כתוביות">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+            </button>
         </div>
         <div class="links-container">
             <a href="mailto:info@ivrit.ai" class="contact-link">
@@ -202,9 +226,10 @@
         const progressBar = document.getElementById('progress-bar');
         const transcriptionArea = document.getElementById('transcription');
         const copyBtn = document.getElementById('copy-btn');
+        const downloadBtn = document.getElementById('download-btn');
 
         let selectedFile = null;
-        const MAX_FILE_SIZE = 250 * 1024 * 1024; // 250MB in bytes
+        const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB in bytes
         let transcriptionSegments = [];
         let activeTranscription = false;
 
@@ -276,6 +301,7 @@
             transcriptionArea.value = 'מעלה את הקובץ...';
             transcriptionSegments = [];
             copyBtn.disabled = true;
+            downloadBtn.disabled = true;
 
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/upload', true);
@@ -364,9 +390,10 @@
 
         function updateTranscriptionDisplay() {
             transcriptionArea.value = transcriptionSegments
-                .map(segment => segment.text)
-                .join(' ');
+                .map(segment => segment.text.trim())
+                .join('\n');
             copyBtn.disabled = false;
+            downloadBtn.disabled = false;
         }
 
         function resetUploadState() {
@@ -375,6 +402,8 @@
             fileName.textContent = '';
             progressContainer.style.display = 'none';
             progressBar.style.width = '0%';
+            copyBtn.disabled = true;
+            downloadBtn.disabled = true;
         }
 
         copyBtn.addEventListener('click', function() {
@@ -382,6 +411,40 @@
             document.execCommand('copy');
             alert('הטקסט הועתק ללוח');
         });
+
+        downloadBtn.addEventListener('click', function() {
+            if (!transcriptionSegments.length) return;
+
+            // Generate VTT content
+            let vttContent = 'WEBVTT\n\n';
+            
+            transcriptionSegments.forEach((segment, index) => {
+                const startTime = formatTime(segment.start);
+                const endTime = formatTime(segment.end);
+                vttContent += `${index + 1}\n`;
+                vttContent += `${startTime} --> ${endTime}\n`;
+                vttContent += `${segment.text.trim()}\n\n`;
+            });
+
+            // Create and trigger download
+            const blob = new Blob([vttContent], { type: 'text/vtt' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'subtitles.vtt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+        function formatTime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            const ms = Math.floor((seconds % 1) * 1000);
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+        }
 
         // Custom confirmation dialog
         function showExitWarning() {

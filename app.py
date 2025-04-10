@@ -40,7 +40,7 @@ dotenv.load_dotenv()
 in_dev = "TS_STAGING_MODE" in os.environ
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 250MB max file size
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB max file size
 app.secret_key = os.environ["FLASK_APP_SECRET"]
 
 # Configure logging
@@ -155,7 +155,7 @@ def get_media_duration(file_path):
         return None
 
 
-SPEEDUP_FACTOR = 5
+SPEEDUP_FACTOR = 20
 
 
 def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
@@ -485,7 +485,7 @@ def transcribe_job(job_desc):
 
         # Prepare and send request to runpod
         payload = {
-            "input": {"type": "url", "url": download_url, "model": "ivrit-ai/faster-whisper-v2-d4", "streaming": True}
+            "input": {"type": "url", "url": download_url, "model": "ivrit-ai/whisper-large-v3-turbo-ct2", "streaming": True}
         }
 
         # Start streaming request
