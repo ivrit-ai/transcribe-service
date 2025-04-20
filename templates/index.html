@@ -173,6 +173,57 @@
             background-color: #e0e0e0;
             margin: 1rem 0;
         }
+        .display-options {
+            margin-top: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+        }
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 24px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #4CAF50;
+        }
+        input:checked + .slider:before {
+            transform: translateX(24px);
+        }
     </style>
 </head>
 <body>
@@ -203,6 +254,16 @@
                 </svg>
             </button>
         </div>
+        <div class="display-options">
+            <span>טקסט רציף</span>
+            <div class="slider-container">
+                <label class="switch">
+                    <input type="checkbox" id="segment-toggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <span>פסקאות נפרדות</span>
+        </div>
         <div class="links-container">
             <a href="mailto:info@ivrit.ai" class="contact-link">
                 <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -227,6 +288,7 @@
         const transcriptionArea = document.getElementById('transcription');
         const copyBtn = document.getElementById('copy-btn');
         const downloadBtn = document.getElementById('download-btn');
+        const segmentToggle = document.getElementById('segment-toggle');
 
         let selectedFile = null;
         const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB in bytes
@@ -389,9 +451,10 @@
         }
 
         function updateTranscriptionDisplay() {
+            const separator = segmentToggle.checked ? '\n' : ' ';
             transcriptionArea.value = transcriptionSegments
                 .map(segment => segment.text.trim())
-                .join('\n');
+                .join(separator);
             copyBtn.disabled = false;
             downloadBtn.disabled = false;
         }
@@ -480,6 +543,13 @@
                     e.preventDefault();
                     return false;
                 }
+            }
+        });
+
+        // Toggle between line breaks and spaces for transcription display
+        segmentToggle.addEventListener('change', function() {
+            if (transcriptionSegments.length > 0) {
+                updateTranscriptionDisplay();
             }
         });
     </script>
