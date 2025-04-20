@@ -451,7 +451,7 @@
         }
 
         function updateTranscriptionDisplay() {
-            const separator = segmentToggle.checked ? '\n' : ' ';
+            const separator = segmentToggle.checked ? ' ' : '\n';
             transcriptionArea.value = transcriptionSegments
                 .map(segment => segment.text.trim())
                 .join(separator);
