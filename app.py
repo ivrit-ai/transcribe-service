@@ -529,6 +529,7 @@ def transcribe_job(job_desc):
 
             except Exception as e:
                 log_message(f"Exception during run_request.stream(): {e}")
+                return
 
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
