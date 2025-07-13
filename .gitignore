@@ -1,1 +1,9 @@
 uploads
+.env
+.env.*
+*.log
+*.log.*
+secrets/
+.venv/
+venv/
+**/__pycache__/

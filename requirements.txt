@@ -1,4 +1,11 @@
-flask_oauthlib
-mutagen
-faster-whisper
-ffmpeg-python
+Flask==2.2.5
+Flask-OAuthlib==0.9.6
+mutagen==1.47.0
+faster-whisper==0.10.0
+ffmpeg-python==0.2.0
+python-box==7.1.1
+runpod==1.7.7
+posthog==3.7.5
+python-dotenv==1.0.1
+python-magic==0.4.27
+Werkzeug==2.2.2

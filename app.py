@@ -38,6 +38,7 @@ import base64
 dotenv.load_dotenv()
 
 in_dev = "TS_STAGING_MODE" in os.environ
+in_hiatus_mode = "TS_HIATUS_MODE" in os.environ
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB max file size
@@ -269,6 +270,9 @@ def index():
     if "user_email" not in session:
         return redirect(url_for("login"))
 
+    if in_hiatus_mode:
+        return render_template("server-down.html")
+    
     return render_template("index.html")
 
 
@@ -309,6 +313,10 @@ def get_google_oauth_token():
 def upload_file():
     job_id = str(uuid.uuid4())
     user_email = session.get("user_email")
+
+    if in_hiatus_mode:
+        capture_event(job_id, "file-upload-hiatus-rejected", {"user": user_email})
+        return jsonify({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}), 503
 
     capture_event(job_id, "file-upload", {"user": user_email})
 
