@@ -413,6 +413,16 @@
                             if (data.job_type) {
                                 statusMessage += `, סוג עבודה: ${data.job_type === 'short' ? 'קצרה' : 'ארוכה'}`;
                             }
+                            statusMessage += `
+
+בזמן שאתם ממתינים, אנו מזכירים ש-ivrit.ai הוא פרויקט ללא מטרות רווח.
+כל השירותים שלנו, כולל שירות התמלול בו אתם משתמשים כרגע, ניתנים בחינם.
+
+נודה אם תוכלו לתרום בכדי שנוכל להנגיש את השירות ליותר משתמשים.
+
+ניתן לתרום דרך לינק לפטראון בתחתית המסך.
+
+תודה!`;
                             transcriptionArea.value = statusMessage;
                             progressBar.style.width = '0%';
                             activeTranscription = true;

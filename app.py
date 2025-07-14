@@ -351,9 +351,13 @@ def queue_job(job_id, user_email, filename, duration):
             remaining_minutes = user_bucket.get_remaining_minutes()
             log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
             
-            # Calculate how many minutes they need to wait
+            # Calculate how many minutes they need to wait, accounting for replenish rate
             needed_minutes = (duration / 60) - remaining_minutes
-            error_msg = f"אנא המתן {needed_minutes:.1f} דקות לפני העלאת קובץ חדש."
+            replenish_rate_per_minute = user_bucket.time_fill_rate * 60
+            wait_minutes = needed_minutes / (1 + replenish_rate_per_minute)
+
+            # Convert time_fill_rate (per second) to minutes per minute
+            error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
             
             return False, (jsonify({"error": error_msg}), 429)
 
