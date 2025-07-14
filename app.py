@@ -30,12 +30,26 @@ from datetime import datetime, timedelta
 from urllib.parse import urljoin
 from functools import wraps
 
+import traceback
+
 import posthog
 import ffmpeg
-import runpod
 import base64
+import argparse
 
 dotenv.load_dotenv()
+
+# Parse CLI arguments for rate limiting configuration
+parser = argparse.ArgumentParser(description='Transcription service with rate limiting')
+parser.add_argument('--max-minutes-per-week', type=int, default=420, help='Maximum credit grant in minutes per week (default: 420)')
+args, unknown = parser.parse_known_args()
+
+# Rate limiting configuration from CLI arguments
+MAX_MINUTES_PER_WEEK = args.max_minutes_per_week  # Maximum credit grant per week
+REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically derive daily replenish rate
+
+# RunPod configuration
+RUNPOD_MAX_PAYLOAD_LEN = 10 * 1024 * 1024  # 10MB max payload length
 
 in_dev = "TS_STAGING_MODE" in os.environ
 in_hiatus_mode = "TS_HIATUS_MODE" in os.environ
@@ -133,6 +147,118 @@ job_last_accessed = {}
 # Dictionary to keep track of job threads
 job_threads = {}
 
+# Dictionary to store user rate limiting buckets
+user_buckets = {}
+
+class RunPodJob:
+    def __init__(self, api_key: str, endpoint_id: str, payload: dict):
+        self.api_key = api_key
+        self.endpoint_id = endpoint_id
+        self.base_url = f"https://api.runpod.ai/v2/{endpoint_id}"
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        
+        # Submit the job immediately on creation
+        response = requests.post(
+            f"{self.base_url}/run",
+            headers=self.headers,
+            json=payload
+        )
+        response.raise_for_status()
+
+        result = response.json()
+        self.job_id = result.get("id")
+    
+    def status(self):
+        """Get job status"""
+        response = requests.get(
+            f"{self.base_url}/status/{self.job_id}",
+            headers=self.headers
+        )
+        response.raise_for_status()
+
+        status_response = response.json()
+        return status_response.get("status", "UNKNOWN")
+    
+    def stream(self):
+        """Stream job results"""
+        while True:
+            response = requests.get(
+                f"{self.base_url}/stream/{self.job_id}",
+                headers=self.headers,
+                stream=True
+            )
+            response.raise_for_status()
+            
+            # Expect a single response        
+            try:
+                content = response.content.decode('utf-8')
+                data = json.loads(content)
+                if data['status'] != 'IN_PROGRESS':
+                    break
+
+                for item in data['stream']:
+                    yield item['output']
+            except json.JSONDecodeError as e:
+                log_message(f"Failed to parse JSON response: {e}")
+                return
+    
+    def cancel(self):
+        """Cancel the job"""
+        response = requests.post(
+            f"{self.base_url}/cancel/{self.job_id}",
+            headers=self.headers
+        )
+        response.raise_for_status()
+
+        return response.json()
+
+class LeakyBucket:
+    def __init__(self, max_minutes_per_week):
+        self.max_seconds = max_minutes_per_week * 60  # Convert to seconds
+        self.seconds_remaining = max_minutes_per_week * 60
+        self.last_update = time.time()
+
+        # Calculate fill rate (per second) based on daily replenish rate
+        self.time_fill_rate = (REPLENISH_RATE_MINUTES_PER_DAY * 60) / (24 * 3600)  # Convert daily rate to per-second
+
+    def update(self):
+        """Update bucket based on elapsed time."""
+        now = time.time()
+        elapsed = now - self.last_update
+        self.last_update = now
+
+        # Add resources based on fill rate
+        self.seconds_remaining = min(self.max_seconds, self.seconds_remaining + self.time_fill_rate * elapsed)
+
+    def can_transcribe(self, duration_seconds):
+        """Check if transcription is allowed."""
+        self.update()
+        return self.seconds_remaining >= duration_seconds
+
+    def consume(self, duration_seconds):
+        """Consume resources for transcription."""
+        self.update()
+        self.seconds_remaining -= duration_seconds
+        return self.seconds_remaining > 0
+
+    def get_remaining_minutes(self):
+        """Get remaining minutes in the bucket."""
+        self.update()
+        return self.seconds_remaining / 60
+
+    def get_remaining_seconds(self):
+        """Get remaining seconds in the bucket."""
+        self.update()
+        return self.seconds_remaining
+
+    def is_fully_replenished(self):
+        """Check if the bucket is fully replenished."""
+        self.update()
+        return self.seconds_remaining >= self.max_seconds
+
 ffmpeg_supported_mimes = [
     "video/",
     "audio/",
@@ -154,6 +280,13 @@ def get_media_duration(file_path):
     except ffmpeg.Error as e:
         print(f"Error: {e.stderr}")
         return None
+
+
+def get_user_quota(user_email):
+    """Get or create a rate limiting bucket for a user."""
+    if user_email not in user_buckets:
+        user_buckets[user_email] = LeakyBucket(MAX_MINUTES_PER_WEEK)
+    return user_buckets[user_email]
 
 
 SPEEDUP_FACTOR = 20
@@ -211,6 +344,22 @@ def queue_job(job_id, user_email, filename, duration):
                 jsonify({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
                 200,
             )
+
+        # Check rate limits
+        user_bucket = get_user_quota(user_email)
+        if not user_bucket.can_transcribe(duration):
+            remaining_minutes = user_bucket.get_remaining_minutes()
+            log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
+            
+            # Calculate how many minutes they need to wait, accounting for replenish rate
+            needed_minutes = (duration / 60) - remaining_minutes
+            replenish_rate_per_minute = user_bucket.time_fill_rate * 60
+            wait_minutes = needed_minutes / (1 + replenish_rate_per_minute)
+
+            # Convert time_fill_rate (per second) to minutes per minute
+            error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
+            
+            return False, (jsonify({"error": error_msg}), 429)
 
         try:
             job_desc = box.Box()
@@ -442,6 +591,9 @@ def download_file(job_id):
     return send_file(temp_files[job_id])
 
 
+
+
+
 def process_segment(job_id, segment, duration):
     """Process a single segment and update job results"""
     with lock:
@@ -478,6 +630,12 @@ def transcribe_job(job_desc):
         temp_file_path = temp_files[job_id]
         duration = job_desc.duration
 
+        # Consume quota immediately when transcription starts
+        user_bucket = get_user_quota(job_desc.user_email)
+        user_bucket.consume(duration)
+        remaining_minutes = user_bucket.get_remaining_minutes()
+        log_message(f"{job_desc.user_email}: consumed {duration/60:.1f} minutes from quota. Remaining: {remaining_minutes:.1f} minutes")
+
         transcribe_start_time = time.time()
         capture_event(
             job_id,
@@ -487,21 +645,33 @@ def transcribe_job(job_desc):
 
         log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
 
-        # Create download URL for runpod
-        base_url = os.environ["BASE_URL"]
-        download_url = urljoin(base_url, f"/download/{job_id}")
-
         # Prepare and send request to runpod
-        payload = {
-            "input": {"type": "url", "url": download_url, "model": "ivrit-ai/whisper-large-v3-turbo-ct2", "streaming": True}
-        }
+        if in_dev:
+            # In dev mode, send file as blob
+            audio_data = open(temp_file_path, 'rb').read()
+            payload = {
+                "input": {
+                    "type": "blob",
+                    "data": base64.b64encode(audio_data).decode('utf-8'),
+                    "model": "ivrit-ai/whisper-large-v3-turbo-ct2",
+                    "streaming": True
+                }
+            }
+            
+            # Check payload size
+            if len(str(payload)) > RUNPOD_MAX_PAYLOAD_LEN:
+                log_message(f"Payload length is {len(str(payload))}, exceeding max payload length of {RUNPOD_MAX_PAYLOAD_LEN}.")
+                return
+        else:
+            # In production mode, send file as URL
+            base_url = os.environ["BASE_URL"]
+            download_url = urljoin(base_url, f"/download/{job_id}")
+            payload = {
+                "input": {"type": "url", "url": download_url, "model": "ivrit-ai/whisper-large-v3-turbo-ct2", "streaming": True}
+            }
 
-        # Start streaming request
-        runpod.api_key = os.environ["RUNPOD_API_KEY"]
-        ep = runpod.Endpoint(os.environ["RUNPOD_ENDPOINT_ID"])
-
-        log_message(payload)
-        run_request = ep.run(payload)
+        # Start streaming request using RunPodJob
+        run_request = RunPodJob(os.environ["RUNPOD_API_KEY"], os.environ["RUNPOD_ENDPOINT_ID"], payload)
 
         for i in range(30):
             if run_request.status() == "IN_QUEUE":
@@ -537,7 +707,8 @@ def transcribe_job(job_desc):
 
             except Exception as e:
                 log_message(f"Exception during run_request.stream(): {e}")
-                return
+                print(traceback.format_exc())
+                raise e
 
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
@@ -601,6 +772,16 @@ def cleanup_old_results():
 
         for job_id in jobs_to_delete:
             del job_results[job_id]
+
+        # Clean up user buckets that are fully replenished
+        users_to_remove = []
+        for user_email, bucket in user_buckets.items():
+            # Remove bucket if it is fully replenished
+            if bucket.is_fully_replenished():
+                users_to_remove.append(user_email)
+        
+        for user_email in users_to_remove:
+            del user_buckets[user_email]
 
 
 def terminate_inactive_jobs():
