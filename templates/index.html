@@ -23,6 +23,109 @@
             text-align: center;
             width: 80%;
             max-width: 600px;
+            position: relative;
+        }
+        .settings-btn {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 50%;
+            transition: background-color 0.2s;
+        }
+        .settings-btn:hover {
+            background-color: #f0f0f0;
+        }
+        .settings-btn svg {
+            width: 24px;
+            height: 24px;
+            color: #666;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .modal-content {
+            background-color: white;
+            margin: 10% auto;
+            padding: 2rem;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 500px;
+            text-align: right;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+        .close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            color: #666;
+        }
+        .close:hover {
+            color: #000;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+            text-align: left;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: bold;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 1rem;
+            box-sizing: border-box;
+            text-align: left;
+            direction: ltr;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+        .modal-buttons {
+            display: flex;
+            justify-content: flex-end;
+            gap: 1rem;
+            margin-top: 1.5rem;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+        .btn-primary {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .btn-secondary {
+            background-color: #ccc;
+            color: #333;
+        }
+        .btn:hover {
+            opacity: 0.8;
         }
         h1 {
             margin-bottom: 2rem;
@@ -230,6 +333,12 @@
 </head>
 <body>
     <div class="container">
+        <button class="settings-btn" id="settings-btn" title="הגדרות">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1 1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+        </button>
         <h1>תמלול בעזרת ivrit.ai</h1>
         <div id="drop-area">
             <p>גרור קובץ לכאן או לחץ לבחירת קובץ</p>
@@ -276,6 +385,32 @@
             </a>
         </div>
     </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>הגדרות RunPod</h2>
+                <button class="close" id="close-settings">&times;</button>
+            </div>
+            <form id="settings-form">
+                <div class="form-group">
+                    <label for="runpod-endpoint">RunPod Endpoint ID:</label>
+                    <input type="text" id="runpod-endpoint" name="runpod-endpoint" placeholder="הכנס את מזהה ה-Endpoint שלך">
+                </div>
+                <div class="form-group">
+                    <label for="runpod-token">RunPod API Token:</label>
+                    <input type="password" id="runpod-token" name="runpod-token" placeholder="הכנס את ה-API Token שלך">
+                </div>
+                <div class="modal-buttons">
+                    <button type="button" class="btn btn-secondary" id="clear-settings">נקה הגדרות</button>
+                    <button type="button" class="btn btn-secondary" id="cancel-settings">ביטול</button>
+                    <button type="submit" class="btn btn-primary">שמור</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         const dropArea = document.getElementById('drop-area');
         const fileInput = document.getElementById('file-input');
@@ -287,11 +422,175 @@
         const copyBtn = document.getElementById('copy-btn');
         const downloadBtn = document.getElementById('download-btn');
         const segmentToggle = document.getElementById('segment-toggle');
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsModal = document.getElementById('settings-modal');
+        const closeSettings = document.getElementById('close-settings');
+        const cancelSettings = document.getElementById('cancel-settings');
+        const clearSettings = document.getElementById('clear-settings');
+        const settingsForm = document.getElementById('settings-form');
+        const runpodEndpointInput = document.getElementById('runpod-endpoint');
+        const runpodTokenInput = document.getElementById('runpod-token');
 
         let selectedFile = null;
         const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB in bytes
         let transcriptionSegments = [];
         let activeTranscription = false;
+
+        // Load settings from cookies
+        function loadSettings() {
+            const endpoint = getCookie('runpod_endpoint');
+            const token = getCookie('runpod_token');
+            if (endpoint) runpodEndpointInput.value = endpoint;
+            if (token) runpodTokenInput.value = token;
+            
+            // Update settings button appearance if credentials are saved
+            updateSettingsButtonIndicator();
+        }
+
+        // Update settings button to show if credentials are saved
+        function updateSettingsButtonIndicator() {
+            const endpoint = getCookie('runpod_endpoint');
+            const token = getCookie('runpod_token');
+            const hasCredentials = endpoint && token;
+            
+            if (hasCredentials) {
+                settingsBtn.style.color = '#4CAF50';
+                settingsBtn.title = 'הגדרות (אישורי RunPod שמורים)';
+            } else {
+                settingsBtn.style.color = '#666';
+                settingsBtn.title = 'הגדרות';
+            }
+        }
+
+        // Save settings to cookies
+        async function saveSettings() {
+            const endpoint = runpodEndpointInput.value.trim();
+            const token = runpodTokenInput.value.trim();
+            
+            // If both fields are empty, just clear the cookies
+            if (!endpoint && !token) {
+                deleteCookie('runpod_endpoint');
+                deleteCookie('runpod_token');
+                settingsModal.style.display = 'none';
+                updateSettingsButtonIndicator();
+                return;
+            }
+            
+            // If only one field is filled, show error
+            if (!endpoint || !token) {
+                alert('נדרשים גם Endpoint ID וגם API Token');
+                return;
+            }
+            
+            // Show loading state
+            const saveBtn = document.querySelector('#settings-form button[type="submit"]');
+            const originalText = saveBtn.textContent;
+            saveBtn.textContent = 'בודק...';
+            saveBtn.disabled = true;
+            
+            try {
+                // Verify credentials directly with RunPod API
+                const response = await fetch(`https://api.runpod.ai/v2/${endpoint}/health`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.status === 401) {
+                    alert('שגיאה: API Token לא תקין');
+                } else if (response.status === 404) {
+                    alert('שגיאה: Endpoint ID לא נמצא');
+                } else if (response.status !== 200) {
+                    alert(`שגיאה בבדיקת האישורים: ${response.status}`);
+                } else {
+                    // Credentials are valid, save them
+                    setCookie('runpod_endpoint', endpoint, 365 * 24 * 60 * 60); // 1 year
+                    setCookie('runpod_token', token, 365 * 24 * 60 * 60); // 1 year
+                    alert('האישורים נשמרו בהצלחה!');
+                    settingsModal.style.display = 'none';
+                    updateSettingsButtonIndicator();
+                }
+            } catch (error) {
+                console.error('Error verifying credentials:', error);
+                if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+                    alert('שגיאה: לא ניתן להתחבר לשרת RunPod. אנא בדוק את החיבור לאינטרנט ונסה שוב.');
+                } else {
+                    alert('שגיאה בבדיקת האישורים. אנא נסה שוב.');
+                }
+            } finally {
+                // Restore button state
+                saveBtn.textContent = originalText;
+                saveBtn.disabled = false;
+            }
+        }
+
+        // Clear settings from cookies
+        function clearSettingsFromCookies() {
+            deleteCookie('runpod_endpoint');
+            deleteCookie('runpod_token');
+            alert('הגדרות RunPod נמחקו בהצלחה!');
+            settingsModal.style.display = 'none';
+            runpodEndpointInput.value = '';
+            runpodTokenInput.value = '';
+            updateSettingsButtonIndicator();
+        }
+
+        // Cookie utility functions
+        function setCookie(name, value, days) {
+            const expires = new Date();
+            expires.setTime(expires.getTime() + (days * 24 * 60 * 60 * 1000));
+            document.cookie = name + "=" + value + ";expires=" + expires.toUTCString() + ";path=/";
+        }
+
+        function getCookie(name) {
+            const nameEQ = name + "=";
+            const ca = document.cookie.split(';');
+            for (let i = 0; i < ca.length; i++) {
+                let c = ca[i];
+                while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+                if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+            }
+            return null;
+        }
+
+        function deleteCookie(name) {
+            document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;";
+        }
+
+        // Initialize settings button indicator on page load
+        updateSettingsButtonIndicator();
+
+        // Settings modal handlers
+        settingsBtn.addEventListener('click', () => {
+            settingsModal.style.display = 'block';
+            loadSettings();
+        });
+
+        closeSettings.addEventListener('click', () => {
+            settingsModal.style.display = 'none';
+        });
+
+        cancelSettings.addEventListener('click', () => {
+            settingsModal.style.display = 'none';
+        });
+
+        clearSettings.addEventListener('click', clearSettingsFromCookies);
+
+        settingsForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            await saveSettings();
+            // Only close modal if save was successful (no error was shown)
+            // The modal will stay open if there was an error, allowing user to fix it
+        });
+
+        // Close modal when clicking outside
+        window.addEventListener('click', (e) => {
+            if (e.target === settingsModal) {
+                settingsModal.style.display = 'none';
+            }
+        });
 
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             dropArea.addEventListener(eventName, preventDefaults, false);
@@ -355,10 +654,22 @@
             const formData = new FormData();
             formData.append('file', selectedFile);
 
+            // Add RunPod credentials if available
+            const endpoint = getCookie('runpod_endpoint');
+            const token = getCookie('runpod_token');
+            if (endpoint && token) {
+                formData.append('runpod_endpoint', endpoint);
+                formData.append('runpod_token', token);
+                // Show indicator that custom credentials are being used
+                transcriptionArea.value = 'משתמש באישורי RunPod מותאמים אישית...';
+            }
+
             transcribeBtn.disabled = true;
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
-            transcriptionArea.value = 'מעלה את הקובץ...';
+            if (!endpoint || !token) {
+                transcriptionArea.value = 'מעלה את הקובץ...';
+            }
             transcriptionSegments = [];
             copyBtn.disabled = true;
             downloadBtn.disabled = true;

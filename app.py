@@ -166,6 +166,10 @@ class RunPodJob:
             headers=self.headers,
             json=payload
         )
+
+        if response.status_code == 401:
+            raise Exception("Invalid RunPod API key")
+        
         response.raise_for_status()
 
         result = response.json()
@@ -333,7 +337,7 @@ def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
         return str(timedelta(seconds=int(time_ahead)))
 
 
-def queue_job(job_id, user_email, filename, duration):
+def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod_token=""):
     # Try to add the job to the queue
     log_message_in_session(f"Queuing job {job_id}...")
 
@@ -345,21 +349,22 @@ def queue_job(job_id, user_email, filename, duration):
                 200,
             )
 
-        # Check rate limits
-        user_bucket = get_user_quota(user_email)
-        if not user_bucket.can_transcribe(duration):
-            remaining_minutes = user_bucket.get_remaining_minutes()
-            log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
-            
-            # Calculate how many minutes they need to wait, accounting for replenish rate
-            needed_minutes = (duration / 60) - remaining_minutes
-            replenish_rate_per_minute = user_bucket.time_fill_rate * 60
-            wait_minutes = needed_minutes / (1 + replenish_rate_per_minute)
+        # Check rate limits only if not using custom RunPod credentials
+        if not (runpod_endpoint and runpod_token):
+            user_bucket = get_user_quota(user_email)
+            if not user_bucket.can_transcribe(duration):
+                remaining_minutes = user_bucket.get_remaining_minutes()
+                log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
+                
+                # Calculate how many minutes they need to wait, accounting for replenish rate
+                needed_minutes = (duration / 60) - remaining_minutes
+                replenish_rate_per_minute = user_bucket.time_fill_rate * 60
+                wait_minutes = needed_minutes / (1 + replenish_rate_per_minute)
 
-            # Convert time_fill_rate (per second) to minutes per minute
-            error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
-            
-            return False, (jsonify({"error": error_msg}), 429)
+                # Convert time_fill_rate (per second) to minutes per minute
+                error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
+                
+                return False, (jsonify({"error": error_msg}), 429)
 
         try:
             job_desc = box.Box()
@@ -369,6 +374,9 @@ def queue_job(job_id, user_email, filename, duration):
             job_desc.user_email = user_email
             job_desc.filename = filename
             job_desc.duration = duration
+            job_desc.runpod_endpoint = runpod_endpoint
+            job_desc.runpod_token = runpod_token
+            job_desc.uses_custom_runpod = bool(runpod_endpoint and runpod_token)
 
             if duration <= SHORT_JOB_THRESHOLD:
                 queue_to_use = short_job_queue
@@ -393,7 +401,7 @@ def queue_job(job_id, user_email, filename, duration):
             # Set initial access time
             job_last_accessed[job_id] = time.time()
 
-            capture_event(job_id, "job-queued", {"user": user_email, "queue-depth": queue_depth, "job-type": job_type})
+            capture_event(job_id, "job-queued", {"user": user_email, "queue-depth": queue_depth, "job-type": job_type, "custom-runpod": job_desc.uses_custom_runpod})
 
             log_message_in_session(
                 f"Job queued successfully: {job_id}, queue depth: {queue_depth}, job type: {job_type}, job desc: {job_desc}"
@@ -503,11 +511,15 @@ def upload_file():
     if duration is None:
         return jsonify({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}), 200
 
+    # Get RunPod credentials if provided
+    runpod_endpoint = request.form.get('runpod_endpoint', '').strip()
+    runpod_token = request.form.get('runpod_token', '').strip()
+    
     # Store the temporary file path
     with lock:
         temp_files[job_id] = temp_file_path
 
-        queued, res = queue_job(job_id, user_email, filename, duration)
+        queued, res = queue_job(job_id, user_email, filename, duration, runpod_endpoint, runpod_token)
         if queued:
             job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
         else:
@@ -630,17 +642,20 @@ def transcribe_job(job_desc):
         temp_file_path = temp_files[job_id]
         duration = job_desc.duration
 
-        # Consume quota immediately when transcription starts
-        user_bucket = get_user_quota(job_desc.user_email)
-        user_bucket.consume(duration)
-        remaining_minutes = user_bucket.get_remaining_minutes()
-        log_message(f"{job_desc.user_email}: consumed {duration/60:.1f} minutes from quota. Remaining: {remaining_minutes:.1f} minutes")
+        # Consume quota only if not using custom RunPod credentials
+        if not job_desc.uses_custom_runpod:
+            user_bucket = get_user_quota(job_desc.user_email)
+            user_bucket.consume(duration)
+            remaining_minutes = user_bucket.get_remaining_minutes()
+            log_message(f"{job_desc.user_email}: consumed {duration/60:.1f} minutes from quota. Remaining: {remaining_minutes:.1f} minutes")
+        else:
+            log_message(f"{job_desc.user_email}: using custom RunPod credentials, skipping quota consumption")
 
         transcribe_start_time = time.time()
         capture_event(
             job_id,
             "transcribe-start",
-            {"user": job_desc.user_email, "queued_seconds": transcribe_start_time - job_desc.qtime, "job-type": job_desc.job_type},
+            {"user": job_desc.user_email, "queued_seconds": transcribe_start_time - job_desc.qtime, "job-type": job_desc.job_type, "custom-runpod": job_desc.uses_custom_runpod},
         )
 
         log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
@@ -670,8 +685,18 @@ def transcribe_job(job_desc):
                 "input": {"type": "url", "url": download_url, "model": "ivrit-ai/whisper-large-v3-turbo-ct2", "streaming": True}
             }
 
+        # Use custom RunPod credentials if provided, otherwise use default
+        if job_desc.uses_custom_runpod:
+            api_key = job_desc.runpod_token
+            endpoint_id = job_desc.runpod_endpoint
+            log_message(f"{job_desc.user_email}: using custom RunPod credentials - endpoint: {endpoint_id}")
+        else:
+            api_key = os.environ["RUNPOD_API_KEY"]
+            endpoint_id = os.environ["RUNPOD_ENDPOINT_ID"]
+            log_message(f"{job_desc.user_email}: using default RunPod credentials")
+
         # Start streaming request using RunPodJob
-        run_request = RunPodJob(os.environ["RUNPOD_API_KEY"], os.environ["RUNPOD_ENDPOINT_ID"], payload)
+        run_request = RunPodJob(api_key, endpoint_id, payload)
 
         for i in range(30):
             if run_request.status() == "IN_QUEUE":
@@ -721,6 +746,7 @@ def transcribe_job(job_desc):
                 "transcription_seconds": transcribe_done_time - transcribe_start_time,
                 "audio_duration_seconds": duration,
                 "job-type": job_desc.job_type,
+                "custom-runpod": job_desc.uses_custom_runpod,
             },
         )
 
