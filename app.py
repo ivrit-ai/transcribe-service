@@ -30,9 +30,10 @@ from datetime import datetime, timedelta
 from urllib.parse import urljoin
 from functools import wraps
 
+import traceback
+
 import posthog
 import ffmpeg
-import runpod
 import base64
 import argparse
 
@@ -46,6 +47,9 @@ args, unknown = parser.parse_known_args()
 # Rate limiting configuration from CLI arguments
 MAX_MINUTES_PER_WEEK = args.max_minutes_per_week  # Maximum credit grant per week
 REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically derive daily replenish rate
+
+# RunPod configuration
+RUNPOD_MAX_PAYLOAD_LEN = 10 * 1024 * 1024  # 10MB max payload length
 
 in_dev = "TS_STAGING_MODE" in os.environ
 in_hiatus_mode = "TS_HIATUS_MODE" in os.environ
@@ -145,6 +149,71 @@ job_threads = {}
 
 # Dictionary to store user rate limiting buckets
 user_buckets = {}
+
+class RunPodJob:
+    def __init__(self, api_key: str, endpoint_id: str, payload: dict):
+        self.api_key = api_key
+        self.endpoint_id = endpoint_id
+        self.base_url = f"https://api.runpod.ai/v2/{endpoint_id}"
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        
+        # Submit the job immediately on creation
+        response = requests.post(
+            f"{self.base_url}/run",
+            headers=self.headers,
+            json=payload
+        )
+        response.raise_for_status()
+
+        result = response.json()
+        self.job_id = result.get("id")
+    
+    def status(self):
+        """Get job status"""
+        response = requests.get(
+            f"{self.base_url}/status/{self.job_id}",
+            headers=self.headers
+        )
+        response.raise_for_status()
+
+        status_response = response.json()
+        return status_response.get("status", "UNKNOWN")
+    
+    def stream(self):
+        """Stream job results"""
+        while True:
+            response = requests.get(
+                f"{self.base_url}/stream/{self.job_id}",
+                headers=self.headers,
+                stream=True
+            )
+            response.raise_for_status()
+            
+            # Expect a single response        
+            try:
+                content = response.content.decode('utf-8')
+                data = json.loads(content)
+                if data['status'] != 'IN_PROGRESS':
+                    break
+
+                for item in data['stream']:
+                    yield item['output']
+            except json.JSONDecodeError as e:
+                log_message(f"Failed to parse JSON response: {e}")
+                return
+    
+    def cancel(self):
+        """Cancel the job"""
+        response = requests.post(
+            f"{self.base_url}/cancel/{self.job_id}",
+            headers=self.headers
+        )
+        response.raise_for_status()
+
+        return response.json()
 
 class LeakyBucket:
     def __init__(self, max_minutes_per_week):
@@ -572,21 +641,33 @@ def transcribe_job(job_desc):
 
         log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
 
-        # Create download URL for runpod
-        base_url = os.environ["BASE_URL"]
-        download_url = urljoin(base_url, f"/download/{job_id}")
-
         # Prepare and send request to runpod
-        payload = {
-            "input": {"type": "url", "url": download_url, "model": "ivrit-ai/whisper-large-v3-turbo-ct2", "streaming": True}
-        }
+        if in_dev:
+            # In dev mode, send file as blob
+            audio_data = open(temp_file_path, 'rb').read()
+            payload = {
+                "input": {
+                    "type": "blob",
+                    "data": base64.b64encode(audio_data).decode('utf-8'),
+                    "model": "ivrit-ai/whisper-large-v3-turbo-ct2",
+                    "streaming": True
+                }
+            }
+            
+            # Check payload size
+            if len(str(payload)) > RUNPOD_MAX_PAYLOAD_LEN:
+                log_message(f"Payload length is {len(str(payload))}, exceeding max payload length of {RUNPOD_MAX_PAYLOAD_LEN}.")
+                return
+        else:
+            # In production mode, send file as URL
+            base_url = os.environ["BASE_URL"]
+            download_url = urljoin(base_url, f"/download/{job_id}")
+            payload = {
+                "input": {"type": "url", "url": download_url, "model": "ivrit-ai/whisper-large-v3-turbo-ct2", "streaming": True}
+            }
 
-        # Start streaming request
-        runpod.api_key = os.environ["RUNPOD_API_KEY"]
-        ep = runpod.Endpoint(os.environ["RUNPOD_ENDPOINT_ID"])
-
-        log_message(payload)
-        run_request = ep.run(payload)
+        # Start streaming request using RunPodJob
+        run_request = RunPodJob(os.environ["RUNPOD_API_KEY"], os.environ["RUNPOD_ENDPOINT_ID"], payload)
 
         for i in range(30):
             if run_request.status() == "IN_QUEUE":
@@ -622,7 +703,8 @@ def transcribe_job(job_desc):
 
             except Exception as e:
                 log_message(f"Exception during run_request.stream(): {e}")
-                return
+                print(traceback.format_exc())
+                raise e
 
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
