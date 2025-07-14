@@ -34,8 +34,18 @@ import posthog
 import ffmpeg
 import runpod
 import base64
+import argparse
 
 dotenv.load_dotenv()
+
+# Parse CLI arguments for rate limiting configuration
+parser = argparse.ArgumentParser(description='Transcription service with rate limiting')
+parser.add_argument('--max-minutes-per-week', type=int, default=420, help='Maximum credit grant in minutes per week (default: 420)')
+args, unknown = parser.parse_known_args()
+
+# Rate limiting configuration from CLI arguments
+MAX_MINUTES_PER_WEEK = args.max_minutes_per_week  # Maximum credit grant per week
+REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically derive daily replenish rate
 
 in_dev = "TS_STAGING_MODE" in os.environ
 in_hiatus_mode = "TS_HIATUS_MODE" in os.environ
@@ -133,6 +143,53 @@ job_last_accessed = {}
 # Dictionary to keep track of job threads
 job_threads = {}
 
+# Dictionary to store user rate limiting buckets
+user_buckets = {}
+
+class LeakyBucket:
+    def __init__(self, max_minutes_per_week):
+        self.max_seconds = max_minutes_per_week * 60  # Convert to seconds
+        self.seconds_remaining = max_minutes_per_week * 60
+        self.last_update = time.time()
+
+        # Calculate fill rate (per second) based on daily replenish rate
+        self.time_fill_rate = (REPLENISH_RATE_MINUTES_PER_DAY * 60) / (24 * 3600)  # Convert daily rate to per-second
+
+    def update(self):
+        """Update bucket based on elapsed time."""
+        now = time.time()
+        elapsed = now - self.last_update
+        self.last_update = now
+
+        # Add resources based on fill rate
+        self.seconds_remaining = min(self.max_seconds, self.seconds_remaining + self.time_fill_rate * elapsed)
+
+    def can_transcribe(self, duration_seconds):
+        """Check if transcription is allowed."""
+        self.update()
+        return self.seconds_remaining >= duration_seconds
+
+    def consume(self, duration_seconds):
+        """Consume resources for transcription."""
+        self.update()
+        self.seconds_remaining -= duration_seconds
+        return self.seconds_remaining > 0
+
+    def get_remaining_minutes(self):
+        """Get remaining minutes in the bucket."""
+        self.update()
+        return self.seconds_remaining / 60
+
+    def get_remaining_seconds(self):
+        """Get remaining seconds in the bucket."""
+        self.update()
+        return self.seconds_remaining
+
+    def is_fully_replenished(self):
+        """Check if the bucket is fully replenished."""
+        self.update()
+        return self.seconds_remaining >= self.max_seconds
+
 ffmpeg_supported_mimes = [
     "video/",
     "audio/",
@@ -154,6 +211,13 @@ def get_media_duration(file_path):
     except ffmpeg.Error as e:
         print(f"Error: {e.stderr}")
         return None
+
+
+def get_user_quota(user_email):
+    """Get or create a rate limiting bucket for a user."""
+    if user_email not in user_buckets:
+        user_buckets[user_email] = LeakyBucket(MAX_MINUTES_PER_WEEK)
+    return user_buckets[user_email]
 
 
 SPEEDUP_FACTOR = 20
@@ -211,6 +275,18 @@ def queue_job(job_id, user_email, filename, duration):
                 jsonify({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
                 200,
             )
+
+        # Check rate limits
+        user_bucket = get_user_quota(user_email)
+        if not user_bucket.can_transcribe(duration):
+            remaining_minutes = user_bucket.get_remaining_minutes()
+            log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
+            
+            # Calculate how many minutes they need to wait
+            needed_minutes = (duration / 60) - remaining_minutes
+            error_msg = f"אנא המתן {needed_minutes:.1f} דקות לפני העלאת קובץ חדש."
+            
+            return False, (jsonify({"error": error_msg}), 429)
 
         try:
             job_desc = box.Box()
@@ -442,6 +518,9 @@ def download_file(job_id):
     return send_file(temp_files[job_id])
 
 
+
+
+
 def process_segment(job_id, segment, duration):
     """Process a single segment and update job results"""
     with lock:
@@ -477,6 +556,12 @@ def transcribe_job(job_desc):
 
         temp_file_path = temp_files[job_id]
         duration = job_desc.duration
+
+        # Consume quota immediately when transcription starts
+        user_bucket = get_user_quota(job_desc.user_email)
+        user_bucket.consume(duration)
+        remaining_minutes = user_bucket.get_remaining_minutes()
+        log_message(f"{job_desc.user_email}: consumed {duration/60:.1f} minutes from quota. Remaining: {remaining_minutes:.1f} minutes")
 
         transcribe_start_time = time.time()
         capture_event(
@@ -601,6 +686,16 @@ def cleanup_old_results():
 
         for job_id in jobs_to_delete:
             del job_results[job_id]
+
+        # Clean up user buckets that are fully replenished
+        users_to_remove = []
+        for user_email, bucket in user_buckets.items():
+            # Remove bucket if it is fully replenished
+            if bucket.is_fully_replenished():
+                users_to_remove.append(user_email)
+        
+        for user_email in users_to_remove:
+            del user_buckets[user_email]
 
 
 def terminate_inactive_jobs():
