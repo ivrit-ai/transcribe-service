@@ -115,22 +115,42 @@ def capture_event(distinct_id, event, props=None):
     ph.capture(distinct_id=distinct_id, event=event, properties=props)
 
 
+# Queue type constants
+SHORT = "short"
+LONG = "long"
+PRIVATE = "private"
+
 MAX_PARALLEL_SHORT_JOBS = 1
 MAX_PARALLEL_LONG_JOBS = 1
+MAX_PARALLEL_PRIVATE_JOBS = 1000
 MAX_QUEUED_JOBS = 20
+MAX_QUEUED_PRIVATE_JOBS = 5000
 SHORT_JOB_THRESHOLD = 20 * 60
 JOB_TIMEOUT = 1 * 60
 
 # Dictionary to store temporary file paths
 temp_files = {}
 
-# Queues for managing jobs
-short_job_queue = queue.Queue(maxsize=MAX_QUEUED_JOBS)
-long_job_queue = queue.Queue(maxsize=MAX_QUEUED_JOBS)
+# Programmatic queue management
+queues = {
+    SHORT: queue.Queue(maxsize=MAX_QUEUED_JOBS),
+    LONG: queue.Queue(maxsize=MAX_QUEUED_JOBS),
+    PRIVATE: queue.Queue(maxsize=MAX_QUEUED_PRIVATE_JOBS)
+}
 
-# Dictionaries to keep track of currently running jobs
-running_short_jobs = {}
-running_long_jobs = {}
+# Programmatic running jobs management
+running_jobs = {
+    SHORT: {},
+    LONG: {},
+    PRIVATE: {}
+}
+
+# Maximum parallel jobs per queue type
+max_parallel_jobs = {
+    SHORT: MAX_PARALLEL_SHORT_JOBS,
+    LONG: MAX_PARALLEL_LONG_JOBS,
+    PRIVATE: MAX_PARALLEL_PRIVATE_JOBS
+}
 
 # Keep track of job results
 job_results = {}
@@ -200,11 +220,14 @@ class RunPodJob:
             try:
                 content = response.content.decode('utf-8')
                 data = json.loads(content)
-                if data['status'] != 'IN_PROGRESS':
+                if not data['status'] in ['IN_PROGRESS', 'COMPLETED']:
                     break
 
                 for item in data['stream']:
                     yield item['output']
+
+                if data['status'] == 'COMPLETED':
+                    return 
             except json.JSONDecodeError as e:
                 log_message(f"Failed to parse JSON response: {e}")
                 return
@@ -301,7 +324,7 @@ def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     Calculate the estimated time remaining for jobs in queue and running jobs
 
     Args:
-        queue_to_use: The queue to check (short_job_queue or long_job_queue)
+        queue_to_use: Queue to check
         running_jobs: Dictionary of currently running jobs
         exclude_last: Whether to exclude the last job in queue from calculation
 
@@ -378,14 +401,20 @@ def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod
             job_desc.runpod_token = runpod_token
             job_desc.uses_custom_runpod = bool(runpod_endpoint and runpod_token)
 
-            if duration <= SHORT_JOB_THRESHOLD:
-                queue_to_use = short_job_queue
-                job_type = "short"
-                running_jobs = running_short_jobs
+            # Determine queue type based on job characteristics
+            if job_desc.uses_custom_runpod:
+                # Private queue for jobs with custom RunPod credentials
+                queue_to_use = queues[PRIVATE]
+                job_type = PRIVATE
+                running_jobs_to_update = running_jobs[PRIVATE]
+            elif duration <= SHORT_JOB_THRESHOLD:
+                queue_to_use = queues[SHORT]
+                job_type = SHORT
+                running_jobs_to_update = running_jobs[SHORT]
             else:
-                queue_to_use = long_job_queue
-                job_type = "long"
-                running_jobs = running_long_jobs
+                queue_to_use = queues[LONG]
+                job_type = LONG
+                running_jobs_to_update = running_jobs[LONG]
 
             job_desc.job_type = job_type
 
@@ -393,7 +422,7 @@ def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod
             queue_to_use.put_nowait(job_desc)
 
             # Calculate time ahead only for the relevant queue
-            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs, exclude_last=True)
+            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs_to_update, exclude_last=True)
 
             # Add job to user's active jobs
             user_jobs[user_email] = job_id
@@ -543,26 +572,20 @@ def job_status(job_id):
         job_type = None
         queue_to_use = None
 
-        # Check short queue
-        for idx, job_desc in enumerate(short_job_queue.queue):
-            if job_desc.id == job_id:
-                queue_position = idx + 1
-                job_type = "short"
-                queue_to_use = short_job_queue
-                break
-
-        # If not found in short queue, check long queue
-        if not queue_position:
-            for idx, job_desc in enumerate(long_job_queue.queue):
+        # Check all queues for the job
+        for queue_type in [SHORT, LONG, PRIVATE]:
+            for idx, job_desc in enumerate(queues[queue_type].queue):
                 if job_desc.id == job_id:
                     queue_position = idx + 1
-                    job_type = "long"
-                    queue_to_use = long_job_queue
+                    job_type = queue_type
+                    queue_to_use = queues[queue_type]
                     break
+            if queue_position:
+                break
 
         if queue_position:
-            running_jobs = running_short_jobs if job_type == "short" else running_long_jobs
-            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs)
+            running_jobs_to_check = running_jobs[job_type]
+            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs_to_check)
             return jsonify({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
 
         # If job is in progress, return only the progress
@@ -763,10 +786,8 @@ def transcribe_job(job_desc):
             except Exception as e:
                 log_message(f"Failed to terminate runpod job")
 
-        if job_desc.duration <= SHORT_JOB_THRESHOLD:
-            del running_short_jobs[job_id]
-        else:
-            del running_long_jobs[job_id]
+        # Remove job from the appropriate running jobs dictionary
+        del running_jobs[job_desc.job_type][job_id]
         # Remove job from user's active jobs
         with lock:
             user_email = job_desc.user_email
@@ -779,13 +800,13 @@ def transcribe_job(job_desc):
 
 def submit_next_task(job_queue, running_jobs, max_parallel_jobs):
     with lock:
-        if len(running_jobs) < max_parallel_jobs:
-            if not job_queue.empty():
-                job_desc = job_queue.get()
-                running_jobs[job_desc.id] = job_desc
-                t_thread = threading.Thread(target=transcribe_job, args=(job_desc,))
-                job_threads[job_desc.id] = t_thread
-                t_thread.start()
+        # Submit all possible tasks until max_parallel_jobs are reached or queue is empty
+        while len(running_jobs) < max_parallel_jobs and not job_queue.empty():
+            job_desc = job_queue.get()
+            running_jobs[job_desc.id] = job_desc
+            t_thread = threading.Thread(target=transcribe_job, args=(job_desc,))
+            job_threads[job_desc.id] = t_thread
+            t_thread.start()
 
 
 def cleanup_old_results():
@@ -815,9 +836,10 @@ def terminate_inactive_jobs():
         current_time = time.time()
         jobs_to_terminate = []
 
-        # Check queued jobs.
+        # Check queued jobs in all queues.
         # Running jobs are handled in transcribe_job.
-        for queue_to_check in [short_job_queue, long_job_queue]:
+        for queue_type in [SHORT, LONG, PRIVATE]:
+            queue_to_check = queues[queue_type]
             for job in list(queue_to_check.queue):
                 if current_time - job_last_accessed.get(job.id, 0) > JOB_TIMEOUT:
                     jobs_to_terminate.append(job.id)
@@ -842,8 +864,9 @@ def terminate_inactive_jobs():
 
 def event_loop():
     while True:
-        submit_next_task(short_job_queue, running_short_jobs, MAX_PARALLEL_SHORT_JOBS)
-        submit_next_task(long_job_queue, running_long_jobs, MAX_PARALLEL_LONG_JOBS)
+        submit_next_task(queues[SHORT], running_jobs[SHORT], max_parallel_jobs[SHORT])
+        submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG])
+        submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE])
         cleanup_old_results()
         terminate_inactive_jobs()
         time.sleep(0.1)

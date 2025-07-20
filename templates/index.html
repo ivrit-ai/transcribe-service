@@ -722,7 +722,21 @@
                         if (data.queue_position) {
                             let statusMessage = `בתור במקום ${data.queue_position}. זמן משוער להתחלה: ${data.time_ahead}`;
                             if (data.job_type) {
-                                statusMessage += `, סוג עבודה: ${data.job_type === 'short' ? 'קצרה' : 'ארוכה'}`;
+                                let jobTypeText;
+                                switch(data.job_type) {
+                                    case 'short':
+                                        jobTypeText = 'קצרה';
+                                        break;
+                                    case 'long':
+                                        jobTypeText = 'ארוכה';
+                                        break;
+                                    case 'private':
+                                        jobTypeText = 'פרטית';
+                                        break;
+                                    default:
+                                        jobTypeText = data.job_type;
+                                }
+                                statusMessage += `, סוג עבודה: ${jobTypeText}`;
                             }
                             statusMessage += `
 
