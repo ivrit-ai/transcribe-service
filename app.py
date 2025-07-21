@@ -22,7 +22,8 @@ import dotenv
 import magic
 import random
 import tempfile
-import threading
+import asyncio
+import aiohttp
 import queue
 import logging
 from logging.handlers import RotatingFileHandler
@@ -155,8 +156,12 @@ max_parallel_jobs = {
 # Keep track of job results
 job_results = {}
 
-# Lock for thread-safe operations
-lock = threading.RLock()
+# Per-queue locks for thread-safe operations
+queue_locks = {
+    SHORT: asyncio.Lock(),
+    LONG: asyncio.Lock(),
+    PRIVATE: asyncio.Lock()
+}
 
 # Dictionary to keep track of user's active jobs
 user_jobs = {}
@@ -164,13 +169,13 @@ user_jobs = {}
 # Dictionary to keep track of last access time for each job
 job_last_accessed = {}
 
-# Dictionary to keep track of job threads
-job_threads = {}
-
 # Dictionary to store user rate limiting buckets
 user_buckets = {}
 
-class RunPodJob:
+# Global aiohttp session for async HTTP requests
+aiohttp_session = aiohttp.ClientSession()
+
+class AsyncRunPodJob:
     def __init__(self, api_key: str, endpoint_id: str, payload: dict):
         self.api_key = api_key
         self.endpoint_id = endpoint_id
@@ -179,49 +184,50 @@ class RunPodJob:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
         }
+        self.payload = payload
+        self.job_id = None
         
-        # Submit the job immediately on creation
-        response = requests.post(
+    async def submit(self):
+        """Submit the job asynchronously"""
+        global aiohttp_session
+        async with aiohttp_session.post(
             f"{self.base_url}/run",
             headers=self.headers,
-            json=payload
-        )
-
-        if response.status_code == 401:
-            raise Exception("Invalid RunPod API key")
-        
-        response.raise_for_status()
-
-        result = response.json()
-        self.job_id = result.get("id")
+            json=self.payload
+        ) as response:
+            if response.status == 401:
+                raise Exception("Invalid RunPod API key")
+            
+            response.raise_for_status()
+            result = await response.json()
+            self.job_id = result.get("id")
     
-    def status(self):
-        """Get job status"""
-        response = requests.get(
+    async def status(self):
+        """Get job status asynchronously"""
+        global aiohttp_session
+        async with aiohttp_session.get(
             f"{self.base_url}/status/{self.job_id}",
             headers=self.headers
-        )
-        response.raise_for_status()
-
-        status_response = response.json()
-        return status_response.get("status", "UNKNOWN")
+        ) as response:
+            response.raise_for_status()
+            status_response = await response.json()
+            return status_response.get("status", "UNKNOWN")
     
-    def stream(self):
-        """Stream job results"""
-        while True:
-            response = requests.get(
-                f"{self.base_url}/stream/{self.job_id}",
-                headers=self.headers,
-                stream=True
-            )
+    async def stream(self):
+        """Stream job results asynchronously"""
+        global aiohttp_session
+        async with aiohttp_session.get(
+            f"{self.base_url}/stream/{self.job_id}",
+            headers=self.headers
+        ) as response:
             response.raise_for_status()
             
             # Expect a single response        
             try:
-                content = response.content.decode('utf-8')
+                content = await response.text()
                 data = json.loads(content)
                 if not data['status'] in ['IN_PROGRESS', 'COMPLETED']:
-                    break
+                    return
 
                 for item in data['stream']:
                     yield item['output']
@@ -232,15 +238,15 @@ class RunPodJob:
                 log_message(f"Failed to parse JSON response: {e}")
                 return
     
-    def cancel(self):
-        """Cancel the job"""
-        response = requests.post(
+    async def cancel(self):
+        """Cancel the job asynchronously"""
+        global aiohttp_session
+        async with aiohttp_session.post(
             f"{self.base_url}/cancel/{self.job_id}",
             headers=self.headers
-        )
-        response.raise_for_status()
-
-        return response.json()
+        ) as response:
+            response.raise_for_status()
+            return await response.json()
 
 class LeakyBucket:
     def __init__(self, max_minutes_per_week):
@@ -319,7 +325,7 @@ def get_user_quota(user_email):
 SPEEDUP_FACTOR = 20
 
 
-def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
+async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     """
     Calculate the estimated time remaining for jobs in queue and running jobs
 
@@ -331,7 +337,21 @@ def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     Returns:
         time_ahead_str: Formatted string of estimated time (HH:MM:SS)
     """
-    with lock:
+    # Skip queue time calculations for private queue
+    if queue_to_use == queues[PRIVATE]:
+        return "00:00:00"
+    
+    # Determine which lock to use based on the queue
+    queue_type = None
+    for qt, q in queues.items():
+        if q == queue_to_use:
+            queue_type = qt
+            break
+    
+    if queue_type is None:
+        return "00:00:00"
+    
+    async with queue_locks[queue_type]:
         time_ahead = 0
 
         # Add remaining time of currently running jobs
@@ -360,69 +380,70 @@ def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
         return str(timedelta(seconds=int(time_ahead)))
 
 
-def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod_token=""):
+async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod_token=""):
     # Try to add the job to the queue
     log_message_in_session(f"Queuing job {job_id}...")
 
-    with lock:
-        # Check if user already has a job queued or running
-        if user_email in user_jobs:
-            return False, (
-                jsonify({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
-                200,
-            )
+    # Check if user already has a job queued or running
+    if user_email in user_jobs:
+        return False, (
+            jsonify({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
+            200,
+        )
 
-        # Check rate limits only if not using custom RunPod credentials
-        if not (runpod_endpoint and runpod_token):
-            user_bucket = get_user_quota(user_email)
-            if not user_bucket.can_transcribe(duration):
-                remaining_minutes = user_bucket.get_remaining_minutes()
-                log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
-                
-                # Calculate how many minutes they need to wait, accounting for replenish rate
-                needed_minutes = (duration / 60) - remaining_minutes
-                replenish_rate_per_minute = user_bucket.time_fill_rate * 60
-                wait_minutes = needed_minutes / (1 + replenish_rate_per_minute)
+    # Check rate limits only if not using custom RunPod credentials
+    if not (runpod_endpoint and runpod_token):
+        user_bucket = get_user_quota(user_email)
+        if not user_bucket.can_transcribe(duration):
+            remaining_minutes = user_bucket.get_remaining_minutes()
+            log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
+            
+            # Calculate how many minutes they need to wait, accounting for replenish rate
+            needed_minutes = (duration / 60) - remaining_minutes
+            replenish_rate_per_minute = user_bucket.time_fill_rate * 60
+            wait_minutes = needed_minutes / (1 + replenish_rate_per_minute)
 
-                # Convert time_fill_rate (per second) to minutes per minute
-                error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
-                
-                return False, (jsonify({"error": error_msg}), 429)
+            # Convert time_fill_rate (per second) to minutes per minute
+            error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
+            
+            return False, (jsonify({"error": error_msg}), 429)
 
-        try:
-            job_desc = box.Box()
-            job_desc.qtime = time.time()
-            job_desc.utime = time.time()
-            job_desc.id = job_id
-            job_desc.user_email = user_email
-            job_desc.filename = filename
-            job_desc.duration = duration
-            job_desc.runpod_endpoint = runpod_endpoint
-            job_desc.runpod_token = runpod_token
-            job_desc.uses_custom_runpod = bool(runpod_endpoint and runpod_token)
+    try:
+        job_desc = box.Box()
+        job_desc.qtime = time.time()
+        job_desc.utime = time.time()
+        job_desc.id = job_id
+        job_desc.user_email = user_email
+        job_desc.filename = filename
+        job_desc.duration = duration
+        job_desc.runpod_endpoint = runpod_endpoint
+        job_desc.runpod_token = runpod_token
+        job_desc.uses_custom_runpod = bool(runpod_endpoint and runpod_token)
 
-            # Determine queue type based on job characteristics
-            if job_desc.uses_custom_runpod:
-                # Private queue for jobs with custom RunPod credentials
-                queue_to_use = queues[PRIVATE]
-                job_type = PRIVATE
-                running_jobs_to_update = running_jobs[PRIVATE]
-            elif duration <= SHORT_JOB_THRESHOLD:
-                queue_to_use = queues[SHORT]
-                job_type = SHORT
-                running_jobs_to_update = running_jobs[SHORT]
-            else:
-                queue_to_use = queues[LONG]
-                job_type = LONG
-                running_jobs_to_update = running_jobs[LONG]
+        # Determine queue type based on job characteristics
+        if job_desc.uses_custom_runpod:
+            # Private queue for jobs with custom RunPod credentials
+            queue_to_use = queues[PRIVATE]
+            job_type = PRIVATE
+            running_jobs_to_update = running_jobs[PRIVATE]
+        elif duration <= SHORT_JOB_THRESHOLD:
+            queue_to_use = queues[SHORT]
+            job_type = SHORT
+            running_jobs_to_update = running_jobs[SHORT]
+        else:
+            queue_to_use = queues[LONG]
+            job_type = LONG
+            running_jobs_to_update = running_jobs[LONG]
 
-            job_desc.job_type = job_type
+        job_desc.job_type = job_type
 
+        # Use the appropriate queue lock
+        async with queue_locks[job_type]:
             queue_depth = queue_to_use.qsize()
             queue_to_use.put_nowait(job_desc)
 
             # Calculate time ahead only for the relevant queue
-            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs_to_update, exclude_last=True)
+            time_ahead_str = await calculate_queue_time(queue_to_use, running_jobs_to_update, exclude_last=True)
 
             # Add job to user's active jobs
             user_jobs[user_email] = job_id
@@ -439,13 +460,13 @@ def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod
             return True, (
                 jsonify({"job_id": job_id, "queued": queue_depth, "job_type": job_type, "time_ahead": time_ahead_str})
             )
-        except queue.Full:
-            capture_event(job_id, "job-queue-failed", {"queue-depth": queue_depth, "job-type": job_type})
+    except queue.Full:
+        capture_event(job_id, "job-queue-failed", {"queue-depth": queue_depth, "job-type": job_type})
 
-            log_message_in_session(f"Job queuing failed: {job_id}")
+        log_message_in_session(f"Job queuing failed: {job_id}")
 
-            cleanup_temp_file(job_id)
-            return False, (jsonify({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}), 503)
+        cleanup_temp_file(job_id)
+        return False, (jsonify({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}), 503)
 
 
 @app.route("/")
@@ -545,14 +566,14 @@ def upload_file():
     runpod_token = request.form.get('runpod_token', '').strip()
     
     # Store the temporary file path
-    with lock:
-        temp_files[job_id] = temp_file_path
+    temp_files[job_id] = temp_file_path
 
-        queued, res = queue_job(job_id, user_email, filename, duration, runpod_endpoint, runpod_token)
-        if queued:
-            job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
-        else:
-            cleanup_temp_file(job_id)
+    # Use the background event loop to call the async function
+    queued, res = run_async_in_loop(queue_job(job_id, user_email, filename, duration, runpod_endpoint, runpod_token))
+    if queued:
+        job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
+    else:
+        cleanup_temp_file(job_id)
 
     return res
 
@@ -563,37 +584,37 @@ def job_status(job_id):
     if job_id not in job_results:
         return jsonify({"error": "מזהה העבודה אינו תקין. אנא נסה להעלות את הקובץ מחדש."}), 400
 
-    with lock:
-        # Update last access time for the job
-        job_last_accessed[job_id] = time.time()
+    # Update last access time for the job
+    job_last_accessed[job_id] = time.time()
 
-        # Check if the job is in the queue
-        queue_position = None
-        job_type = None
-        queue_to_use = None
+    # Check if the job is in the queue
+    queue_position = None
+    job_type = None
+    queue_to_use = None
 
-        # Check all queues for the job
-        for queue_type in [SHORT, LONG, PRIVATE]:
-            for idx, job_desc in enumerate(queues[queue_type].queue):
-                if job_desc.id == job_id:
-                    queue_position = idx + 1
-                    job_type = queue_type
-                    queue_to_use = queues[queue_type]
-                    break
-            if queue_position:
+    # Check all queues for the job
+    for queue_type in [SHORT, LONG, PRIVATE]:
+        for idx, job_desc in enumerate(queues[queue_type].queue):
+            if job_desc.id == job_id:
+                queue_position = idx + 1
+                job_type = queue_type
+                queue_to_use = queues[queue_type]
                 break
-
         if queue_position:
-            running_jobs_to_check = running_jobs[job_type]
-            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs_to_check)
-            return jsonify({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
+            break
 
-        # If job is in progress, return only the progress
-        if job_results[job_id]["progress"] < 1.0:
-            return jsonify({"progress": job_results[job_id]["progress"]})
+    if queue_position:
+        running_jobs_to_check = running_jobs[job_type]
+        # Use the background event loop to call the async function
+        time_ahead_str = run_async_in_loop(calculate_queue_time(queue_to_use, running_jobs_to_check))
+        return jsonify({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
 
-        # If job is complete, return the full job_result data
-        return jsonify(job_results[job_id])
+    # If job is in progress, return only the progress
+    if job_results[job_id]["progress"] < 1.0:
+        return jsonify({"progress": job_results[job_id]["progress"]})
+
+    # If job is complete, return the full job_result data
+    return jsonify(job_results[job_id])
 
 
 def cleanup_temp_file(job_id):
@@ -629,32 +650,31 @@ def download_file(job_id):
 
 
 
-def process_segment(job_id, segment, duration):
+async def process_segment(job_id, segment, duration):
     """Process a single segment and update job results"""
-    with lock:
-        # Check if the job should be terminated
-        if time.time() - job_last_accessed.get(job_id, 0) > JOB_TIMEOUT:
-            log_message(f"Terminating inactive job: {job_id}")
-            return False
+    # Check if the job should be terminated
+    if time.time() - job_last_accessed.get(job_id, 0) > JOB_TIMEOUT:
+        log_message(f"Terminating inactive job: {job_id}")
+        return False
 
-        segment_data = {
-            "id": segment["id"],
-            "start": segment["start"],
-            "end": segment["end"],
-            "text": clean_some_unicode_from_text(segment["text"]),
-            "avg_logprob": segment["avg_logprob"],
-            "compression_ratio": segment["compression_ratio"],
-            "no_speech_prob": segment["no_speech_prob"],
-        }
+    segment_data = {
+        "id": segment["id"],
+        "start": segment["start"],
+        "end": segment["end"],
+        "text": clean_some_unicode_from_text(segment["text"]),
+        "avg_logprob": segment["avg_logprob"],
+        "compression_ratio": segment["compression_ratio"],
+        "no_speech_prob": segment["no_speech_prob"],
+    }
 
-        progress = segment["end"] / duration
-        job_results[job_id]["progress"] = progress
-        job_results[job_id]["results"].append(segment_data)
+    progress = segment["end"] / duration
+    job_results[job_id]["progress"] = progress
+    job_results[job_id]["results"].append(segment_data)
 
     return True
 
 
-def transcribe_job(job_desc):
+async def transcribe_job(job_desc):
     job_id = job_desc.id
 
     run_request = None
@@ -718,12 +738,15 @@ def transcribe_job(job_desc):
             endpoint_id = os.environ["RUNPOD_ENDPOINT_ID"]
             log_message(f"{job_desc.user_email}: using default RunPod credentials")
 
-        # Start streaming request using RunPodJob
-        run_request = RunPodJob(api_key, endpoint_id, payload)
+        # Start streaming request using AsyncRunPodJob
+        run_request = AsyncRunPodJob(api_key, endpoint_id, payload)
+        
+        # Submit the job first
+        await run_request.submit()
 
         for i in range(30):
-            if run_request.status() == "IN_QUEUE":
-                time.sleep(10)
+            if await run_request.status() == "IN_QUEUE":
+                await asyncio.sleep(10)
                 continue
 
             break
@@ -732,16 +755,16 @@ def transcribe_job(job_desc):
         timeouts = 0
         while True:
             try:
-                for segment in run_request.stream():
+                async for segment in run_request.stream():
                     if "error" in segment:
                         log_message(f"Error in RunPod transcription stream: {segment['error']}")
                         return
 
                     # Process segment
-                    if not process_segment(job_id, segment, duration):
+                    if not await process_segment(job_id, segment, duration):
                         # Job was terminated
                         log_message(f"Terminating runpod job due to process_segment error.")
-                        run_request.cancel()
+                        await run_request.cancel()
                         return
 
                 run_request = None
@@ -773,107 +796,124 @@ def transcribe_job(job_desc):
             },
         )
 
-        with lock:
-            job_results[job_id]["progress"] = 1.0
-            job_results[job_id]["completion_time"] = datetime.now()
+        job_results[job_id]["progress"] = 1.0
+        job_results[job_id]["completion_time"] = datetime.now()
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
     finally:
         if run_request:
             try:
                 log_message("Terminating run_request at end of transcribe_job::finally")
-                run_request.cancel()
+                await run_request.cancel()
             except Exception as e:
                 log_message(f"Failed to terminate runpod job")
 
         # Remove job from the appropriate running jobs dictionary
         del running_jobs[job_desc.job_type][job_id]
         # Remove job from user's active jobs
-        with lock:
-            user_email = job_desc.user_email
-            if user_email in user_jobs and user_jobs[user_email] == job_id:
-                del user_jobs[user_email]
+        user_email = job_desc.user_email
+        if user_email in user_jobs and user_jobs[user_email] == job_id:
+            del user_jobs[user_email]
         cleanup_temp_file(job_id)
-        if job_id in job_threads:
-            del job_threads[job_id]
+        # The job thread will terminate itself in the next iteration of the transcribe_job function
 
 
-def submit_next_task(job_queue, running_jobs, max_parallel_jobs):
-    with lock:
+async def submit_next_task(job_queue, running_jobs, max_parallel_jobs, queue_type):
+    async with queue_locks[queue_type]:
         # Submit all possible tasks until max_parallel_jobs are reached or queue is empty
         while len(running_jobs) < max_parallel_jobs and not job_queue.empty():
             job_desc = job_queue.get()
             running_jobs[job_desc.id] = job_desc
-            t_thread = threading.Thread(target=transcribe_job, args=(job_desc,))
-            job_threads[job_desc.id] = t_thread
-            t_thread.start()
+            # Create async task for transcription
+            asyncio.create_task(transcribe_job(job_desc))
 
 
-def cleanup_old_results():
-    with lock:
-        current_time = datetime.now()
-        jobs_to_delete = []
-        for job_id, job_data in job_results.items():
-            if job_data["completion_time"] and (current_time - job_data["completion_time"]) > timedelta(minutes=30):
-                jobs_to_delete.append(job_id)
+async def cleanup_old_results():
+    current_time = datetime.now()
+    jobs_to_delete = []
+    for job_id, job_data in job_results.items():
+        if job_data["completion_time"] and (current_time - job_data["completion_time"]) > timedelta(minutes=30):
+            jobs_to_delete.append(job_id)
 
-        for job_id in jobs_to_delete:
-            del job_results[job_id]
+    for job_id in jobs_to_delete:
+        del job_results[job_id]
 
-        # Clean up user buckets that are fully replenished
-        users_to_remove = []
-        for user_email, bucket in user_buckets.items():
-            # Remove bucket if it is fully replenished
-            if bucket.is_fully_replenished():
-                users_to_remove.append(user_email)
-        
-        for user_email in users_to_remove:
-            del user_buckets[user_email]
+    # Clean up user buckets that are fully replenished
+    users_to_remove = []
+    for user_email, bucket in user_buckets.items():
+        # Remove bucket if it is fully replenished
+        if bucket.is_fully_replenished():
+            users_to_remove.append(user_email)
+    
+    for user_email in users_to_remove:
+        del user_buckets[user_email]
 
 
-def terminate_inactive_jobs():
-    with lock:
-        current_time = time.time()
-        jobs_to_terminate = []
+async def terminate_inactive_jobs():
+    current_time = time.time()
+    jobs_to_terminate = []
 
-        # Check queued jobs in all queues.
-        # Running jobs are handled in transcribe_job.
-        for queue_type in [SHORT, LONG, PRIVATE]:
+    # Check queued jobs in all queues.
+    # Running jobs are handled in transcribe_job.
+    for queue_type in [SHORT, LONG, PRIVATE]:
+        async with queue_locks[queue_type]:
             queue_to_check = queues[queue_type]
             for job in list(queue_to_check.queue):
                 if current_time - job_last_accessed.get(job.id, 0) > JOB_TIMEOUT:
                     jobs_to_terminate.append(job.id)
                     queue_to_check.queue.remove(job)
 
-        # Terminate and clean up jobs
-        for job_id in jobs_to_terminate:
-            log_message(f"Terminating inactive job: {job_id}")
-            if job_id in job_results:
-                del job_results[job_id]
-            if job_id in job_last_accessed:
-                del job_last_accessed[job_id]
-            cleanup_temp_file(job_id)
+    # Terminate and clean up jobs
+    for job_id in jobs_to_terminate:
+        log_message(f"Terminating inactive job: {job_id}")
+        if job_id in job_results:
+            del job_results[job_id]
+        if job_id in job_last_accessed:
+            del job_last_accessed[job_id]
+        cleanup_temp_file(job_id)
 
-            # Remove job from user's active jobs
-            for user_email, active_job_id in list(user_jobs.items()):
-                if active_job_id == job_id:
-                    del user_jobs[user_email]
+        # Remove job from user's active jobs
+        for user_email, active_job_id in list(user_jobs.items()):
+            if active_job_id == job_id:
+                del user_jobs[user_email]
 
-            # The job thread will terminate itself in the next iteration of the transcribe_job function
+        # The job thread will terminate itself in the next iteration of the transcribe_job function
 
 
-def event_loop():
+async def event_loop():
     while True:
-        submit_next_task(queues[SHORT], running_jobs[SHORT], max_parallel_jobs[SHORT])
-        submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG])
-        submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE])
-        cleanup_old_results()
-        terminate_inactive_jobs()
-        time.sleep(0.1)
+        await submit_next_task(queues[SHORT], running_jobs[SHORT], max_parallel_jobs[SHORT], SHORT)
+        await submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG], LONG)
+        await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
+        await cleanup_old_results()
+        await terminate_inactive_jobs()
+        await asyncio.sleep(0.1)
 
 
-el_thread = threading.Thread(target=event_loop)
+# Start the async event loop in a separate thread
+import threading
+
+# Global event loop for async operations
+async_loop = None
+
+def run_event_loop():
+    global async_loop
+    async_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(async_loop)
+    async_loop.run_until_complete(event_loop())
+
+el_thread = threading.Thread(target=run_event_loop, daemon=True)
 el_thread.start()
+
+def run_async_in_loop(coro):
+    """Run an async coroutine in the background event loop"""
+    global async_loop
+    if async_loop and async_loop.is_running():
+        future = asyncio.run_coroutine_threadsafe(coro, async_loop)
+        return future.result()
+    else:
+        # Fallback to running in current thread if loop not ready
+        return asyncio.run(coro)
 
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500
