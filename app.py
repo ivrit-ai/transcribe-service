@@ -158,9 +158,9 @@ job_results = {}
 
 # Per-queue locks for thread-safe operations
 queue_locks = {
-    SHORT: asyncio.Lock(),
-    LONG: asyncio.Lock(),
-    PRIVATE: asyncio.Lock()
+    SHORT: None,
+    LONG: None,
+    PRIVATE: None
 }
 
 # Dictionary to keep track of user's active jobs
@@ -173,7 +173,7 @@ job_last_accessed = {}
 user_buckets = {}
 
 # Global aiohttp session for async HTTP requests
-aiohttp_session = aiohttp.ClientSession()
+aiohttp_session = None
 
 class AsyncRunPodJob:
     def __init__(self, api_key: str, endpoint_id: str, payload: dict):
@@ -897,9 +897,19 @@ import threading
 async_loop = None
 
 def run_event_loop():
-    global async_loop
+    global async_loop, aiohttp_session, queue_locks
     async_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(async_loop)
+    
+    # Initialize aiohttp session and locks in the event loop
+    async def init_resources():
+        global aiohttp_session, queue_locks
+        aiohttp_session = aiohttp.ClientSession()
+        queue_locks[SHORT] = asyncio.Lock()
+        queue_locks[LONG] = asyncio.Lock()
+        queue_locks[PRIVATE] = asyncio.Lock()
+    
+    async_loop.run_until_complete(init_resources())
     async_loop.run_until_complete(event_loop())
 
 el_thread = threading.Thread(target=run_event_loop, daemon=True)
