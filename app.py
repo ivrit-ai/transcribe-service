@@ -1,18 +1,21 @@
-from flask import (
-    Flask,
-    request,
-    jsonify,
-    render_template,
+from fastapi import (
+    FastAPI,
+    Request,
     Response,
-    redirect,
-    url_for,
-    session,
-    stream_with_context,
-    send_file,
+    HTTPException,
+    Depends,
+    Form,
+    File,
+    UploadFile,
+    status
 )
-from flask_oauthlib.client import OAuth
 from werkzeug.utils import secure_filename
-import requests
+import httpx
+from fastapi.responses import JSONResponse, FileResponse, RedirectResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.security import HTTPBearer
+import uvicorn
 import os
 import time
 import json
@@ -28,8 +31,10 @@ import queue
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlencode
 from functools import wraps
+from typing import Optional
+from contextlib import asynccontextmanager
 
 import traceback
 
@@ -55,9 +60,33 @@ RUNPOD_MAX_PAYLOAD_LEN = 10 * 1024 * 1024  # 10MB max payload length
 in_dev = "TS_STAGING_MODE" in os.environ
 in_hiatus_mode = "TS_HIATUS_MODE" in os.environ
 
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB max file size
-app.secret_key = os.environ["FLASK_APP_SECRET"]
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle application startup and shutdown"""
+    global aiohttp_session, queue_locks
+    
+    # Startup
+    # Initialize aiohttp session and locks
+    aiohttp_session = aiohttp.ClientSession()
+    queue_locks[SHORT] = asyncio.Lock()
+    queue_locks[LONG] = asyncio.Lock()
+    queue_locks[PRIVATE] = asyncio.Lock()
+    
+    # Start background event loop
+    asyncio.create_task(event_loop())
+    
+    yield
+    
+    # Shutdown
+    # Cleanup async resources
+    if aiohttp_session and not aiohttp_session.closed:
+        await aiohttp_session.close()
+
+# Create FastAPI app
+app = FastAPI(title="Transcription Service", version="1.0.0", lifespan=lifespan)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
@@ -72,49 +101,58 @@ logger.addHandler(file_handler)
 
 verbose = "VERBOSE" in os.environ
 
+# Templates
+templates = Jinja2Templates(directory="templates")
 
-def log_message_in_session(message):
-    user_email = session.get("user_email")
+# Session management (simplified for FastAPI)
+sessions = {}
+
+def get_session_id(request: Request) -> str:
+    """Get or create session ID from request"""
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    return session_id
+
+def get_user_email(request: Request) -> Optional[str]:
+    """Get user email from session"""
+    session_id = get_session_id(request)
+    return sessions.get(session_id, {}).get("user_email")
+
+def set_user_email(request: Request, email: str) -> str:
+    """Set user email in session and return session ID"""
+    session_id = get_session_id(request)
+    if session_id not in sessions:
+        sessions[session_id] = {}
+    sessions[session_id]["user_email"] = email
+    return session_id
+
+# Google OAuth configuration
+GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
+GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://serve.ivrit.ai/login/authorized")
+
+def log_message_in_session(message, user_email=None):
     if user_email:
         logger.info(f"{user_email}: {message}")
     else:
         logger.info(f"{message}")
 
-
 def log_message(message):
     logger.info(f"{message}")
 
-
-# Configure Google OAuth
-oauth = OAuth(app)
-google = oauth.remote_app(
-    "google",
-    consumer_key=os.environ["GOOGLE_CLIENT_ID"],
-    consumer_secret=os.environ["GOOGLE_CLIENT_SECRET"],
-    request_token_params={"scope": "email"},
-    base_url="https://www.googleapis.com/oauth2/v1/",
-    request_token_url=None,
-    access_token_method="POST",
-    access_token_url="https://accounts.google.com/o/oauth2/token",
-    authorize_url="https://accounts.google.com/o/oauth2/auth",
-)
-
+# PostHog configuration
 ph = None
 if "POSTHOG_API_KEY" in os.environ:
     ph = posthog.Posthog(project_api_key=os.environ["POSTHOG_API_KEY"], host="https://us.i.posthog.com")
 
-
 def capture_event(distinct_id, event, props=None):
     global ph
-
     if not ph:
         return
-
     props = {} if not props else props
     props["source"] = "transcribe.ivrit.ai"
-
     ph.capture(distinct_id=distinct_id, event=event, properties=props)
-
 
 # Queue type constants
 SHORT = "short"
@@ -216,27 +254,32 @@ class AsyncRunPodJob:
     async def stream(self):
         """Stream job results asynchronously"""
         global aiohttp_session
-        async with aiohttp_session.get(
-            f"{self.base_url}/stream/{self.job_id}",
-            headers=self.headers
-        ) as response:
-            response.raise_for_status()
-            
-            # Expect a single response        
-            try:
-                content = await response.text()
-                data = json.loads(content)
-                if not data['status'] in ['IN_PROGRESS', 'COMPLETED']:
+        while True:
+            async with aiohttp_session.get(
+                f"{self.base_url}/stream/{self.job_id}",
+                headers=self.headers
+            ) as response:
+                response.raise_for_status()
+                
+                # Expect a single response        
+                try:
+                    content = await response.text()
+                    data = json.loads(content)
+                    if not data['status'] in ['IN_PROGRESS', 'COMPLETED']:
+                        return
+
+                    for item in data['stream']:
+                        yield item['output']
+
+                    if data['status'] == 'COMPLETED':
+                        return
+                    
+                    # If job is not complete, wait a moment before retrying.
+                    await asyncio.sleep(1)
+
+                except json.JSONDecodeError as e:
+                    log_message(f"Failed to parse JSON response: {e}")
                     return
-
-                for item in data['stream']:
-                    yield item['output']
-
-                if data['status'] == 'COMPLETED':
-                    return 
-            except json.JSONDecodeError as e:
-                log_message(f"Failed to parse JSON response: {e}")
-                return
     
     async def cancel(self):
         """Cancel the job asynchronously"""
@@ -387,7 +430,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", 
     # Check if user already has a job queued or running
     if user_email in user_jobs:
         return False, (
-            jsonify({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
+            JSONResponse({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
             200,
         )
 
@@ -406,7 +449,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", 
             # Convert time_fill_rate (per second) to minutes per minute
             error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
             
-            return False, (jsonify({"error": error_msg}), 429)
+            return False, (JSONResponse({"error": error_msg}), 429)
 
     try:
         job_desc = box.Box()
@@ -458,7 +501,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", 
             )
 
             return True, (
-                jsonify({"job_id": job_id, "queued": queue_depth, "job_type": job_type, "time_ahead": time_ahead_str})
+                JSONResponse({"job_id": job_id, "queued": queue_depth, "job_type": job_type, "time_ahead": time_ahead_str})
             )
     except queue.Full:
         capture_event(job_id, "job-queue-failed", {"queue-depth": queue_depth, "job-type": job_type})
@@ -466,77 +509,141 @@ async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", 
         log_message_in_session(f"Job queuing failed: {job_id}")
 
         cleanup_temp_file(job_id)
-        return False, (jsonify({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}), 503)
+        return False, (JSONResponse({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}), 503)
 
 
-@app.route("/")
-def index():
+@app.get("/")
+async def index(request: Request):
     if in_dev:
-        session["user_email"] = os.environ["TS_USER_EMAIL"]
+        user_email = os.environ["TS_USER_EMAIL"]
+        session_id = set_user_email(request, user_email)
+        response = templates.TemplateResponse("index.html", {"request": request})
+        response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
+        return response
 
-    if "user_email" not in session:
-        return redirect(url_for("login"))
+    user_email = get_user_email(request)
+    if not user_email:
+        return RedirectResponse(url="/login")
 
     if in_hiatus_mode:
-        return render_template("server-down.html")
+        return templates.TemplateResponse("server-down.html", {"request": request})
     
-    return render_template("index.html")
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
-@app.route("/login")
-def login():
-    return render_template("login.html", google_analytics_tag=os.environ["GOOGLE_ANALYTICS_TAG"])
+@app.get("/login")
+async def login(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request, "google_analytics_tag": os.environ["GOOGLE_ANALYTICS_TAG"]})
+
+@app.get("/authorize")
+async def authorize(request: Request):
+    """Redirect to Google OAuth"""
+    # Generate state parameter for security
+    state = str(uuid.uuid4())
+    session_id = get_session_id(request)
+    
+    if session_id not in sessions:
+        sessions[session_id] = {}
+    sessions[session_id]["oauth_state"] = state
+    
+    # Build Google OAuth URL using v2 endpoints
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state
+    }
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+    
+    response = RedirectResponse(url=auth_url)
+    response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
+    return response
+
+@app.get("/login/authorized")
+async def authorized(request: Request, code: str = None, state: str = None, error: str = None):
+    """Handle Google OAuth callback"""
+    if error:
+        error_message = f"Access denied: {error}"
+        return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+    
+    if not code or not state:
+        error_message = "Missing authorization code or state"
+        return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+    
+    # Verify state parameter
+    session_id = get_session_id(request)
+    if state != sessions.get(session_id, {}).get("oauth_state"):
+        error_message = "Invalid state parameter"
+        return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+    
+    try:
+        # Exchange code for access token using v2 endpoint
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": GOOGLE_REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                }
+            )
+            token_data = token_response.json()
+            
+            if "error" in token_data:
+                error_message = f"Token exchange failed: {token_data.get('error_description', 'Unknown error')}"
+                return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+            
+            access_token = token_data["access_token"]
+            
+            # Get user info using v2 endpoint
+            user_response = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            user_data = user_response.json()
+            
+            # Store user email in session
+            set_user_email(request, user_data["email"])
+            
+            # Clean up OAuth state
+            if session_id in sessions:
+                sessions[session_id].pop("oauth_state", None)
+            
+            response = templates.TemplateResponse("close_window.html", {"request": request, "success": True})
+            response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
+            return response
+            
+    except Exception as e:
+        error_message = f"Authentication failed: {str(e)}"
+        return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
 
 
-@app.route("/authorize")
-def authorize():
-    return google.authorize(callback=url_for("authorized", _external=True))
-
-
-@app.route("/login/authorized")
-def authorized():
-    resp = google.authorized_response()
-    if resp is None or resp.get("access_token") is None:
-        error_message = "Access denied: reason={0} error={1}".format(
-            request.args.get("error_reason", "Unknown"), request.args.get("error_description", "Unknown")
-        )
-        return render_template("close_window.html", success=False, message=error_message)
-
-    session["google_token"] = (resp["access_token"], "")
-    user_info = google.get("userinfo")
-    session["user_email"] = user_info.data["email"]
-
-    session.pop("google_token")
-
-    return render_template("close_window.html", success=True)
-
-
-@google.tokengetter
-def get_google_oauth_token():
-    return session.get("google_token")
-
-
-@app.route("/upload", methods=["POST"])
-def upload_file():
+@app.post("/upload")
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    runpod_endpoint: Optional[str] = Form(None),
+    runpod_token: Optional[str] = Form(None)
+):
     job_id = str(uuid.uuid4())
-    user_email = session.get("user_email")
+    user_email = get_user_email(request)
 
     if in_hiatus_mode:
         capture_event(job_id, "file-upload-hiatus-rejected", {"user": user_email})
-        return jsonify({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}), 503
+        return JSONResponse({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}, status_code=503)
 
     capture_event(job_id, "file-upload", {"user": user_email})
 
-    if "file" not in request.files:
-        return jsonify({"error": "לא נבחר קובץ. אנא בחר קובץ להעלאה."}), 200
-
-    file = request.files["file"]
+    if not file:
+        return JSONResponse({"error": "לא נבחר קובץ. אנא בחר קובץ להעלאה."}, status_code=200)
 
     if file.filename == "":
-        return jsonify({"error": "שם הקובץ ריק. אנא בחר קובץ תקין."}), 200
-
-    if not file:
-        return jsonify({"error": "הקובץ שנבחר אינו תקין. אנא נסה קובץ אחר."}), 200
+        return JSONResponse({"error": "שם הקובץ ריק. אנא בחר קובץ תקין."}, status_code=200)
 
     filename = secure_filename(file.filename)
 
@@ -545,31 +652,34 @@ def upload_file():
     temp_file_path = temp_file.name
 
     try:
-        file.save(temp_file_path)
+        # Read file content and save to temp file
+        content = await file.read()
+        with open(temp_file_path, 'wb') as f:
+            f.write(content)
     except Exception as e:
-        return jsonify({"error": f"העלאת הקובץ נכשלה: {str(e)}"}), 200
+        return JSONResponse({"error": f"העלאת הקובץ נכשלה: {str(e)}"}, status_code=200)
 
     # Get the MIME type of the file
     filetype = magic.Magic(mime=True).from_file(temp_file_path)
 
     if not is_ffmpeg_supported_mimetype(filetype):
-        return jsonify({"error": f"סוג הקובץ {filetype} אינו נתמך. אנא העלה קובץ אודיו או וידאו תקין."}), 200
+        return JSONResponse({"error": f"סוג הקובץ {filetype} אינו נתמך. אנא העלה קובץ אודיו או וידאו תקין."}, status_code=200)
 
     # Get the duration of the audio file
     duration = get_media_duration(temp_file_path)
 
     if duration is None:
-        return jsonify({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}), 200
+        return JSONResponse({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}, status_code=200)
 
     # Get RunPod credentials if provided
-    runpod_endpoint = request.form.get('runpod_endpoint', '').strip()
-    runpod_token = request.form.get('runpod_token', '').strip()
+    runpod_endpoint = runpod_endpoint.strip() if runpod_endpoint else ""
+    runpod_token = runpod_token.strip() if runpod_token else ""
     
     # Store the temporary file path
     temp_files[job_id] = temp_file_path
 
     # Use the background event loop to call the async function
-    queued, res = run_async_in_loop(queue_job(job_id, user_email, filename, duration, runpod_endpoint, runpod_token))
+    queued, res = await run_async_in_loop(queue_job(job_id, user_email, filename, duration, runpod_endpoint, runpod_token))
     if queued:
         job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
     else:
@@ -578,11 +688,11 @@ def upload_file():
     return res
 
 
-@app.route("/job_status/<job_id>")
-def job_status(job_id):
+@app.get("/job_status/{job_id}")
+async def job_status(job_id: str, request: Request):
     # Make sure the job has been queued
     if job_id not in job_results:
-        return jsonify({"error": "מזהה העבודה אינו תקין. אנא נסה להעלות את הקובץ מחדש."}), 400
+        return JSONResponse({"error": "מזהה העבודה אינו תקין. אנא נסה להעלות את הקובץ מחדש."}, status_code=400)
 
     # Update last access time for the job
     job_last_accessed[job_id] = time.time()
@@ -606,15 +716,19 @@ def job_status(job_id):
     if queue_position:
         running_jobs_to_check = running_jobs[job_type]
         # Use the background event loop to call the async function
-        time_ahead_str = run_async_in_loop(calculate_queue_time(queue_to_use, running_jobs_to_check))
-        return jsonify({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
+        time_ahead_str = await run_async_in_loop(calculate_queue_time(queue_to_use, running_jobs_to_check))
+        return JSONResponse({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
 
     # If job is in progress, return only the progress
     if job_results[job_id]["progress"] < 1.0:
-        return jsonify({"progress": job_results[job_id]["progress"]})
+        return JSONResponse({"progress": job_results[job_id]["progress"]})
 
     # If job is complete, return the full job_result data
-    return jsonify(job_results[job_id])
+    result = job_results[job_id].copy()
+    # Convert datetime to ISO string for JSON serialization
+    if result["completion_time"]:
+        result["completion_time"] = result["completion_time"].isoformat()
+    return JSONResponse(result)
 
 
 def cleanup_temp_file(job_id):
@@ -639,12 +753,12 @@ def clean_some_unicode_from_text(text):
     return text.translate({ord(c): None for c in chars_to_remove})
 
 
-@app.route("/download/<job_id>", methods=["GET"])
-def download_file(job_id):
+@app.get("/download/{job_id}")
+async def download_file(job_id: str, request: Request):
     if job_id not in temp_files:
-        return jsonify({"error": "File not found"}), 404
+        return JSONResponse({"error": "File not found"}, status_code=404)
 
-    return send_file(temp_files[job_id])
+    return FileResponse(temp_files[job_id])
 
 
 
@@ -752,35 +866,26 @@ async def transcribe_job(job_desc):
             break
 
         # Process streaming results
-        timeouts = 0
-        while True:
-            try:
-                async for segment in run_request.stream():
-                    if "error" in segment:
-                        log_message(f"Error in RunPod transcription stream: {segment['error']}")
-                        return
+        try:
+            async for segment in run_request.stream():
+                if "error" in segment:
+                    log_message(f"Error in RunPod transcription stream: {segment['error']}")
+                    return
 
-                    # Process segment
-                    if not await process_segment(job_id, segment, duration):
-                        # Job was terminated
-                        log_message(f"Terminating runpod job due to process_segment error.")
-                        await run_request.cancel()
-                        return
+                # Process segment
+                if not await process_segment(job_id, segment, duration):
+                    # Job was terminated
+                    log_message(f"Terminating runpod job due to process_segment error.")
+                    await run_request.cancel()
+                    return
 
-                run_request = None
+            run_request = None
 
-                break
-
-            except requests.exceptions.ReadTimeout as e:
-                log_message(f"run_request.stream() time out #{timeouts}, trying again.")
-                timeouts += 1
-                pass
-
-            except Exception as e:
-                log_message(f"Exception during run_request.stream(): {e}")
-                print(traceback.format_exc())
-                raise e
-
+        except Exception as e:
+            log_message(f"Exception during run_request.stream(): {e}")
+            print(traceback.format_exc())
+            raise e
+        
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
         transcribe_done_time = time.time()
@@ -890,41 +995,20 @@ async def event_loop():
         await asyncio.sleep(0.1)
 
 
-# Start the async event loop in a separate thread
-import threading
+# Global async resources
+aiohttp_session = None
+queue_locks = {
+    SHORT: None,
+    LONG: None,
+    PRIVATE: None
+}
 
-# Global event loop for async operations
-async_loop = None
 
-def run_event_loop():
-    global async_loop, aiohttp_session, queue_locks
-    async_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(async_loop)
-    
-    # Initialize aiohttp session and locks in the event loop
-    async def init_resources():
-        global aiohttp_session, queue_locks
-        aiohttp_session = aiohttp.ClientSession()
-        queue_locks[SHORT] = asyncio.Lock()
-        queue_locks[LONG] = asyncio.Lock()
-        queue_locks[PRIVATE] = asyncio.Lock()
-    
-    async_loop.run_until_complete(init_resources())
-    async_loop.run_until_complete(event_loop())
 
-el_thread = threading.Thread(target=run_event_loop, daemon=True)
-el_thread.start()
-
-def run_async_in_loop(coro):
-    """Run an async coroutine in the background event loop"""
-    global async_loop
-    if async_loop and async_loop.is_running():
-        future = asyncio.run_coroutine_threadsafe(coro, async_loop)
-        return future.result()
-    else:
-        # Fallback to running in current thread if loop not ready
-        return asyncio.run(coro)
+async def run_async_in_loop(coro):
+    """Run an async coroutine in the current event loop"""
+    return await coro
 
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500
-    app.run(host="0.0.0.0", port=port, ssl_context=("secrets/fullchain.pem", "secrets/privkey.pem"))
+    uvicorn.run(app, host="0.0.0.0", port=port, ssl_certfile="secrets/fullchain.pem", ssl_keyfile="secrets/privkey.pem")
