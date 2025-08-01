@@ -1,18 +1,21 @@
-from flask import (
-    Flask,
-    request,
-    jsonify,
-    render_template,
+from fastapi import (
+    FastAPI,
+    Request,
     Response,
-    redirect,
-    url_for,
-    session,
-    stream_with_context,
-    send_file,
+    HTTPException,
+    Depends,
+    Form,
+    File,
+    UploadFile,
+    status
 )
-from flask_oauthlib.client import OAuth
 from werkzeug.utils import secure_filename
-import requests
+import httpx
+from fastapi.responses import JSONResponse, FileResponse, RedirectResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.security import HTTPBearer
+import uvicorn
 import os
 import time
 import json
@@ -22,13 +25,16 @@ import dotenv
 import magic
 import random
 import tempfile
-import threading
+import asyncio
+import aiohttp
 import queue
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlencode
 from functools import wraps
+from typing import Optional
+from contextlib import asynccontextmanager
 
 import traceback
 
@@ -39,9 +45,14 @@ import argparse
 
 dotenv.load_dotenv()
 
-# Parse CLI arguments for rate limiting configuration
+# Parse CLI arguments for configuration
 parser = argparse.ArgumentParser(description='Transcription service with rate limiting')
-parser.add_argument('--max-minutes-per-week', type=int, default=420, help='Maximum credit grant in minutes per week (default: 420)')
+parser.add_argument('--max-minutes-per-week', type=int, default=180, help='Maximum credit grant in minutes per week (default: 420)')
+parser.add_argument('--staging', action='store_true', help='Enable staging mode')
+parser.add_argument('--hiatus', action='store_true', help='Enable hiatus mode')
+parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
+parser.add_argument('--dev', action='store_true', help='Enable development mode')
+parser.add_argument('--dev-user-email', help='User email for development mode')
 args, unknown = parser.parse_known_args()
 
 # Rate limiting configuration from CLI arguments
@@ -51,12 +62,37 @@ REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically deriv
 # RunPod configuration
 RUNPOD_MAX_PAYLOAD_LEN = 10 * 1024 * 1024  # 10MB max payload length
 
-in_dev = "TS_STAGING_MODE" in os.environ
-in_hiatus_mode = "TS_HIATUS_MODE" in os.environ
+in_dev = args.staging or args.dev
+in_hiatus_mode = args.hiatus
+verbose = args.verbose
 
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB max file size
-app.secret_key = os.environ["FLASK_APP_SECRET"]
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle application startup and shutdown"""
+    global aiohttp_session, queue_locks
+    
+    # Startup
+    # Initialize aiohttp session and locks
+    aiohttp_session = aiohttp.ClientSession()
+    queue_locks[SHORT] = asyncio.Lock()
+    queue_locks[LONG] = asyncio.Lock()
+    queue_locks[PRIVATE] = asyncio.Lock()
+    
+    # Start background event loop
+    asyncio.create_task(event_loop())
+    
+    yield
+    
+    # Shutdown
+    # Cleanup async resources
+    if aiohttp_session and not aiohttp_session.closed:
+        await aiohttp_session.close()
+
+# Create FastAPI app
+app = FastAPI(title="Transcription Service", version="1.0.0", lifespan=lifespan)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
@@ -69,51 +105,60 @@ file_handler = RotatingFileHandler(
 file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s"))
 logger.addHandler(file_handler)
 
-verbose = "VERBOSE" in os.environ
+# verbose is now set from CLI arguments above
 
+# Templates
+templates = Jinja2Templates(directory="templates")
 
-def log_message_in_session(message):
-    user_email = session.get("user_email")
+# Session management (simplified for FastAPI)
+sessions = {}
+
+def get_session_id(request: Request) -> str:
+    """Get or create session ID from request"""
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    return session_id
+
+def get_user_email(request: Request) -> Optional[str]:
+    """Get user email from session"""
+    session_id = get_session_id(request)
+    return sessions.get(session_id, {}).get("user_email")
+
+def set_user_email(request: Request, email: str) -> str:
+    """Set user email in session and return session ID"""
+    session_id = get_session_id(request)
+    if session_id not in sessions:
+        sessions[session_id] = {}
+    sessions[session_id]["user_email"] = email
+    return session_id
+
+# Google OAuth configuration
+GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
+GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://serve.ivrit.ai/login/authorized")
+
+def log_message_in_session(message, user_email=None):
     if user_email:
         logger.info(f"{user_email}: {message}")
     else:
         logger.info(f"{message}")
 
-
 def log_message(message):
     logger.info(f"{message}")
 
-
-# Configure Google OAuth
-oauth = OAuth(app)
-google = oauth.remote_app(
-    "google",
-    consumer_key=os.environ["GOOGLE_CLIENT_ID"],
-    consumer_secret=os.environ["GOOGLE_CLIENT_SECRET"],
-    request_token_params={"scope": "email"},
-    base_url="https://www.googleapis.com/oauth2/v1/",
-    request_token_url=None,
-    access_token_method="POST",
-    access_token_url="https://accounts.google.com/o/oauth2/token",
-    authorize_url="https://accounts.google.com/o/oauth2/auth",
-)
-
+# PostHog configuration
 ph = None
 if "POSTHOG_API_KEY" in os.environ:
     ph = posthog.Posthog(project_api_key=os.environ["POSTHOG_API_KEY"], host="https://us.i.posthog.com")
 
-
 def capture_event(distinct_id, event, props=None):
     global ph
-
     if not ph:
         return
-
     props = {} if not props else props
     props["source"] = "transcribe.ivrit.ai"
-
     ph.capture(distinct_id=distinct_id, event=event, properties=props)
-
 
 # Queue type constants
 SHORT = "short"
@@ -155,8 +200,12 @@ max_parallel_jobs = {
 # Keep track of job results
 job_results = {}
 
-# Lock for thread-safe operations
-lock = threading.RLock()
+# Per-queue locks for thread-safe operations
+queue_locks = {
+    SHORT: None,
+    LONG: None,
+    PRIVATE: None
+}
 
 # Dictionary to keep track of user's active jobs
 user_jobs = {}
@@ -164,13 +213,13 @@ user_jobs = {}
 # Dictionary to keep track of last access time for each job
 job_last_accessed = {}
 
-# Dictionary to keep track of job threads
-job_threads = {}
-
 # Dictionary to store user rate limiting buckets
 user_buckets = {}
 
-class RunPodJob:
+# Global aiohttp session for async HTTP requests
+aiohttp_session = None
+
+class AsyncRunPodJob:
     def __init__(self, api_key: str, endpoint_id: str, payload: dict):
         self.api_key = api_key
         self.endpoint_id = endpoint_id
@@ -179,68 +228,74 @@ class RunPodJob:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
         }
+        self.payload = payload
+        self.job_id = None
         
-        # Submit the job immediately on creation
-        response = requests.post(
+    async def submit(self):
+        """Submit the job asynchronously"""
+        global aiohttp_session
+        async with aiohttp_session.post(
             f"{self.base_url}/run",
             headers=self.headers,
-            json=payload
-        )
-
-        if response.status_code == 401:
-            raise Exception("Invalid RunPod API key")
-        
-        response.raise_for_status()
-
-        result = response.json()
-        self.job_id = result.get("id")
+            json=self.payload
+        ) as response:
+            if response.status == 401:
+                raise Exception("Invalid RunPod API key")
+            
+            response.raise_for_status()
+            result = await response.json()
+            self.job_id = result.get("id")
     
-    def status(self):
-        """Get job status"""
-        response = requests.get(
+    async def status(self):
+        """Get job status asynchronously"""
+        global aiohttp_session
+        async with aiohttp_session.get(
             f"{self.base_url}/status/{self.job_id}",
             headers=self.headers
-        )
-        response.raise_for_status()
-
-        status_response = response.json()
-        return status_response.get("status", "UNKNOWN")
-    
-    def stream(self):
-        """Stream job results"""
-        while True:
-            response = requests.get(
-                f"{self.base_url}/stream/{self.job_id}",
-                headers=self.headers,
-                stream=True
-            )
+        ) as response:
             response.raise_for_status()
-            
-            # Expect a single response        
-            try:
-                content = response.content.decode('utf-8')
-                data = json.loads(content)
-                if not data['status'] in ['IN_PROGRESS', 'COMPLETED']:
-                    break
-
-                for item in data['stream']:
-                    yield item['output']
-
-                if data['status'] == 'COMPLETED':
-                    return 
-            except json.JSONDecodeError as e:
-                log_message(f"Failed to parse JSON response: {e}")
-                return
+            status_response = await response.json()
+            return status_response.get("status", "UNKNOWN")
     
-    def cancel(self):
-        """Cancel the job"""
-        response = requests.post(
+    async def stream(self):
+        """Stream job results asynchronously"""
+        global aiohttp_session
+        while True:
+            async with aiohttp_session.get(
+                f"{self.base_url}/stream/{self.job_id}",
+                headers=self.headers
+            ) as response:
+                response.raise_for_status()
+                
+                # Expect a single response        
+                try:
+                    content = await response.text()
+                    data = json.loads(content)
+                    if not data['status'] in ['IN_PROGRESS', 'COMPLETED']:
+                        return
+
+                    for item in data['stream']:
+                        yield item['output']
+
+                    if data['status'] == 'COMPLETED':
+                        return
+                    
+                    # If job is not complete, wait a moment before retrying.
+                    await asyncio.sleep(1)
+
+                except json.JSONDecodeError as e:
+                    log_message(f"Failed to parse JSON response: {e}")
+                    return
+    
+    async def cancel(self):
+        """Cancel the job asynchronously"""
+        global aiohttp_session
+        async with aiohttp_session.post(
             f"{self.base_url}/cancel/{self.job_id}",
             headers=self.headers
-        )
-        response.raise_for_status()
-
-        return response.json()
+        ) as response:
+            response.raise_for_status()
+            return await response.json()
 
 class LeakyBucket:
     def __init__(self, max_minutes_per_week):
@@ -319,7 +374,7 @@ def get_user_quota(user_email):
 SPEEDUP_FACTOR = 20
 
 
-def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
+async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     """
     Calculate the estimated time remaining for jobs in queue and running jobs
 
@@ -331,98 +386,112 @@ def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     Returns:
         time_ahead_str: Formatted string of estimated time (HH:MM:SS)
     """
-    with lock:
-        time_ahead = 0
+    # Skip queue time calculations for private queue
+    if queue_to_use == queues[PRIVATE]:
+        return "00:00:00"
+    
+    # Determine which lock to use based on the queue
+    queue_type = None
+    for qt, q in queues.items():
+        if q == queue_to_use:
+            queue_type = qt
+            break
+    
+    if queue_type is None:
+        return "00:00:00"
+    time_ahead = 0
+    
 
-        # Add remaining time of currently running jobs
-        for running_job_id, running_job in running_jobs.items():
-            if running_job_id in job_results:
-                # Get progress of the running job
-                progress = job_results[running_job_id]["progress"]
-                # Add only the remaining duration
-                remaining_duration = running_job.duration * (1 - progress)
-                time_ahead += remaining_duration
-            else:
-                # If no progress info yet, add full duration
-                time_ahead += running_job.duration
+    # Add remaining time of currently running jobs
+    for running_job_id, running_job in running_jobs.items():
+        if running_job_id in job_results:
+            # Get progress of the running job
+            progress = job_results[running_job_id]["progress"]
+            # Add only the remaining duration
+            remaining_duration = running_job.duration * (1 - progress)
+            time_ahead += remaining_duration
+        else:
+            # If no progress info yet, add full duration
+            time_ahead += running_job.duration
 
-        # Add duration of queued jobs
-        queue_jobs = list(queue_to_use.queue)
-        if exclude_last and queue_jobs:
-            queue_jobs = queue_jobs[:-1]  # Exclude the last job
+    # Add duration of queued jobs
+    queue_jobs = list(queue_to_use.queue)
+    if exclude_last and queue_jobs:
+        queue_jobs = queue_jobs[:-1]  # Exclude the last job
 
-        time_ahead += sum(job.duration for job in queue_jobs)
+    time_ahead += sum(job.duration for job in queue_jobs)
 
-        # Apply speedup factor
-        time_ahead /= SPEEDUP_FACTOR
+    # Apply speedup factor
+    time_ahead /= SPEEDUP_FACTOR
 
-        # Convert time_ahead to HH:MM:SS format
-        return str(timedelta(seconds=int(time_ahead)))
+    # Convert time_ahead to HH:MM:SS format
+    return str(timedelta(seconds=int(time_ahead)))
 
 
-def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod_token=""):
+async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod_token=""):
     # Try to add the job to the queue
     log_message_in_session(f"Queuing job {job_id}...")
 
-    with lock:
-        # Check if user already has a job queued or running
-        if user_email in user_jobs:
-            return False, (
-                jsonify({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
-                200,
-            )
+    # Check if user already has a job queued or running
+    if user_email in user_jobs:
+        return False, (
+            JSONResponse({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
+            200,
+        )
 
-        # Check rate limits only if not using custom RunPod credentials
-        if not (runpod_endpoint and runpod_token):
-            user_bucket = get_user_quota(user_email)
-            if not user_bucket.can_transcribe(duration):
-                remaining_minutes = user_bucket.get_remaining_minutes()
-                log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
-                
-                # Calculate how many minutes they need to wait, accounting for replenish rate
-                needed_minutes = (duration / 60) - remaining_minutes
-                replenish_rate_per_minute = user_bucket.time_fill_rate * 60
-                wait_minutes = needed_minutes / (1 + replenish_rate_per_minute)
+    # Check rate limits only if not using custom RunPod credentials
+    if not (runpod_endpoint and runpod_token):
+        user_bucket = get_user_quota(user_email)
+        if not user_bucket.can_transcribe(duration):
+            remaining_minutes = user_bucket.get_remaining_minutes()
+            log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
+            
+            # Calculate how many minutes they need to wait, accounting for replenish rate
+            needed_minutes = (duration / 60) - remaining_minutes
+            replenish_rate_per_minute = user_bucket.time_fill_rate * 60
+            wait_minutes = needed_minutes / (1 + replenish_rate_per_minute)
 
-                # Convert time_fill_rate (per second) to minutes per minute
-                error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
-                
-                return False, (jsonify({"error": error_msg}), 429)
+            # Convert time_fill_rate (per second) to minutes per minute
+            error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
+            
+            return False, (JSONResponse({"error": error_msg}), 429)
 
-        try:
-            job_desc = box.Box()
-            job_desc.qtime = time.time()
-            job_desc.utime = time.time()
-            job_desc.id = job_id
-            job_desc.user_email = user_email
-            job_desc.filename = filename
-            job_desc.duration = duration
-            job_desc.runpod_endpoint = runpod_endpoint
-            job_desc.runpod_token = runpod_token
-            job_desc.uses_custom_runpod = bool(runpod_endpoint and runpod_token)
+    try:
+        job_desc = box.Box()
+        job_desc.qtime = time.time()
+        job_desc.utime = time.time()
+        job_desc.id = job_id
+        job_desc.user_email = user_email
+        job_desc.filename = filename
+        job_desc.duration = duration
+        job_desc.runpod_endpoint = runpod_endpoint
+        job_desc.runpod_token = runpod_token
+        job_desc.uses_custom_runpod = bool(runpod_endpoint and runpod_token)
 
-            # Determine queue type based on job characteristics
-            if job_desc.uses_custom_runpod:
-                # Private queue for jobs with custom RunPod credentials
-                queue_to_use = queues[PRIVATE]
-                job_type = PRIVATE
-                running_jobs_to_update = running_jobs[PRIVATE]
-            elif duration <= SHORT_JOB_THRESHOLD:
-                queue_to_use = queues[SHORT]
-                job_type = SHORT
-                running_jobs_to_update = running_jobs[SHORT]
-            else:
-                queue_to_use = queues[LONG]
-                job_type = LONG
-                running_jobs_to_update = running_jobs[LONG]
+        # Determine queue type based on job characteristics
+        if job_desc.uses_custom_runpod:
+            # Private queue for jobs with custom RunPod credentials
+            queue_to_use = queues[PRIVATE]
+            job_type = PRIVATE
+            running_jobs_to_update = running_jobs[PRIVATE]
+        elif duration <= SHORT_JOB_THRESHOLD:
+            queue_to_use = queues[SHORT]
+            job_type = SHORT
+            running_jobs_to_update = running_jobs[SHORT]
+        else:
+            queue_to_use = queues[LONG]
+            job_type = LONG
+            running_jobs_to_update = running_jobs[LONG]
 
-            job_desc.job_type = job_type
+        job_desc.job_type = job_type
 
+        # Use the appropriate queue lock
+        async with queue_locks[job_type]:
             queue_depth = queue_to_use.qsize()
             queue_to_use.put_nowait(job_desc)
 
             # Calculate time ahead only for the relevant queue
-            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs_to_update, exclude_last=True)
+            time_ahead_str = await calculate_queue_time(queue_to_use, running_jobs_to_update, exclude_last=True)
 
             # Add job to user's active jobs
             user_jobs[user_email] = job_id
@@ -437,85 +506,149 @@ def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod
             )
 
             return True, (
-                jsonify({"job_id": job_id, "queued": queue_depth, "job_type": job_type, "time_ahead": time_ahead_str})
+                JSONResponse({"job_id": job_id, "queued": queue_depth, "job_type": job_type, "time_ahead": time_ahead_str})
             )
-        except queue.Full:
-            capture_event(job_id, "job-queue-failed", {"queue-depth": queue_depth, "job-type": job_type})
+    except queue.Full:
+        capture_event(job_id, "job-queue-failed", {"queue-depth": queue_depth, "job-type": job_type})
 
-            log_message_in_session(f"Job queuing failed: {job_id}")
+        log_message_in_session(f"Job queuing failed: {job_id}")
 
-            cleanup_temp_file(job_id)
-            return False, (jsonify({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}), 503)
+        cleanup_temp_file(job_id)
+        return False, (JSONResponse({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}), 503)
 
 
-@app.route("/")
-def index():
+@app.get("/")
+async def index(request: Request):
     if in_dev:
-        session["user_email"] = os.environ["TS_USER_EMAIL"]
+        user_email = args.dev_user_email or os.environ.get("TS_USER_EMAIL", "dev@example.com")
+        session_id = set_user_email(request, user_email)
+        response = templates.TemplateResponse("index.html", {"request": request})
+        response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
+        return response
 
-    if "user_email" not in session:
-        return redirect(url_for("login"))
+    user_email = get_user_email(request)
+    if not user_email:
+        return RedirectResponse(url="/login")
 
     if in_hiatus_mode:
-        return render_template("server-down.html")
+        return templates.TemplateResponse("server-down.html", {"request": request})
     
-    return render_template("index.html")
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
-@app.route("/login")
-def login():
-    return render_template("login.html", google_analytics_tag=os.environ["GOOGLE_ANALYTICS_TAG"])
+@app.get("/login")
+async def login(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request, "google_analytics_tag": os.environ["GOOGLE_ANALYTICS_TAG"]})
+
+@app.get("/authorize")
+async def authorize(request: Request):
+    """Redirect to Google OAuth"""
+    # Generate state parameter for security
+    state = str(uuid.uuid4())
+    session_id = get_session_id(request)
+    
+    if session_id not in sessions:
+        sessions[session_id] = {}
+    sessions[session_id]["oauth_state"] = state
+    
+    # Build Google OAuth URL using v2 endpoints
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state
+    }
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+    
+    response = RedirectResponse(url=auth_url)
+    response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
+    return response
+
+@app.get("/login/authorized")
+async def authorized(request: Request, code: str = None, state: str = None, error: str = None):
+    """Handle Google OAuth callback"""
+    if error:
+        error_message = f"Access denied: {error}"
+        return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+    
+    if not code or not state:
+        error_message = "Missing authorization code or state"
+        return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+    
+    # Verify state parameter
+    session_id = get_session_id(request)
+    if state != sessions.get(session_id, {}).get("oauth_state"):
+        error_message = "Invalid state parameter"
+        return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+    
+    try:
+        # Exchange code for access token using v2 endpoint
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": GOOGLE_REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                }
+            )
+            token_data = token_response.json()
+            
+            if "error" in token_data:
+                error_message = f"Token exchange failed: {token_data.get('error_description', 'Unknown error')}"
+                return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+            
+            access_token = token_data["access_token"]
+            
+            # Get user info using v2 endpoint
+            user_response = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            user_data = user_response.json()
+            
+            # Store user email in session
+            set_user_email(request, user_data["email"])
+            
+            # Clean up OAuth state
+            if session_id in sessions:
+                sessions[session_id].pop("oauth_state", None)
+            
+            response = templates.TemplateResponse("close_window.html", {"request": request, "success": True})
+            response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
+            return response
+            
+    except Exception as e:
+        error_message = f"Authentication failed: {str(e)}"
+        return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
 
 
-@app.route("/authorize")
-def authorize():
-    return google.authorize(callback=url_for("authorized", _external=True))
-
-
-@app.route("/login/authorized")
-def authorized():
-    resp = google.authorized_response()
-    if resp is None or resp.get("access_token") is None:
-        error_message = "Access denied: reason={0} error={1}".format(
-            request.args.get("error_reason", "Unknown"), request.args.get("error_description", "Unknown")
-        )
-        return render_template("close_window.html", success=False, message=error_message)
-
-    session["google_token"] = (resp["access_token"], "")
-    user_info = google.get("userinfo")
-    session["user_email"] = user_info.data["email"]
-
-    session.pop("google_token")
-
-    return render_template("close_window.html", success=True)
-
-
-@google.tokengetter
-def get_google_oauth_token():
-    return session.get("google_token")
-
-
-@app.route("/upload", methods=["POST"])
-def upload_file():
+@app.post("/upload")
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    runpod_endpoint: Optional[str] = Form(None),
+    runpod_token: Optional[str] = Form(None)
+):
     job_id = str(uuid.uuid4())
-    user_email = session.get("user_email")
+    user_email = get_user_email(request)
 
     if in_hiatus_mode:
         capture_event(job_id, "file-upload-hiatus-rejected", {"user": user_email})
-        return jsonify({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}), 503
+        return JSONResponse({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}, status_code=503)
 
     capture_event(job_id, "file-upload", {"user": user_email})
 
-    if "file" not in request.files:
-        return jsonify({"error": "לא נבחר קובץ. אנא בחר קובץ להעלאה."}), 200
-
-    file = request.files["file"]
+    if not file:
+        return JSONResponse({"error": "לא נבחר קובץ. אנא בחר קובץ להעלאה."}, status_code=200)
 
     if file.filename == "":
-        return jsonify({"error": "שם הקובץ ריק. אנא בחר קובץ תקין."}), 200
-
-    if not file:
-        return jsonify({"error": "הקובץ שנבחר אינו תקין. אנא נסה קובץ אחר."}), 200
+        return JSONResponse({"error": "שם הקובץ ריק. אנא בחר קובץ תקין."}, status_code=200)
 
     filename = secure_filename(file.filename)
 
@@ -524,76 +657,83 @@ def upload_file():
     temp_file_path = temp_file.name
 
     try:
-        file.save(temp_file_path)
+        # Read file content and save to temp file
+        content = await file.read()
+        with open(temp_file_path, 'wb') as f:
+            f.write(content)
     except Exception as e:
-        return jsonify({"error": f"העלאת הקובץ נכשלה: {str(e)}"}), 200
+        return JSONResponse({"error": f"העלאת הקובץ נכשלה: {str(e)}"}, status_code=200)
 
     # Get the MIME type of the file
     filetype = magic.Magic(mime=True).from_file(temp_file_path)
 
     if not is_ffmpeg_supported_mimetype(filetype):
-        return jsonify({"error": f"סוג הקובץ {filetype} אינו נתמך. אנא העלה קובץ אודיו או וידאו תקין."}), 200
+        return JSONResponse({"error": f"סוג הקובץ {filetype} אינו נתמך. אנא העלה קובץ אודיו או וידאו תקין."}, status_code=200)
 
     # Get the duration of the audio file
     duration = get_media_duration(temp_file_path)
 
     if duration is None:
-        return jsonify({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}), 200
+        return JSONResponse({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}, status_code=200)
 
     # Get RunPod credentials if provided
-    runpod_endpoint = request.form.get('runpod_endpoint', '').strip()
-    runpod_token = request.form.get('runpod_token', '').strip()
+    runpod_endpoint = runpod_endpoint.strip() if runpod_endpoint else ""
+    runpod_token = runpod_token.strip() if runpod_token else ""
     
     # Store the temporary file path
-    with lock:
-        temp_files[job_id] = temp_file_path
+    temp_files[job_id] = temp_file_path
 
-        queued, res = queue_job(job_id, user_email, filename, duration, runpod_endpoint, runpod_token)
-        if queued:
-            job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
-        else:
-            cleanup_temp_file(job_id)
+    # Use the background event loop to call the async function
+    queued, res = await run_async_in_loop(queue_job(job_id, user_email, filename, duration, runpod_endpoint, runpod_token))
+    if queued:
+        job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
+    else:
+        cleanup_temp_file(job_id)
 
     return res
 
 
-@app.route("/job_status/<job_id>")
-def job_status(job_id):
+@app.get("/job_status/{job_id}")
+async def job_status(job_id: str, request: Request):
     # Make sure the job has been queued
     if job_id not in job_results:
-        return jsonify({"error": "מזהה העבודה אינו תקין. אנא נסה להעלות את הקובץ מחדש."}), 400
+        return JSONResponse({"error": "מזהה העבודה אינו תקין. אנא נסה להעלות את הקובץ מחדש."}, status_code=400)
 
-    with lock:
-        # Update last access time for the job
-        job_last_accessed[job_id] = time.time()
+    # Update last access time for the job
+    job_last_accessed[job_id] = time.time()
 
-        # Check if the job is in the queue
-        queue_position = None
-        job_type = None
-        queue_to_use = None
+    # Check if the job is in the queue
+    queue_position = None
+    job_type = None
+    queue_to_use = None
 
-        # Check all queues for the job
-        for queue_type in [SHORT, LONG, PRIVATE]:
-            for idx, job_desc in enumerate(queues[queue_type].queue):
-                if job_desc.id == job_id:
-                    queue_position = idx + 1
-                    job_type = queue_type
-                    queue_to_use = queues[queue_type]
-                    break
-            if queue_position:
+    # Check all queues for the job
+    for queue_type in [SHORT, LONG, PRIVATE]:
+        for idx, job_desc in enumerate(queues[queue_type].queue):
+            if job_desc.id == job_id:
+                queue_position = idx + 1
+                job_type = queue_type
+                queue_to_use = queues[queue_type]
                 break
-
         if queue_position:
-            running_jobs_to_check = running_jobs[job_type]
-            time_ahead_str = calculate_queue_time(queue_to_use, running_jobs_to_check)
-            return jsonify({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
+            break
 
-        # If job is in progress, return only the progress
-        if job_results[job_id]["progress"] < 1.0:
-            return jsonify({"progress": job_results[job_id]["progress"]})
+    if queue_position:
+        running_jobs_to_check = running_jobs[job_type]
+        # Use the background event loop to call the async function
+        time_ahead_str = await run_async_in_loop(calculate_queue_time(queue_to_use, running_jobs_to_check))
+        return JSONResponse({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
 
-        # If job is complete, return the full job_result data
-        return jsonify(job_results[job_id])
+    # If job is in progress, return only the progress
+    if job_results[job_id]["progress"] < 1.0:
+        return JSONResponse({"progress": job_results[job_id]["progress"]})
+
+    # If job is complete, return the full job_result data
+    result = job_results[job_id].copy()
+    # Convert datetime to ISO string for JSON serialization
+    if result["completion_time"]:
+        result["completion_time"] = result["completion_time"].isoformat()
+    return JSONResponse(result)
 
 
 def cleanup_temp_file(job_id):
@@ -618,43 +758,42 @@ def clean_some_unicode_from_text(text):
     return text.translate({ord(c): None for c in chars_to_remove})
 
 
-@app.route("/download/<job_id>", methods=["GET"])
-def download_file(job_id):
+@app.get("/download/{job_id}")
+async def download_file(job_id: str, request: Request):
     if job_id not in temp_files:
-        return jsonify({"error": "File not found"}), 404
+        return JSONResponse({"error": "File not found"}, status_code=404)
 
-    return send_file(temp_files[job_id])
-
-
+    return FileResponse(temp_files[job_id])
 
 
 
-def process_segment(job_id, segment, duration):
+
+
+async def process_segment(job_id, segment, duration):
     """Process a single segment and update job results"""
-    with lock:
-        # Check if the job should be terminated
-        if time.time() - job_last_accessed.get(job_id, 0) > JOB_TIMEOUT:
-            log_message(f"Terminating inactive job: {job_id}")
-            return False
+    # Check if the job should be terminated
+    if time.time() - job_last_accessed.get(job_id, 0) > JOB_TIMEOUT:
+        log_message(f"Terminating inactive job: {job_id}")
+        return False
 
-        segment_data = {
-            "id": segment["id"],
-            "start": segment["start"],
-            "end": segment["end"],
-            "text": clean_some_unicode_from_text(segment["text"]),
-            "avg_logprob": segment["avg_logprob"],
-            "compression_ratio": segment["compression_ratio"],
-            "no_speech_prob": segment["no_speech_prob"],
-        }
+    segment_data = {
+        "id": segment["id"],
+        "start": segment["start"],
+        "end": segment["end"],
+        "text": clean_some_unicode_from_text(segment["text"]),
+        "avg_logprob": segment["avg_logprob"],
+        "compression_ratio": segment["compression_ratio"],
+        "no_speech_prob": segment["no_speech_prob"],
+    }
 
-        progress = segment["end"] / duration
-        job_results[job_id]["progress"] = progress
-        job_results[job_id]["results"].append(segment_data)
+    progress = segment["end"] / duration
+    job_results[job_id]["progress"] = progress
+    job_results[job_id]["results"].append(segment_data)
 
     return True
 
 
-def transcribe_job(job_desc):
+async def transcribe_job(job_desc):
     job_id = job_desc.id
 
     run_request = None
@@ -718,46 +857,40 @@ def transcribe_job(job_desc):
             endpoint_id = os.environ["RUNPOD_ENDPOINT_ID"]
             log_message(f"{job_desc.user_email}: using default RunPod credentials")
 
-        # Start streaming request using RunPodJob
-        run_request = RunPodJob(api_key, endpoint_id, payload)
+        # Start streaming request using AsyncRunPodJob
+        run_request = AsyncRunPodJob(api_key, endpoint_id, payload)
+        
+        # Submit the job first
+        await run_request.submit()
 
         for i in range(30):
-            if run_request.status() == "IN_QUEUE":
-                time.sleep(10)
+            if await run_request.status() == "IN_QUEUE":
+                await asyncio.sleep(10)
                 continue
 
             break
 
         # Process streaming results
-        timeouts = 0
-        while True:
-            try:
-                for segment in run_request.stream():
-                    if "error" in segment:
-                        log_message(f"Error in RunPod transcription stream: {segment['error']}")
-                        return
+        try:
+            async for segment in run_request.stream():
+                if "error" in segment:
+                    log_message(f"Error in RunPod transcription stream: {segment['error']}")
+                    return
 
-                    # Process segment
-                    if not process_segment(job_id, segment, duration):
-                        # Job was terminated
-                        log_message(f"Terminating runpod job due to process_segment error.")
-                        run_request.cancel()
-                        return
+                # Process segment
+                if not await process_segment(job_id, segment, duration):
+                    # Job was terminated
+                    log_message(f"Terminating runpod job due to process_segment error.")
+                    await run_request.cancel()
+                    return
 
-                run_request = None
+            run_request = None
 
-                break
-
-            except requests.exceptions.ReadTimeout as e:
-                log_message(f"run_request.stream() time out #{timeouts}, trying again.")
-                timeouts += 1
-                pass
-
-            except Exception as e:
-                log_message(f"Exception during run_request.stream(): {e}")
-                print(traceback.format_exc())
-                raise e
-
+        except Exception as e:
+            log_message(f"Exception during run_request.stream(): {e}")
+            print(traceback.format_exc())
+            raise e
+        
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
         transcribe_done_time = time.time()
@@ -773,108 +906,114 @@ def transcribe_job(job_desc):
             },
         )
 
-        with lock:
-            job_results[job_id]["progress"] = 1.0
-            job_results[job_id]["completion_time"] = datetime.now()
+        job_results[job_id]["progress"] = 1.0
+        job_results[job_id]["completion_time"] = datetime.now()
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
     finally:
         if run_request:
             try:
                 log_message("Terminating run_request at end of transcribe_job::finally")
-                run_request.cancel()
+                await run_request.cancel()
             except Exception as e:
                 log_message(f"Failed to terminate runpod job")
 
         # Remove job from the appropriate running jobs dictionary
         del running_jobs[job_desc.job_type][job_id]
         # Remove job from user's active jobs
-        with lock:
-            user_email = job_desc.user_email
-            if user_email in user_jobs and user_jobs[user_email] == job_id:
-                del user_jobs[user_email]
+        user_email = job_desc.user_email
+        if user_email in user_jobs and user_jobs[user_email] == job_id:
+            del user_jobs[user_email]
         cleanup_temp_file(job_id)
-        if job_id in job_threads:
-            del job_threads[job_id]
+        # The job thread will terminate itself in the next iteration of the transcribe_job function
 
 
-def submit_next_task(job_queue, running_jobs, max_parallel_jobs):
-    with lock:
+async def submit_next_task(job_queue, running_jobs, max_parallel_jobs, queue_type):
+    async with queue_locks[queue_type]:
         # Submit all possible tasks until max_parallel_jobs are reached or queue is empty
         while len(running_jobs) < max_parallel_jobs and not job_queue.empty():
             job_desc = job_queue.get()
             running_jobs[job_desc.id] = job_desc
-            t_thread = threading.Thread(target=transcribe_job, args=(job_desc,))
-            job_threads[job_desc.id] = t_thread
-            t_thread.start()
+            # Create async task for transcription
+            asyncio.create_task(transcribe_job(job_desc))
 
 
-def cleanup_old_results():
-    with lock:
-        current_time = datetime.now()
-        jobs_to_delete = []
-        for job_id, job_data in job_results.items():
-            if job_data["completion_time"] and (current_time - job_data["completion_time"]) > timedelta(minutes=30):
-                jobs_to_delete.append(job_id)
+async def cleanup_old_results():
+    current_time = datetime.now()
+    jobs_to_delete = []
+    for job_id, job_data in job_results.items():
+        if job_data["completion_time"] and (current_time - job_data["completion_time"]) > timedelta(minutes=30):
+            jobs_to_delete.append(job_id)
 
-        for job_id in jobs_to_delete:
-            del job_results[job_id]
+    for job_id in jobs_to_delete:
+        del job_results[job_id]
 
-        # Clean up user buckets that are fully replenished
-        users_to_remove = []
-        for user_email, bucket in user_buckets.items():
-            # Remove bucket if it is fully replenished
-            if bucket.is_fully_replenished():
-                users_to_remove.append(user_email)
-        
-        for user_email in users_to_remove:
-            del user_buckets[user_email]
+    # Clean up user buckets that are fully replenished
+    users_to_remove = []
+    for user_email, bucket in user_buckets.items():
+        # Remove bucket if it is fully replenished
+        if bucket.is_fully_replenished():
+            users_to_remove.append(user_email)
+    
+    for user_email in users_to_remove:
+        del user_buckets[user_email]
 
 
-def terminate_inactive_jobs():
-    with lock:
-        current_time = time.time()
-        jobs_to_terminate = []
+async def terminate_inactive_jobs():
+    current_time = time.time()
+    jobs_to_terminate = []
 
-        # Check queued jobs in all queues.
-        # Running jobs are handled in transcribe_job.
-        for queue_type in [SHORT, LONG, PRIVATE]:
+    # Check queued jobs in all queues.
+    # Running jobs are handled in transcribe_job.
+    for queue_type in [SHORT, LONG, PRIVATE]:
+        async with queue_locks[queue_type]:
             queue_to_check = queues[queue_type]
             for job in list(queue_to_check.queue):
                 if current_time - job_last_accessed.get(job.id, 0) > JOB_TIMEOUT:
                     jobs_to_terminate.append(job.id)
                     queue_to_check.queue.remove(job)
 
-        # Terminate and clean up jobs
-        for job_id in jobs_to_terminate:
-            log_message(f"Terminating inactive job: {job_id}")
-            if job_id in job_results:
-                del job_results[job_id]
-            if job_id in job_last_accessed:
-                del job_last_accessed[job_id]
-            cleanup_temp_file(job_id)
+    # Terminate and clean up jobs
+    for job_id in jobs_to_terminate:
+        log_message(f"Terminating inactive job: {job_id}")
+        if job_id in job_results:
+            del job_results[job_id]
+        if job_id in job_last_accessed:
+            del job_last_accessed[job_id]
+        cleanup_temp_file(job_id)
 
-            # Remove job from user's active jobs
-            for user_email, active_job_id in list(user_jobs.items()):
-                if active_job_id == job_id:
-                    del user_jobs[user_email]
+        # Remove job from user's active jobs
+        for user_email, active_job_id in list(user_jobs.items()):
+            if active_job_id == job_id:
+                del user_jobs[user_email]
 
-            # The job thread will terminate itself in the next iteration of the transcribe_job function
+        # The job thread will terminate itself in the next iteration of the transcribe_job function
 
 
-def event_loop():
+async def event_loop():
     while True:
-        submit_next_task(queues[SHORT], running_jobs[SHORT], max_parallel_jobs[SHORT])
-        submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG])
-        submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE])
-        cleanup_old_results()
-        terminate_inactive_jobs()
-        time.sleep(0.1)
+        await submit_next_task(queues[SHORT], running_jobs[SHORT], max_parallel_jobs[SHORT], SHORT)
+        await submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG], LONG)
+        await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
+        await cleanup_old_results()
+        await terminate_inactive_jobs()
+        await asyncio.sleep(0.1)
 
 
-el_thread = threading.Thread(target=event_loop)
-el_thread.start()
+# Global async resources
+aiohttp_session = None
+queue_locks = {
+    SHORT: None,
+    LONG: None,
+    PRIVATE: None
+}
+
+
+
+async def run_async_in_loop(coro):
+    """Run an async coroutine in the current event loop"""
+    return await coro
 
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500
-    app.run(host="0.0.0.0", port=port, ssl_context=("secrets/fullchain.pem", "secrets/privkey.pem"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
