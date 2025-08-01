@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="{{ url_for('static', path='favicon.png') }}">
     <title>תמלול בעזרת ivrit.ai</title>
+    <script src="https://unpkg.com/docx@9.5.1/dist/index.iife.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -178,7 +179,7 @@
         }
         #transcription-container {
             position: relative;
-            margin-top: 1rem;
+            margin-top: 0;
         }
         #transcription {
             width: 100%;
@@ -191,10 +192,15 @@
             resize: none;
             font-size: 1rem;
         }
+        .action-buttons {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+        }
         #copy-btn {
-            position: absolute;
-            top: 5px;
-            left: 5px;
             background-color: transparent;
             border: none;
             cursor: pointer;
@@ -209,9 +215,6 @@
             height: 20px;
         }
         #download-btn {
-            position: absolute;
-            top: 5px;
-            left: 35px;
             background-color: transparent;
             border: none;
             cursor: pointer;
@@ -224,6 +227,20 @@
             cursor: not-allowed;
         }
         #download-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+        #download-docx-btn {
+            background-color: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 5px;
+        }
+        #download-docx-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #download-docx-btn svg {
             width: 20px;
             height: 20px;
         }
@@ -282,7 +299,7 @@
             margin-top: 1rem;
             display: flex;
             align-items: center;
-            justify-content: center;
+            justify-content: flex-start;
             gap: 1rem;
         }
         .slider-container {
@@ -349,8 +366,7 @@
         <div id="progress-container">
             <div id="progress-bar"></div>
         </div>
-        <div id="transcription-container">
-            <textarea id="transcription" readonly></textarea>
+        <div class="action-buttons">
             <button id="copy-btn" disabled title="העתק את הטקסט">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -360,6 +376,18 @@
             <button id="download-btn" disabled title="הורד כתוביות">
                 🎬
             </button>
+            <button id="download-docx-btn" disabled title="הורד כמסמך Word">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                    <polyline points="14,2 14,8 20,8"/>
+                    <line x1="16" y1="13" x2="8" y2="13"/>
+                    <line x1="16" y1="17" x2="8" y2="17"/>
+                    <polyline points="10,9 9,9 8,9"/>
+                </svg>
+            </button>
+        </div>
+        <div id="transcription-container">
+            <textarea id="transcription" readonly></textarea>
         </div>
         <div class="display-options">
             <span>טקסט רציף</span>
@@ -370,6 +398,12 @@
                 </label>
             </div>
             <span>פסקאות נפרדות</span>
+        </div>
+        <div class="display-options">
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 16px;">
+                <input type="checkbox" id="timecode-toggle" style="margin: 0;">
+                <span>הוסף קודי זמן</span>
+            </label>
         </div>
         <div class="links-container">
             <a href="mailto:info@ivrit.ai" class="contact-link">
@@ -421,7 +455,9 @@
         const transcriptionArea = document.getElementById('transcription');
         const copyBtn = document.getElementById('copy-btn');
         const downloadBtn = document.getElementById('download-btn');
+        const downloadDocxBtn = document.getElementById('download-docx-btn');
         const segmentToggle = document.getElementById('segment-toggle');
+        const timecodeToggle = document.getElementById('timecode-toggle');
         const settingsBtn = document.getElementById('settings-btn');
         const settingsModal = document.getElementById('settings-modal');
         const closeSettings = document.getElementById('close-settings');
@@ -673,6 +709,7 @@
             transcriptionSegments = [];
             copyBtn.disabled = true;
             downloadBtn.disabled = true;
+            downloadDocxBtn.disabled = true;
 
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/upload', true);
@@ -778,18 +815,86 @@
             poll();
         }
 
+        function formatWithTimecodes(segments) {
+            if (!segments || segments.length === 0) return '';
+            
+            const separator = segmentToggle.checked ? ' ' : '\n';
+            const groups = [];
+            let currentGroup = [];
+            let currentTimeMarker = 30; // Start with 30 seconds
+            
+            for (let i = 0; i < segments.length; i++) {
+                const segment = segments[i];
+                currentGroup.push(segment);
+                
+                // Check if this segment should end the current group
+                const shouldEndGroup = 
+                    (segment.start <= currentTimeMarker && segment.end >= currentTimeMarker) ||
+                    (i === segments.length - 1) || // Last segment
+                    (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker);
+                
+                if (shouldEndGroup) {
+                    // Get start time of first segment and end time of last segment in group
+                    const startTime = currentGroup[0].start;
+                    const endTime = currentGroup[currentGroup.length - 1].end;
+                    
+                    const groupText = currentGroup
+                        .map(seg => seg.text.trim())
+                        .join(separator);
+                    
+                    const formattedStartTime = formatTimeForDisplay(startTime);
+                    const formattedEndTime = formatTimeForDisplay(endTime);
+                    groups.push('[' + formattedStartTime + '-' + formattedEndTime + ']\n' + groupText);
+                    
+                    // Reset for next group
+                    currentGroup = [];
+                    currentTimeMarker += 30;
+                    
+                    // Handle case where we need to advance time marker further
+                    while (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker) {
+                        currentTimeMarker += 30;
+                    }
+                }
+            }
+            
+            return groups.join('\n\n');
+        }
+        
+        function formatTimeForDisplay(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            if (hours > 0) {
+                return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+            } else {
+                return `${minutes}:${String(secs).padStart(2, '0')}`;
+            }
+        }
+
         function showError(message) {
             transcriptionArea.value = `שגיאה: ${message}`;
             resetUploadState();
         }
 
         function updateTranscriptionDisplay() {
-            const separator = segmentToggle.checked ? ' ' : '\n';
-            transcriptionArea.value = transcriptionSegments
-                .map(segment => segment.text.trim())
-                .join(separator);
+            let result;
+            
+            if (timecodeToggle.checked) {
+                result = formatWithTimecodes(transcriptionSegments);
+            } else {
+                const separator = segmentToggle.checked ? ' ' : '\n';
+                result = transcriptionSegments
+                    .map(segment => segment.text.trim())
+                    .join(separator);
+            }
+
+            result = result + '\n\n' + 'תומלל באמצעות שירות התמלול של ivrit.ai';
+            
+            transcriptionArea.value = result;
             copyBtn.disabled = false;
             downloadBtn.disabled = false;
+            downloadDocxBtn.disabled = false;
         }
 
         function resetUploadState() {
@@ -830,6 +935,114 @@
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+        });
+
+        downloadDocxBtn.addEventListener('click', async function() {
+            if (!transcriptionSegments.length) return;
+
+            try {
+                const paragraphs = [];
+                
+                // Add title
+                paragraphs.push(
+                    new docx.Paragraph({
+                        children: [
+                            new docx.TextRun({
+                                text: "תמלול",
+                                bold: true,
+                                size: 32,
+                                bidirectional: true,
+                            }),
+                        ],
+                        heading: docx.HeadingLevel.HEADING_1,
+                        alignment: docx.AlignmentType.RIGHT,
+                        bidirectional: true,
+                        spacing: {
+                            after: 400,
+                        },
+                    })
+                );
+
+                // Get the text directly from the transcription textarea
+                const transcriptionText = transcriptionArea.value;
+                
+                // Split the text into lines and create paragraphs
+                const lines = transcriptionText.split('\n').filter(line => line.trim() !== '');
+                
+                lines.forEach(line => {
+                    paragraphs.push(
+                        new docx.Paragraph({
+                            children: [
+                                new docx.TextRun({
+                                    text: line,
+                                    size: 24,
+                                    bidirectional: true,
+                                }),
+                            ],
+                            alignment: docx.AlignmentType.RIGHT,
+                            bidirectional: true,
+                            spacing: {
+                                after: 200,
+                            },
+                            indent: {
+                                right: 0,
+                                left: 0,
+                            },
+                        })
+                    );
+                });
+
+                // Create a new document with RTL support
+                const doc = new docx.Document({
+                    sections: [{
+                        properties: {
+                            page: {
+                                margin: {
+                                    top: 1440,    // 1 inch
+                                    right: 1440,  // 1 inch  
+                                    bottom: 1440, // 1 inch
+                                    left: 1440,   // 1 inch
+                                },
+                            },
+                        },
+                        children: paragraphs,
+                    }],
+                    styles: {
+                        default: {
+                            document: {
+                                run: {
+                                    bidirectional: true,
+                                },
+                            },
+                            paragraph: {
+                                alignment: docx.AlignmentType.RIGHT,
+                                bidirectional: true,
+                            },
+                        },
+                    },
+                });
+
+                // Generate the document blob
+                const buffer = await docx.Packer.toBlob(doc);
+                
+                // Download the document
+                const url = URL.createObjectURL(buffer);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'transcription.docx';
+                
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                
+                // Clean up the URL after a short delay
+                setTimeout(() => {
+                    URL.revokeObjectURL(url);
+                }, 1000);
+            } catch (error) {
+                console.error('Error creating DOCX:', error);
+                alert('שגיאה ביצירת קובץ Word. אנא נסה שוב.');
+            }
         });
 
         function formatTime(seconds) {
@@ -881,6 +1094,13 @@
 
         // Toggle between line breaks and spaces for transcription display
         segmentToggle.addEventListener('change', function() {
+            if (transcriptionSegments.length > 0) {
+                updateTranscriptionDisplay();
+            }
+        });
+
+        // Toggle for time codes
+        timecodeToggle.addEventListener('change', function() {
             if (transcriptionSegments.length > 0) {
                 updateTranscriptionDisplay();
             }

@@ -45,9 +45,14 @@ import argparse
 
 dotenv.load_dotenv()
 
-# Parse CLI arguments for rate limiting configuration
+# Parse CLI arguments for configuration
 parser = argparse.ArgumentParser(description='Transcription service with rate limiting')
-parser.add_argument('--max-minutes-per-week', type=int, default=420, help='Maximum credit grant in minutes per week (default: 420)')
+parser.add_argument('--max-minutes-per-week', type=int, default=180, help='Maximum credit grant in minutes per week (default: 420)')
+parser.add_argument('--staging', action='store_true', help='Enable staging mode')
+parser.add_argument('--hiatus', action='store_true', help='Enable hiatus mode')
+parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
+parser.add_argument('--dev', action='store_true', help='Enable development mode')
+parser.add_argument('--dev-user-email', help='User email for development mode')
 args, unknown = parser.parse_known_args()
 
 # Rate limiting configuration from CLI arguments
@@ -57,8 +62,9 @@ REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically deriv
 # RunPod configuration
 RUNPOD_MAX_PAYLOAD_LEN = 10 * 1024 * 1024  # 10MB max payload length
 
-in_dev = "TS_STAGING_MODE" in os.environ
-in_hiatus_mode = "TS_HIATUS_MODE" in os.environ
+in_dev = args.staging or args.dev
+in_hiatus_mode = args.hiatus
+verbose = args.verbose
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -99,7 +105,7 @@ file_handler = RotatingFileHandler(
 file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s"))
 logger.addHandler(file_handler)
 
-verbose = "VERBOSE" in os.environ
+# verbose is now set from CLI arguments above
 
 # Templates
 templates = Jinja2Templates(directory="templates")
@@ -393,34 +399,33 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     
     if queue_type is None:
         return "00:00:00"
+    time_ahead = 0
     
-    async with queue_locks[queue_type]:
-        time_ahead = 0
 
-        # Add remaining time of currently running jobs
-        for running_job_id, running_job in running_jobs.items():
-            if running_job_id in job_results:
-                # Get progress of the running job
-                progress = job_results[running_job_id]["progress"]
-                # Add only the remaining duration
-                remaining_duration = running_job.duration * (1 - progress)
-                time_ahead += remaining_duration
-            else:
-                # If no progress info yet, add full duration
-                time_ahead += running_job.duration
+    # Add remaining time of currently running jobs
+    for running_job_id, running_job in running_jobs.items():
+        if running_job_id in job_results:
+            # Get progress of the running job
+            progress = job_results[running_job_id]["progress"]
+            # Add only the remaining duration
+            remaining_duration = running_job.duration * (1 - progress)
+            time_ahead += remaining_duration
+        else:
+            # If no progress info yet, add full duration
+            time_ahead += running_job.duration
 
-        # Add duration of queued jobs
-        queue_jobs = list(queue_to_use.queue)
-        if exclude_last and queue_jobs:
-            queue_jobs = queue_jobs[:-1]  # Exclude the last job
+    # Add duration of queued jobs
+    queue_jobs = list(queue_to_use.queue)
+    if exclude_last and queue_jobs:
+        queue_jobs = queue_jobs[:-1]  # Exclude the last job
 
-        time_ahead += sum(job.duration for job in queue_jobs)
+    time_ahead += sum(job.duration for job in queue_jobs)
 
-        # Apply speedup factor
-        time_ahead /= SPEEDUP_FACTOR
+    # Apply speedup factor
+    time_ahead /= SPEEDUP_FACTOR
 
-        # Convert time_ahead to HH:MM:SS format
-        return str(timedelta(seconds=int(time_ahead)))
+    # Convert time_ahead to HH:MM:SS format
+    return str(timedelta(seconds=int(time_ahead)))
 
 
 async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", runpod_token=""):
@@ -515,7 +520,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", 
 @app.get("/")
 async def index(request: Request):
     if in_dev:
-        user_email = os.environ["TS_USER_EMAIL"]
+        user_email = args.dev_user_email or os.environ.get("TS_USER_EMAIL", "dev@example.com")
         session_id = set_user_email(request, user_email)
         response = templates.TemplateResponse("index.html", {"request": request})
         response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
@@ -1011,4 +1016,4 @@ async def run_async_in_loop(coro):
 
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500
-    uvicorn.run(app, host="0.0.0.0", port=port, ssl_certfile="secrets/fullchain.pem", ssl_keyfile="secrets/privkey.pem")
+    uvicorn.run(app, host="0.0.0.0", port=port)
