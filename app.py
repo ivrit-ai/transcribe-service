@@ -137,7 +137,7 @@ def set_user_email(request: Request, email: str) -> str:
 # Google OAuth configuration
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://serve.ivrit.ai/login/authorized")
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://transcribe.ivrit.ai/login/authorized")
 
 def log_message_in_session(message, user_email=None):
     if user_email:

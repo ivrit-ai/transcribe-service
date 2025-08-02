@@ -55,7 +55,7 @@
         var left = (screen.width / 2) - (width / 2);
         var top = (screen.height / 2) - (height / 2);
         
-        var loginUrl = '{{ url_for('authorize', _external=True) }}';
+        var loginUrl = '{{ url_for('authorize') }}';
         
         window.open(loginUrl, 'GoogleLogin', 'width=' + width + ',height=' + height + ',top=' + top + ',left=' + left);
     }
