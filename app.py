@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBearer
 import uvicorn
 import os
+import math
 import time
 import json
 import uuid
@@ -434,13 +435,11 @@ async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", 
 
     # Check if user already has a job queued or running
     if user_email in user_jobs:
-        return False, (
-            JSONResponse({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}),
-            200,
-        )
+        return False, JSONResponse({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
 
     # Check rate limits only if not using custom RunPod credentials
-    if not (runpod_endpoint and runpod_token):
+    custom_runpod_credentials = runpod_endpoint and runpod_token
+    if not custom_runpod_credentials:
         user_bucket = get_user_quota(user_email)
         if not user_bucket.can_transcribe(duration):
             remaining_minutes = user_bucket.get_remaining_minutes()
@@ -449,12 +448,12 @@ async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", 
             # Calculate how many minutes they need to wait, accounting for replenish rate
             needed_minutes = (duration / 60) - remaining_minutes
             replenish_rate_per_minute = user_bucket.time_fill_rate * 60
-            wait_minutes = needed_minutes / (1 + replenish_rate_per_minute)
+            wait_minutes = math.ceil(needed_minutes / (1 + replenish_rate_per_minute))
 
             # Convert time_fill_rate (per second) to minutes per minute
-            error_msg = f"אנא המתן {wait_minutes:.1f} דקות לפני העלאת קובץ חדש."
+            error_msg = f"עברת את מגבלת השימוש החופשי. אנא המתן {wait_minutes} דקות לפני העלאת קובץ חדש, או השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://www.youtube.com/watch?v=mEgfmO7zzdw"
             
-            return False, (JSONResponse({"error": error_msg}), 429)
+            return False, JSONResponse({"error": error_msg}, status_code=429)
 
     try:
         job_desc = box.Box()
@@ -514,7 +513,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", 
         log_message_in_session(f"Job queuing failed: {job_id}")
 
         cleanup_temp_file(job_id)
-        return False, (JSONResponse({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}), 503)
+        return False, JSONResponse({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}, status_code=503)
 
 
 @app.get("/")
@@ -684,7 +683,7 @@ async def upload_file(
     temp_files[job_id] = temp_file_path
 
     # Use the background event loop to call the async function
-    queued, res = await run_async_in_loop(queue_job(job_id, user_email, filename, duration, runpod_endpoint, runpod_token))
+    queued, res = await queue_job(job_id, user_email, filename, duration, runpod_endpoint, runpod_token)
     if queued:
         job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
     else:
@@ -721,7 +720,7 @@ async def job_status(job_id: str, request: Request):
     if queue_position:
         running_jobs_to_check = running_jobs[job_type]
         # Use the background event loop to call the async function
-        time_ahead_str = await run_async_in_loop(calculate_queue_time(queue_to_use, running_jobs_to_check))
+        time_ahead_str = await calculate_queue_time(queue_to_use, running_jobs_to_check)
         return JSONResponse({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
 
     # If job is in progress, return only the progress
@@ -1007,12 +1006,6 @@ queue_locks = {
     LONG: None,
     PRIVATE: None
 }
-
-
-
-async def run_async_in_loop(coro):
-    """Run an async coroutine in the current event loop"""
-    return await coro
 
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500

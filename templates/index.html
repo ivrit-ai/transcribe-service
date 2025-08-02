@@ -732,7 +732,27 @@
                         pollJobStatus(response.job_id);
                     }
                 } else {
-                    showError(`${xhr.statusText}`);
+                    let errorMessage = undefined;
+                    try {
+                        const response = JSON.parse(xhr.responseText);
+                        if (response.error) {
+                            errorMessage = response.error;
+                        }
+                    } catch (e) {
+                        // If parsing fails, use statusText as fallback
+                    }
+                    
+                    let reportMessage = `${errorMessage}`;
+                    
+                    if (! errorMessage) {
+                        const currentTime = new Date().toISOString();
+                        reportMessage = `אם השגיאה נמשכת, אנא שלחו דיווח לכתובת info@ivrit.ai עם הפרטים הבאים:
+- כתובת האימייל שלכם
+- זמן השגיאה: ${currentTime}
+- פרטי השגיאה: ${xhr.statusText}`;
+                    }
+                    
+                    showError(reportMessage);
                 }
             };
 
