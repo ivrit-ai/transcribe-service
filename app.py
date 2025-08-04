@@ -27,7 +27,6 @@ import magic
 import random
 import tempfile
 import asyncio
-import aiohttp
 import queue
 import logging
 from logging.handlers import RotatingFileHandler
@@ -43,6 +42,7 @@ import posthog
 import ffmpeg
 import base64
 import argparse
+import ivrit
 
 dotenv.load_dotenv()
 
@@ -60,8 +60,7 @@ args, unknown = parser.parse_known_args()
 MAX_MINUTES_PER_WEEK = args.max_minutes_per_week  # Maximum credit grant per week
 REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically derive daily replenish rate
 
-# RunPod configuration
-RUNPOD_MAX_PAYLOAD_LEN = 10 * 1024 * 1024  # 10MB max payload length
+
 
 in_dev = args.staging or args.dev
 in_hiatus_mode = args.hiatus
@@ -70,11 +69,10 @@ verbose = args.verbose
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown"""
-    global aiohttp_session, queue_locks
+    global queue_locks
     
     # Startup
-    # Initialize aiohttp session and locks
-    aiohttp_session = aiohttp.ClientSession()
+    # Initialize locks
     queue_locks[SHORT] = asyncio.Lock()
     queue_locks[LONG] = asyncio.Lock()
     queue_locks[PRIVATE] = asyncio.Lock()
@@ -83,11 +81,6 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(event_loop())
     
     yield
-    
-    # Shutdown
-    # Cleanup async resources
-    if aiohttp_session and not aiohttp_session.closed:
-        await aiohttp_session.close()
 
 # Create FastAPI app
 app = FastAPI(title="Transcription Service", version="1.0.0", lifespan=lifespan)
@@ -105,8 +98,6 @@ file_handler = RotatingFileHandler(
 )
 file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s"))
 logger.addHandler(file_handler)
-
-# verbose is now set from CLI arguments above
 
 # Templates
 templates = Jinja2Templates(directory="templates")
@@ -217,86 +208,9 @@ job_last_accessed = {}
 # Dictionary to store user rate limiting buckets
 user_buckets = {}
 
-# Global aiohttp session for async HTTP requests
-aiohttp_session = None
 
-class AsyncRunPodJob:
-    def __init__(self, api_key: str, endpoint_id: str, payload: dict):
-        self.api_key = api_key
-        self.endpoint_id = endpoint_id
-        self.base_url = f"https://api.runpod.ai/v2/{endpoint_id}"
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        self.payload = payload
-        self.job_id = None
-        
-    async def submit(self):
-        """Submit the job asynchronously"""
-        global aiohttp_session
-        async with aiohttp_session.post(
-            f"{self.base_url}/run",
-            headers=self.headers,
-            json=self.payload
-        ) as response:
-            if response.status == 401:
-                raise Exception("Invalid RunPod API key")
-            
-            response.raise_for_status()
-            result = await response.json()
-            self.job_id = result.get("id")
-    
-    async def status(self):
-        """Get job status asynchronously"""
-        global aiohttp_session
-        async with aiohttp_session.get(
-            f"{self.base_url}/status/{self.job_id}",
-            headers=self.headers
-        ) as response:
-            response.raise_for_status()
-            status_response = await response.json()
-            return status_response.get("status", "UNKNOWN")
-    
-    async def stream(self):
-        """Stream job results asynchronously"""
-        global aiohttp_session
-        while True:
-            async with aiohttp_session.get(
-                f"{self.base_url}/stream/{self.job_id}",
-                headers=self.headers
-            ) as response:
-                response.raise_for_status()
-                
-                # Expect a single response        
-                try:
-                    content = await response.text()
-                    data = json.loads(content)
-                    if not data['status'] in ['IN_PROGRESS', 'COMPLETED']:
-                        return
 
-                    for item in data['stream']:
-                        yield item['output']
 
-                    if data['status'] == 'COMPLETED':
-                        return
-                    
-                    # If job is not complete, wait a moment before retrying.
-                    await asyncio.sleep(1)
-
-                except json.JSONDecodeError as e:
-                    log_message(f"Failed to parse JSON response: {e}")
-                    return
-    
-    async def cancel(self):
-        """Cancel the job asynchronously"""
-        global aiohttp_session
-        async with aiohttp_session.post(
-            f"{self.base_url}/cancel/{self.job_id}",
-            headers=self.headers
-        ) as response:
-            response.raise_for_status()
-            return await response.json()
 
 class LeakyBucket:
     def __init__(self, max_minutes_per_week):
@@ -460,8 +374,8 @@ async def queue_job(job_id, user_email, filename, duration, runpod_endpoint="", 
         job_desc.qtime = time.time()
         job_desc.utime = time.time()
         job_desc.id = job_id
-        job_desc.user_email = user_email
         job_desc.filename = filename
+        job_desc.user_email = user_email
         job_desc.duration = duration
         job_desc.runpod_endpoint = runpod_endpoint
         job_desc.runpod_token = runpod_token
@@ -776,16 +690,16 @@ async def process_segment(job_id, segment, duration):
         return False
 
     segment_data = {
-        "id": segment["id"],
-        "start": segment["start"],
-        "end": segment["end"],
-        "text": clean_some_unicode_from_text(segment["text"]),
-        "avg_logprob": segment["avg_logprob"],
-        "compression_ratio": segment["compression_ratio"],
-        "no_speech_prob": segment["no_speech_prob"],
+        "id": segment.extra_data.get("id"),
+        "start": segment.start,
+        "end": segment.end,
+        "text": clean_some_unicode_from_text(segment.text),
+        "avg_logprob": segment.extra_data.get("avg_logprob"),
+        "compression_ratio": segment.extra_data.get("compression_ratio"),
+        "no_speech_prob": segment.extra_data.get("no_speech_prob"),
     }
 
-    progress = segment["end"] / duration
+    progress = segment.end / duration
     job_results[job_id]["progress"] = progress
     job_results[job_id]["results"].append(segment_data)
 
@@ -794,8 +708,7 @@ async def process_segment(job_id, segment, duration):
 
 async def transcribe_job(job_desc):
     job_id = job_desc.id
-
-    run_request = None
+    segs = None
 
     try:
         log_message(f"{job_desc.user_email}: beginning transcription of {job_desc}, file name={job_desc.filename}")
@@ -821,32 +734,8 @@ async def transcribe_job(job_desc):
 
         log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
 
-        # Prepare and send request to runpod
-        if in_dev:
-            # In dev mode, send file as blob
-            audio_data = open(temp_file_path, 'rb').read()
-            payload = {
-                "input": {
-                    "type": "blob",
-                    "data": base64.b64encode(audio_data).decode('utf-8'),
-                    "model": "ivrit-ai/whisper-large-v3-turbo-ct2",
-                    "streaming": True
-                }
-            }
-            
-            # Check payload size
-            if len(str(payload)) > RUNPOD_MAX_PAYLOAD_LEN:
-                log_message(f"Payload length is {len(str(payload))}, exceeding max payload length of {RUNPOD_MAX_PAYLOAD_LEN}.")
-                return
-        else:
-            # In production mode, send file as URL
-            base_url = os.environ["BASE_URL"]
-            download_url = urljoin(base_url, f"/download/{job_id}")
-            payload = {
-                "input": {"type": "url", "url": download_url, "model": "ivrit-ai/whisper-large-v3-turbo-ct2", "streaming": True}
-            }
-
-        # Use custom RunPod credentials if provided, otherwise use default
+        # Load model using ivrit package
+        # Pass custom RunPod credentials if provided
         if job_desc.uses_custom_runpod:
             api_key = job_desc.runpod_token
             endpoint_id = job_desc.runpod_endpoint
@@ -855,38 +744,28 @@ async def transcribe_job(job_desc):
             api_key = os.environ["RUNPOD_API_KEY"]
             endpoint_id = os.environ["RUNPOD_ENDPOINT_ID"]
             log_message(f"{job_desc.user_email}: using default RunPod credentials")
-
-        # Start streaming request using AsyncRunPodJob
-        run_request = AsyncRunPodJob(api_key, endpoint_id, payload)
         
-        # Submit the job first
-        await run_request.submit()
-
-        for i in range(30):
-            if await run_request.status() == "IN_QUEUE":
-                await asyncio.sleep(10)
-                continue
-
-            break
-
+        m = ivrit.load_model(engine='runpod', model='ivrit-ai/whisper-large-v3-turbo-ct2', api_key=api_key, endpoint_id=endpoint_id)
+        
         # Process streaming results
         try:
-            async for segment in run_request.stream():
-                if "error" in segment:
-                    log_message(f"Error in RunPod transcription stream: {segment['error']}")
-                    return
-
-                # Process segment
+            if in_dev:
+                # In dev mode, use the local file
+                segs = m.transcribe_async(path=temp_file_path, stream=True)
+            else:
+                # In production mode, send file as URL
+                base_url = os.environ["BASE_URL"]
+                download_url = urljoin(base_url, f"/download/{job_id}")
+                segs = m.transcribe_async(url=download_url, stream=True)
+            
+            async for segment in segs:
                 if not await process_segment(job_id, segment, duration):
                     # Job was terminated
                     log_message(f"Terminating runpod job due to process_segment error.")
-                    await run_request.cancel()
                     return
 
-            run_request = None
-
         except Exception as e:
-            log_message(f"Exception during run_request.stream(): {e}")
+            log_message(f"Exception during transcription: {e}")
             print(traceback.format_exc())
             raise e
         
@@ -910,13 +789,13 @@ async def transcribe_job(job_desc):
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
     finally:
-        if run_request:
-            try:
-                log_message("Terminating run_request at end of transcribe_job::finally")
-                await run_request.cancel()
-            except Exception as e:
-                log_message(f"Failed to terminate runpod job")
-
+        # Close segs if it exists
+        #if segs:
+            #try:
+            #    segs.close()
+            #except Exception as e:
+            #    log_message(f"Failed to close runpod job: {e}")
+        
         # Remove job from the appropriate running jobs dictionary
         del running_jobs[job_desc.job_type][job_id]
         # Remove job from user's active jobs
@@ -1000,7 +879,6 @@ async def event_loop():
 
 
 # Global async resources
-aiohttp_session = None
 queue_locks = {
     SHORT: None,
     LONG: None,
