@@ -45,6 +45,35 @@
             height: 24px;
             color: #666;
         }
+        .balance-container {
+            display: none;
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            font-size: 14px;
+            color: #495057;
+            text-align: right;
+            z-index: 10;
+        }
+        .balance-container.visible {
+            display: block;
+        }
+        .balance-label {
+            font-weight: bold;
+            margin-bottom: 0.25rem;
+        }
+        .balance-amount {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .balance-loading {
+            color: #6c757d;
+            font-style: italic;
+        }
         .modal {
             display: none;
             position: fixed;
@@ -350,6 +379,10 @@
 </head>
 <body>
     <div class="container">
+        <div class="balance-container" id="balance-container">
+            <div class="balance-label">יתרה:</div>
+            <div class="balance-amount" id="balance-amount">טוען...</div>
+        </div>
         <button class="settings-btn" id="settings-btn" title="הגדרות">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="3"></circle>
@@ -429,14 +462,11 @@
             </div>
             <form id="settings-form">
                 <div class="form-group">
-                    <label for="runpod-endpoint">RunPod Endpoint ID:</label>
-                    <input type="text" id="runpod-endpoint" name="runpod-endpoint" placeholder="הכנס את מזהה ה-Endpoint שלך">
-                </div>
-                <div class="form-group">
                     <label for="runpod-token">RunPod API Token:</label>
                     <input type="password" id="runpod-token" name="runpod-token" placeholder="הכנס את ה-API Token שלך">
                 </div>
                 <div class="modal-buttons">
+                    <button type="button" class="btn btn-secondary" id="check-endpoint">בדוק endpoint</button>
                     <button type="button" class="btn btn-secondary" id="clear-settings">נקה הגדרות</button>
                     <button type="button" class="btn btn-secondary" id="cancel-settings">ביטול</button>
                     <button type="submit" class="btn btn-primary">שמור</button>
@@ -463,8 +493,8 @@
         const closeSettings = document.getElementById('close-settings');
         const cancelSettings = document.getElementById('cancel-settings');
         const clearSettings = document.getElementById('clear-settings');
+        const checkEndpoint = document.getElementById('check-endpoint');
         const settingsForm = document.getElementById('settings-form');
-        const runpodEndpointInput = document.getElementById('runpod-endpoint');
         const runpodTokenInput = document.getElementById('runpod-token');
 
         let selectedFile = null;
@@ -474,9 +504,7 @@
 
         // Load settings from cookies
         function loadSettings() {
-            const endpoint = getCookie('runpod_endpoint');
             const token = getCookie('runpod_token');
-            if (endpoint) runpodEndpointInput.value = endpoint;
             if (token) runpodTokenInput.value = token;
             
             // Update settings button appearance if credentials are saved
@@ -485,9 +513,8 @@
 
         // Update settings button to show if credentials are saved
         function updateSettingsButtonIndicator() {
-            const endpoint = getCookie('runpod_endpoint');
             const token = getCookie('runpod_token');
-            const hasCredentials = endpoint && token;
+            const hasCredentials = token;
             
             if (hasCredentials) {
                 settingsBtn.style.color = '#4CAF50';
@@ -500,21 +527,13 @@
 
         // Save settings to cookies
         async function saveSettings() {
-            const endpoint = runpodEndpointInput.value.trim();
             const token = runpodTokenInput.value.trim();
             
-            // If both fields are empty, just clear the cookies
-            if (!endpoint && !token) {
-                deleteCookie('runpod_endpoint');
+            // If token is empty, just clear the cookies
+            if (!token) {
                 deleteCookie('runpod_token');
                 settingsModal.style.display = 'none';
                 updateSettingsButtonIndicator();
-                return;
-            }
-            
-            // If only one field is filled, show error
-            if (!endpoint || !token) {
-                alert('נדרשים גם Endpoint ID וגם API Token');
                 return;
             }
             
@@ -525,28 +544,21 @@
             saveBtn.disabled = true;
             
             try {
-                // Verify credentials directly with RunPod API
-                const response = await fetch(`https://api.runpod.ai/v2/${endpoint}/health`, {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
+                // Verify credentials by checking balance
+                const response = await fetch(`/balance?runpod_token=${encodeURIComponent(token)}`);
+                const data = await response.json();
                 
-                if (response.status === 401) {
+                if (response.status === 401 || (response.status === 500 && data.error && data.error.includes('401'))) {
                     alert('שגיאה: API Token לא תקין');
-                } else if (response.status === 404) {
-                    alert('שגיאה: Endpoint ID לא נמצא');
-                } else if (response.status !== 200) {
+                } else if (!response.ok) {
                     alert(`שגיאה בבדיקת האישורים: ${response.status}`);
                 } else {
                     // Credentials are valid, save them
-                    setCookie('runpod_endpoint', endpoint, 365 * 24 * 60 * 60); // 1 year
                     setCookie('runpod_token', token, 365 * 24 * 60 * 60); // 1 year
                     alert('האישורים נשמרו בהצלחה!');
                     settingsModal.style.display = 'none';
                     updateSettingsButtonIndicator();
+                    checkBalance(); // Update balance display
                 }
             } catch (error) {
                 console.error('Error verifying credentials:', error);
@@ -564,13 +576,15 @@
 
         // Clear settings from cookies
         function clearSettingsFromCookies() {
-            deleteCookie('runpod_endpoint');
             deleteCookie('runpod_token');
             alert('הגדרות RunPod נמחקו בהצלחה!');
             settingsModal.style.display = 'none';
-            runpodEndpointInput.value = '';
             runpodTokenInput.value = '';
             updateSettingsButtonIndicator();
+            
+            // Hide balance container when credentials are cleared
+            const balanceContainer = document.getElementById('balance-container');
+            balanceContainer.classList.remove('visible');
         }
 
         // Cookie utility functions
@@ -595,8 +609,84 @@
             document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;";
         }
 
+        // Check for RunPod credentials and fetch balance via backend API
+        async function checkBalance() {
+            const token = getCookie('runpod_token');
+            
+            if (token) {
+                const balanceContainer = document.getElementById('balance-container');
+                const balanceAmount = document.getElementById('balance-amount');
+                
+                balanceContainer.classList.add('visible');
+                balanceAmount.textContent = 'טוען...';
+                balanceAmount.className = 'balance-amount balance-loading';
+                
+                try {
+                    const response = await fetch(`/balance?runpod_token=${encodeURIComponent(token)}`);
+                    const data = await response.json();
+                    
+                    if (response.ok && data.clientBalance !== 'N/A') {
+                        const formattedBalance = parseFloat(data.clientBalance).toFixed(2);
+                        balanceAmount.textContent = `$${formattedBalance}`;
+                        balanceAmount.className = 'balance-amount';
+                    } else {
+                        balanceAmount.textContent = 'שגיאה בטעינה';
+                        balanceAmount.className = 'balance-amount';
+                    }
+                } catch (error) {
+                    console.error('Balance fetch error:', error);
+                    balanceAmount.textContent = 'שגיאה בטעינה';
+                    balanceAmount.className = 'balance-amount';
+                }
+            }
+        }
+
+        // Check and create endpoint if needed
+        async function checkAndCreateEndpoint(token) {
+            // Show loading state
+            const originalText = checkEndpoint.textContent;
+            checkEndpoint.textContent = 'בודק...';
+            checkEndpoint.disabled = true;
+            
+            try {
+                const response = await fetch('/check_endpoint', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        runpod_token: token
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    if (data.action === 'up_to_date') {
+                        alert(`✅ ה-Endpoint עדכני ותקין!\n`);
+                    } else if (data.action === 'updated') {
+                        alert(`🔄 ה-Endpoint עודכן בהצלחה!\n\nהendpoint החדש יהיה זמין בעוד כמה דקות.`);
+                    } else if (data.action === 'created') {
+                        alert(`🆕 Endpoint חדש נוצר בהצלחה!\n\n\nהendpoint יהיה זמין בעוד כמה דקות.`);
+                    }
+                } else {
+                    alert(`שגיאה: ${data.error || 'לא ניתן לבדוק או ליצור endpoint'}`);
+                }
+            } catch (error) {
+                console.error('Error checking endpoint:', error);
+                alert('שגיאה בבדיקת ה-endpoint. אנא נסה שוב.');
+            } finally {
+                // Restore button state
+                checkEndpoint.textContent = originalText;
+                checkEndpoint.disabled = false;
+            }
+        }
+
         // Initialize settings button indicator on page load
         updateSettingsButtonIndicator();
+        
+        // Check balance on page load
+        checkBalance();
 
         // Settings modal handlers
         settingsBtn.addEventListener('click', () => {
@@ -613,6 +703,17 @@
         });
 
         clearSettings.addEventListener('click', clearSettingsFromCookies);
+
+        checkEndpoint.addEventListener('click', async () => {
+            const token = runpodTokenInput.value.trim();
+            
+            if (!token) {
+                alert('אנא הכנס API Token לפני בדיקת ה-endpoint');
+                return;
+            }
+            
+            await checkAndCreateEndpoint(token);
+        });
 
         settingsForm.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -691,10 +792,8 @@
             formData.append('file', selectedFile);
 
             // Add RunPod credentials if available
-            const endpoint = getCookie('runpod_endpoint');
             const token = getCookie('runpod_token');
-            if (endpoint && token) {
-                formData.append('runpod_endpoint', endpoint);
+            if (token) {
                 formData.append('runpod_token', token);
                 // Show indicator that custom credentials are being used
                 transcriptionArea.value = 'משתמש באישורי RunPod מותאמים אישית...';
@@ -703,7 +802,7 @@
             transcribeBtn.disabled = true;
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
-            if (!endpoint || !token) {
+            if (!token) {
                 transcriptionArea.value = 'מעלה את הקובץ...';
             }
             transcriptionSegments = [];
