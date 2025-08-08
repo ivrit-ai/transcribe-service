@@ -466,7 +466,6 @@
                     <input type="password" id="runpod-token" name="runpod-token" placeholder="הכנס את ה-API Token שלך">
                 </div>
                 <div class="modal-buttons">
-                    <button type="button" class="btn btn-secondary" id="check-endpoint">בדוק endpoint</button>
                     <button type="button" class="btn btn-secondary" id="clear-settings">נקה הגדרות</button>
                     <button type="button" class="btn btn-secondary" id="cancel-settings">ביטול</button>
                     <button type="submit" class="btn btn-primary">שמור</button>
@@ -493,7 +492,6 @@
         const closeSettings = document.getElementById('close-settings');
         const cancelSettings = document.getElementById('cancel-settings');
         const clearSettings = document.getElementById('clear-settings');
-        const checkEndpoint = document.getElementById('check-endpoint');
         const settingsForm = document.getElementById('settings-form');
         const runpodTokenInput = document.getElementById('runpod-token');
 
@@ -553,12 +551,25 @@
                 } else if (!response.ok) {
                     alert(`שגיאה בבדיקת האישורים: ${response.status}`);
                 } else {
-                    // Credentials are valid, save them
-                    setCookie('runpod_token', token, 365 * 24 * 60 * 60); // 1 year
-                    alert('האישורים נשמרו בהצלחה!');
-                    settingsModal.style.display = 'none';
-                    updateSettingsButtonIndicator();
-                    checkBalance(); // Update balance display
+                    // Credentials are valid, check endpoint
+                    const endpointResult = await checkAndCreateEndpoint(token);
+                    
+                    if (endpointResult.success) {
+                        // Save credentials
+                        setCookie('runpod_token', token, 365 * 24 * 60 * 60); // 1 year
+                        
+                        let successMessage = 'האישורים נשמרו בהצלחה!';
+                        if (endpointResult.needsWait) {
+                            successMessage += '\n\nEndpoint חדש נוצר או עודכן. אנא המתן 3 דקות לפני העלאת קבצים.';
+                        }
+                        
+                        alert(successMessage);
+                        settingsModal.style.display = 'none';
+                        updateSettingsButtonIndicator();
+                        checkBalance(); // Update balance display
+                    } else {
+                        alert(`שגיאה בבדיקת ה-endpoint: ${endpointResult.error || 'לא ניתן לבדוק או ליצור endpoint'}`);
+                    }
                 }
             } catch (error) {
                 console.error('Error verifying credentials:', error);
@@ -641,13 +652,8 @@
             }
         }
 
-        // Check and create endpoint if needed
+        // Check and create endpoint if needed (called automatically when saving settings)
         async function checkAndCreateEndpoint(token) {
-            // Show loading state
-            const originalText = checkEndpoint.textContent;
-            checkEndpoint.textContent = 'בודק...';
-            checkEndpoint.disabled = true;
-            
             try {
                 const response = await fetch('/check_endpoint', {
                     method: 'POST',
@@ -663,22 +669,22 @@
                 
                 if (response.ok) {
                     if (data.action === 'up_to_date') {
-                        alert(`✅ ה-Endpoint עדכני ותקין!\n`);
+                        console.log('Endpoint is up to date');
+                        return { success: true, needsWait: false };
                     } else if (data.action === 'updated') {
-                        alert(`🔄 ה-Endpoint עודכן בהצלחה!\n\nהendpoint החדש יהיה זמין בעוד כמה דקות.`);
+                        console.log('Endpoint was updated');
+                        return { success: true, needsWait: true };
                     } else if (data.action === 'created') {
-                        alert(`🆕 Endpoint חדש נוצר בהצלחה!\n\n\nהendpoint יהיה זמין בעוד כמה דקות.`);
+                        console.log('New endpoint was created');
+                        return { success: true, needsWait: true };
                     }
                 } else {
-                    alert(`שגיאה: ${data.error || 'לא ניתן לבדוק או ליצור endpoint'}`);
+                    console.error('Endpoint check failed:', data.error);
+                    return { success: false, error: data.error };
                 }
             } catch (error) {
                 console.error('Error checking endpoint:', error);
-                alert('שגיאה בבדיקת ה-endpoint. אנא נסה שוב.');
-            } finally {
-                // Restore button state
-                checkEndpoint.textContent = originalText;
-                checkEndpoint.disabled = false;
+                return { success: false, error: 'שגיאה בבדיקת ה-endpoint' };
             }
         }
 
@@ -703,17 +709,6 @@
         });
 
         clearSettings.addEventListener('click', clearSettingsFromCookies);
-
-        checkEndpoint.addEventListener('click', async () => {
-            const token = runpodTokenInput.value.trim();
-            
-            if (!token) {
-                alert('אנא הכנס API Token לפני בדיקת ה-endpoint');
-                return;
-            }
-            
-            await checkAndCreateEndpoint(token);
-        });
 
         settingsForm.addEventListener('submit', async (e) => {
             e.preventDefault();
