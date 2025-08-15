@@ -14,15 +14,17 @@
         --border-color: #e0e0e0;
         --primary-color: #4caf50;
         --secondary-color: #f8f9fa;
+        --input-bg: #ffffff;
       }
 
       [data-theme="dark"] {
         --bg-color: #1a1a1a;
         --container-bg: #2d2d2d;
         --text-color: #e0e0e0;
-        --border-color: #404040;
+        --border-color: #555555;
         --primary-color: #66bb6a;
         --secondary-color: #3a3a3a;
+        --input-bg: #1e1e1e;
       }
 
       body {
@@ -60,6 +62,25 @@
         background-color: #f0f0f0;
       }
       .settings-btn svg {
+        width: 24px;
+        height: 24px;
+        color: #666;
+      }
+      .theme-toggle {
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 50%;
+        transition: background-color 0.2s;
+      }
+      .theme-toggle:hover {
+        background-color: #f0f0f0;
+      }
+      .theme-toggle svg {
         width: 24px;
         height: 24px;
         color: #666;
@@ -104,7 +125,7 @@
         background-color: rgba(0, 0, 0, 0.5);
       }
       .modal-content {
-        background-color: white;
+        background-color: var(--container-bg);
         margin: 10% auto;
         padding: 2rem;
         border-radius: 8px;
@@ -124,10 +145,10 @@
         font-size: 1.5rem;
         cursor: pointer;
         padding: 0;
-        color: #666;
+        color: var(--text-color);
       }
       .close:hover {
-        color: #000;
+        color: var(--primary-color);
       }
       .form-group {
         margin-bottom: 1rem;
@@ -137,20 +158,23 @@
         display: block;
         margin-bottom: 0.5rem;
         font-weight: bold;
+        color: var(--text-color);
       }
       .form-group input {
         width: 100%;
         padding: 0.5rem;
-        border: 1px solid #ccc;
+        border: 1px solid var(--border-color);
         border-radius: 4px;
         font-size: 1rem;
         box-sizing: border-box;
         text-align: left;
         direction: ltr;
+        background-color: var(--input-bg);
+        color: var(--text-color);
       }
       .form-group input:focus {
         outline: none;
-        border-color: #4caf50;
+        border-color: var(--primary-color);
       }
       .modal-buttons {
         display: flex;
@@ -166,12 +190,13 @@
         font-size: 1rem;
       }
       .btn-primary {
-        background-color: #4caf50;
+        background-color: var(--primary-color);
         color: white;
       }
       .btn-secondary {
-        background-color: #ccc;
-        color: #333;
+        background-color: var(--secondary-color);
+        color: var(--text-color);
+        border: 1px solid var(--border-color);
       }
       .btn:hover {
         opacity: 0.8;
@@ -185,16 +210,54 @@
         padding: 2rem;
         cursor: pointer;
         margin-bottom: 1rem;
-        background-color: var(--secondary-color);
+        background: linear-gradient(
+          135deg,
+          var(--secondary-color) 0%,
+          rgba(76, 175, 80, 0.05) 50%,
+          var(--secondary-color) 100%
+        );
         transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+      }
+      #drop-area::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+          45deg,
+          transparent 40%,
+          rgba(76, 175, 80, 0.03) 50%,
+          transparent 60%
+        );
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+      #drop-area:hover::before {
+        opacity: 1;
       }
       #drop-area:hover {
         border-color: var(--primary-color);
-        background-color: rgba(76, 175, 80, 0.05);
+        background: linear-gradient(
+          135deg,
+          rgba(76, 175, 80, 0.08) 0%,
+          rgba(76, 175, 80, 0.15) 50%,
+          rgba(76, 175, 80, 0.08) 100%
+        );
+        transform: translateY(-2px);
       }
       #drop-area.highlight {
         border-color: var(--primary-color);
-        background-color: rgba(76, 175, 80, 0.1);
+        background: linear-gradient(
+          135deg,
+          rgba(76, 175, 80, 0.1) 0%,
+          rgba(76, 175, 80, 0.2) 50%,
+          rgba(76, 175, 80, 0.1) 100%
+        );
+        transform: translateY(-3px);
       }
       #file-input {
         display: none;
@@ -246,7 +309,7 @@
       #transcription {
         width: 100%;
         height: 200px;
-        border: 1px solid var(--border-color);
+        border: 2px solid var(--border-color);
         padding: 1rem;
         text-align: right;
         white-space: pre-wrap;
@@ -254,8 +317,9 @@
         resize: vertical;
         font-size: 1rem;
         border-radius: 8px;
-        background-color: var(--container-bg);
+        background-color: var(--input-bg);
         color: var(--text-color);
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
       }
       .action-buttons {
         display: flex;
@@ -442,24 +506,137 @@
       input:checked + .slider:before {
         transform: translateX(24px);
       }
+
+      /* Toast Notifications */
+      .toast-container {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 2000;
+      }
+      .toast {
+        background-color: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem 1.5rem;
+        margin-bottom: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transform: translateX(400px);
+        opacity: 0;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        min-width: 300px;
+      }
+      .toast.show {
+        transform: translateX(0);
+        opacity: 1;
+      }
+      .toast.success {
+        border-left: 4px solid var(--primary-color);
+      }
+      .toast.error {
+        border-left: 4px solid #f44336;
+      }
+      .toast-message {
+        flex: 1;
+        color: var(--text-color);
+      }
+
+      /* File Preview */
+      .file-preview {
+        display: none;
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 1rem;
+        text-align: right;
+      }
+      .file-preview.show {
+        display: block;
+      }
+      .file-info {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-direction: row-reverse;
+      }
+      .file-details {
+        flex: 1;
+        text-align: left;
+      }
+      .file-details strong {
+        display: block;
+        margin-bottom: 0.5rem;
+        color: var(--text-color);
+      }
+      .file-size {
+        font-size: 0.9rem;
+        color: var(--text-color);
+        opacity: 0.7;
+      }
+      .remove-file-btn {
+        background-color: #f2554a;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: all 0.3s ease;
+      }
+      .remove-file-btn:hover {
+        background-color: #f6463a;
+        transform: translateY(-1px);
+      }
     </style>
   </head>
   <body>
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
     <div class="container">
       <button
+        class="theme-toggle"
+        id="theme-toggle"
         onclick="toggleTheme()"
-        style="
-          position: absolute;
-          top: 1rem;
-          right: 1rem;
-          background: var(--secondary-color);
-          border: 1px solid var(--border-color);
-          padding: 0.5rem;
-          border-radius: 8px;
-          cursor: pointer;
-        "
+        title="החלף מצב תאורה"
       >
-        🌙
+        <svg
+          id="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+        <svg
+          id="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          style="display: none"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
       </button>
       <div class="balance-container" id="balance-container">
         <div class="balance-label">יתרה:</div>
@@ -486,6 +663,22 @@
         <p>גרור קובץ לכאן או לחץ לבחירת קובץ</p>
         <input type="file" id="file-input" accept="audio/*,video/*" />
       </div>
+
+      <!-- File Preview -->
+      <div class="file-preview" id="file-preview">
+        <div class="file-info">
+          <div class="file-details">
+            <strong id="preview-file-name">קובץ נבחר</strong>
+            <div class="file-size" id="preview-file-size" dir="ltr">
+              גודל קובץ
+            </div>
+          </div>
+          <button class="remove-file-btn" onclick="removeFile()">
+            הסר קובץ
+          </button>
+        </div>
+      </div>
+
       <div id="file-name"></div>
       <button id="transcribe-btn" disabled>תמלל</button>
       <div id="progress-container">
@@ -642,17 +835,86 @@
       let transcriptionSegments = []
       let activeTranscription = false
 
+      // Toast notification functions
+      function showToast(message, type = "success") {
+        const toastContainer = document.getElementById("toast-container")
+        const toast = document.createElement("div")
+        toast.className = `toast ${type}`
+
+        toast.innerHTML = `
+          <span class="toast-message">${message}</span>
+        `
+
+        toastContainer.appendChild(toast)
+
+        // Trigger animation
+        setTimeout(() => toast.classList.add("show"), 10)
+
+        // Auto remove after 3 seconds
+        setTimeout(() => {
+          toast.classList.remove("show")
+          setTimeout(() => toast.remove(), 300)
+        }, 3000)
+      }
+
+      // File preview functions
+      function showFilePreview(file) {
+        const preview = document.getElementById("file-preview")
+        const fileName = document.getElementById("preview-file-name")
+        const fileSize = document.getElementById("preview-file-size")
+
+        fileName.textContent = file.name
+        fileSize.textContent = formatFileSize(file.size)
+
+        preview.classList.add("show")
+        document.getElementById("file-name").style.display = "none"
+      }
+
+      function removeFile() {
+        selectedFile = null
+        transcribeBtn.disabled = true
+        document.getElementById("file-preview").classList.remove("show")
+        document.getElementById("file-name").style.display = "block"
+        document.getElementById("file-name").textContent = ""
+        // Clear the file input value so the same file can be selected again
+        fileInput.value = ""
+        showToast("קובץ הוסר בהצלחה", "success")
+      }
+
+      function formatFileSize(bytes) {
+        if (bytes === 0) return "0 Bytes"
+        const k = 1024
+        const sizes = ["Bytes", "KB", "MB", "GB"]
+        const i = Math.floor(Math.log(bytes) / Math.log(k))
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
+      }
+
       // Simple theme toggle
       function toggleTheme() {
         const currentTheme = document.documentElement.getAttribute("data-theme")
         const newTheme = currentTheme === "dark" ? "light" : "dark"
         document.documentElement.setAttribute("data-theme", newTheme)
         localStorage.setItem("theme", newTheme)
+        updateThemeIcon(newTheme)
+      }
+
+      function updateThemeIcon(theme) {
+        const sunIcon = document.getElementById("sun-icon")
+        const moonIcon = document.getElementById("moon-icon")
+
+        if (theme === "dark") {
+          sunIcon.style.display = "none"
+          moonIcon.style.display = "block"
+        } else {
+          sunIcon.style.display = "block"
+          moonIcon.style.display = "none"
+        }
       }
 
       // Load saved theme
       const savedTheme = localStorage.getItem("theme") || "light"
       document.documentElement.setAttribute("data-theme", savedTheme)
+      updateThemeIcon(savedTheme)
 
       // Load settings from cookies
       function loadSettings() {
@@ -941,13 +1203,14 @@
         if (files.length > 0) {
           selectedFile = files[0]
           if (selectedFile.size > MAX_FILE_SIZE) {
-            alert("הקובץ גדול מדי. הגודל המקסימלי המותר הוא 250MB.")
+            showToast("הקובץ גדול מדי. הגודל המקסימלי המותר הוא 200MB", "error")
             selectedFile = null
             transcribeBtn.disabled = true
             fileName.textContent = ""
           } else {
             transcribeBtn.disabled = false
-            fileName.textContent = `קובץ נבחר: ${selectedFile.name}`
+            showFilePreview(selectedFile)
+            showToast("קובץ נבחר בהצלחה", "success")
           }
         }
       }
@@ -1216,7 +1479,7 @@
       copyBtn.addEventListener("click", function () {
         transcriptionArea.select()
         document.execCommand("copy")
-        alert("הטקסט הועתק ללוח")
+        showToast("הטקסט הועתק ללוח בהצלחה!", "success")
       })
 
       downloadBtn.addEventListener("click", function () {
