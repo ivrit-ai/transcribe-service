@@ -10,7 +10,7 @@ from fastapi import (
     status
 )
 from werkzeug.utils import secure_filename
-import httpx
+import aiohttp
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -480,6 +480,101 @@ async def authorize(request: Request):
     response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
     return response
 
+async def get_max_serverless_concurrency(api_key: str) -> Optional[int]:
+    """Get maximum serverless concurrency from RunPod"""
+    GRAPHQL_URL = "https://api.runpod.io/graphql"
+    GRAPHQL_HEADERS = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    query = """
+    query {
+        myself {
+            maxServerlessConcurrency
+        }
+    }
+    """
+    
+    try:
+        timeout = aiohttp.ClientTimeout(total=10.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                GRAPHQL_URL, 
+                headers=GRAPHQL_HEADERS, 
+                json={"query": query}
+            ) as response:
+                response.raise_for_status()
+                
+                data = await response.json()
+                if "errors" in data:
+                    logger.error(f"GraphQL Error: {data['errors']}")
+                    return None
+                    
+                max_concurrency = data["data"]["myself"]["maxServerlessConcurrency"]
+                logger.info(f"Max serverless concurrency: {max_concurrency}")
+                return max_concurrency
+            
+    except aiohttp.ClientError as e:
+        logger.error(f"Error fetching max serverless concurrency: {e}")
+        return None
+
+async def get_current_worker_usage(api_key: str) -> Optional[int]:
+    """Get current worker usage by summing workersMax from all endpoints"""
+    GRAPHQL_URL = "https://api.runpod.io/graphql"
+    GRAPHQL_HEADERS = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    query = """
+    query Endpoints {
+        myself {
+            endpoints {
+                id
+                name
+                workersMax
+                workersMin
+                pods {
+                    desiredStatus
+                }
+                scalerType
+                scalerValue
+                templateId
+            }
+        }
+    }
+    """
+    
+    try:
+        timeout = aiohttp.ClientTimeout(total=10.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                GRAPHQL_URL, 
+                headers=GRAPHQL_HEADERS, 
+                json={"query": query}
+            ) as response:
+                response.raise_for_status()
+                
+                data = await response.json()
+                if "errors" in data:
+                    logger.error(f"GraphQL Error: {data['errors']}")
+                    return None
+                    
+                endpoints = data["data"]["myself"]["endpoints"]
+                total_workers = sum(endpoint.get("workersMax", 0) for endpoint in endpoints)
+                logger.info(f"Current total worker usage across {len(endpoints)} endpoints: {total_workers}")
+                
+                # Log individual endpoint details for debugging
+                for endpoint in endpoints:
+                    logger.info(f"Endpoint {endpoint['name']}: workersMax={endpoint.get('workersMax', 0)}")
+                
+                return total_workers
+            
+    except aiohttp.ClientError as e:
+        logger.error(f"Error fetching current worker usage: {e}")
+        return None
+
 async def check_runpod_balance(api_key: str) -> Optional[dict]:
     """Check RunPod balance using GraphQL API"""
     GRAPHQL_URL = "https://api.runpod.io/graphql"
@@ -499,28 +594,28 @@ async def check_runpod_balance(api_key: str) -> Optional[dict]:
     """
     
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
+        timeout = aiohttp.ClientTimeout(total=10.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
                 GRAPHQL_URL, 
                 headers=GRAPHQL_HEADERS, 
-                json={"query": query},
-                timeout=10.0
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            if "errors" in data:
-                logger.error(f"GraphQL Error: {data['errors']}")
-                return None
+                json={"query": query}
+            ) as response:
+                response.raise_for_status()
                 
-            balance_info = data["data"]["myself"]
-            return {
-                "clientBalance": balance_info.get('clientBalance', 'N/A'),
-                "currentSpendPerHr": balance_info.get('currentSpendPerHr', 'N/A'),
-                "spendLimit": balance_info.get('spendLimit', 'N/A')
-            }
+                data = await response.json()
+                if "errors" in data:
+                    logger.error(f"GraphQL Error: {data['errors']}")
+                    return None
+                    
+                balance_info = data["data"]["myself"]
+                return {
+                    "clientBalance": balance_info.get('clientBalance', 'N/A'),
+                    "currentSpendPerHr": balance_info.get('currentSpendPerHr', 'N/A'),
+                    "spendLimit": balance_info.get('spendLimit', 'N/A')
+                }
             
-    except httpx.RequestError as e:
+    except aiohttp.ClientError as e:
         logger.error(f"Error checking RunPod balance: {e}")
         return None
 
@@ -551,43 +646,44 @@ async def find_runpod_endpoint(api_key: str) -> Optional[dict]:
     """
     
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
+        timeout = aiohttp.ClientTimeout(total=10.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
                 GRAPHQL_URL, 
                 headers=GRAPHQL_HEADERS, 
-                json={"query": query},
-                timeout=10.0
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            if "errors" in data:
-                logger.error(f"GraphQL Error: {data['errors']}")
-                return None
+                json={"query": query}
+            ) as response:
+                response.raise_for_status()
                 
-            endpoints = data["data"]["myself"]["endpoints"]
+                data = await response.json()
+                if "errors" in data:
+                    logger.error(f"GraphQL Error: {data['errors']}")
+                    return None
+                    
+                endpoints = data["data"]["myself"]["endpoints"]
+                
+                # Look for endpoints matching the pattern autogenerated-endpoint-transcribe-ivrit-ai-*
+                pattern_regex = r"autogenerated-endpoint-transcribe-ivrit-ai-\d{8}"
+                for endpoint in endpoints:
+                    logger.info(f"Endpoint: {endpoint['name']}")
+                    if re.match(pattern_regex, endpoint["name"]):
+                        logger.info(f"Found endpoint: {endpoint['id']} ({endpoint['name']}) with template {endpoint['templateId']}")
+                        return {
+                            "id": endpoint["id"], 
+                            "name": endpoint["name"],
+                            "templateId": endpoint["templateId"],
+                            "gpuIds": endpoint["gpuIds"],
+                            "workersMin": endpoint["workersMin"],
+                            "workersMax": endpoint["workersMax"],
+                            "idleTimeout": endpoint["idleTimeout"],
+                            "scalerType": endpoint["scalerType"],
+                            "scalerValue": endpoint["scalerValue"]
+                        }
+                
+                logger.warning("No autogenerated endpoints found")
+                return None
             
-            # Look for endpoints matching the pattern autogenerated-endpoint-transcribe-ivrit-ai-*
-            pattern_regex = r"autogenerated-endpoint-transcribe-ivrit-ai-\d{8}"
-            for endpoint in endpoints:
-                if re.match(pattern_regex, endpoint["name"]):
-                    logger.info(f"Found endpoint: {endpoint['id']} ({endpoint['name']}) with template {endpoint['templateId']}")
-                    return {
-                        "id": endpoint["id"], 
-                        "name": endpoint["name"],
-                        "templateId": endpoint["templateId"],
-                        "gpuIds": endpoint["gpuIds"],
-                        "workersMin": endpoint["workersMin"],
-                        "workersMax": endpoint["workersMax"],
-                        "idleTimeout": endpoint["idleTimeout"],
-                        "scalerType": endpoint["scalerType"],
-                        "scalerValue": endpoint["scalerValue"]
-                    }
-            
-            logger.warning("No autogenerated endpoints found")
-            return None
-            
-    except httpx.RequestError as e:
+    except aiohttp.ClientError as e:
         logger.error(f"Error finding autogenerated endpoint: {e}")
         return None
 
@@ -600,23 +696,23 @@ async def delete_runpod_endpoint(api_key: str, endpoint_id: str) -> bool:
     }
     
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.delete(
+        timeout = aiohttp.ClientTimeout(total=30.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.delete(
                 f"{REST_URL}/endpoints/{endpoint_id}",
-                headers=REST_HEADERS,
-                timeout=30.0
-            )
-            response.raise_for_status()
+                headers=REST_HEADERS
+            ) as response:
+                response.raise_for_status()
+                
+                logger.info(f"Successfully deleted endpoint: {endpoint_id}")
+                return True
             
-            logger.info(f"Successfully deleted endpoint: {endpoint_id}")
-            return True
-            
-    except httpx.RequestError as e:
+    except aiohttp.ClientError as e:
         logger.error(f"Error deleting endpoint {endpoint_id}: {e}")
         return False
 
 async def create_runpod_endpoint(api_key: str, template_id: str) -> Optional[dict]:
-    """Create a new autogenerated endpoint using REST API"""
+    """Create a new autogenerated endpoint using REST API with dynamic worker limits"""
     REST_URL = "https://rest.runpod.io/v1"
     REST_HEADERS = {
         "Content-Type": "application/json",
@@ -627,6 +723,26 @@ async def create_runpod_endpoint(api_key: str, template_id: str) -> Optional[dic
     current_date = datetime.now().strftime("%Y%m%d")
     endpoint_name = f"autogenerated-endpoint-transcribe-ivrit-ai-{current_date}"
     
+    # Get maximum concurrency and current usage
+    max_concurrency = await get_max_serverless_concurrency(api_key)
+    current_usage = await get_current_worker_usage(api_key)
+    
+    if max_concurrency is None or current_usage is None:
+        logger.warning("Failed to fetch concurrency limits, using default workersMax=2")
+        workers_max = 2
+    else:
+        # Calculate available workers
+        available_workers = max_concurrency - current_usage
+        
+        # Check if no workers are available
+        if available_workers <= 0:
+            logger.error(f"No workers available: max={max_concurrency}, current={current_usage}, available={available_workers}")
+            return None
+        
+        # Use minimum of available workers and a reasonable default (e.g., 3)
+        workers_max = min(available_workers, 3)
+        logger.info(f"Concurrency calculation: max={max_concurrency}, current={current_usage}, available={available_workers}, setting workersMax={workers_max}")
+    
     endpoint_data = {
         "name": endpoint_name,
         "templateId": template_id,
@@ -634,32 +750,32 @@ async def create_runpod_endpoint(api_key: str, template_id: str) -> Optional[dic
         "scalerType": "QUEUE_DELAY",
         "scalerValue": 4,
         "workersMin": 0,
-        "workersMax": 3,
+        "workersMax": workers_max,
         "idleTimeout": 5,
         "executionTimeoutMs": 600000
     }
     
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
+        timeout = aiohttp.ClientTimeout(total=30.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
                 f"{REST_URL}/endpoints",
                 headers=REST_HEADERS,
-                json=endpoint_data,
-                timeout=30.0
-            )
-            response.raise_for_status()
+                json=endpoint_data
+            ) as response:
+                response.raise_for_status()
+                
+                result = await response.json()
+                endpoint_id = result.get('id')
+                
+                logger.info(f"Created autogenerated endpoint: {endpoint_id} ({endpoint_name})")
+                return {
+                    "id": endpoint_id,
+                    "name": endpoint_name,
+                    "status": result.get('status', 'N/A')
+                }
             
-            result = response.json()
-            endpoint_id = result.get('id')
-            
-            logger.info(f"Created autogenerated endpoint: {endpoint_id} ({endpoint_name})")
-            return {
-                "id": endpoint_id,
-                "name": endpoint_name,
-                "status": result.get('status', 'N/A')
-            }
-            
-    except httpx.RequestError as e:
+    except aiohttp.ClientError as e:
         logger.error(f"Error creating autogenerated endpoint: {e}")
         return None
 
@@ -727,7 +843,7 @@ async def check_runpod_endpoint(runpod_token: str) -> dict:
                         "needs_wait": True
                     }
                 else:
-                    return {"success": False, "error": "Failed to create updated endpoint"}
+                    return {"success": False, "error": "Failed to create updated endpoint - no workers available or concurrency limit reached"}
         else:
             # No endpoint found - create a new one
             new_endpoint = await create_runpod_endpoint(runpod_token, required_template_id)
@@ -743,7 +859,7 @@ async def check_runpod_endpoint(runpod_token: str) -> dict:
                     "needs_wait": True
                 }
             else:
-                return {"success": False, "error": "Failed to create endpoint"}
+                return {"success": False, "error": "Failed to create endpoint - no workers available or concurrency limit reached"}
             
     except Exception as e:
         logger.error(f"Error in check_runpod_endpoint: {e}")
@@ -790,8 +906,8 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
     
     try:
         # Exchange code for access token using v2 endpoint
-        async with httpx.AsyncClient() as client:
-            token_response = await client.post(
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
                 "https://oauth2.googleapis.com/token",
                 data={
                     "code": code,
@@ -800,32 +916,32 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
                     "redirect_uri": GOOGLE_REDIRECT_URI,
                     "grant_type": "authorization_code",
                 }
-            )
-            token_data = token_response.json()
-            
-            if "error" in token_data:
-                error_message = f"Token exchange failed: {token_data.get('error_description', 'Unknown error')}"
-                return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
-            
-            access_token = token_data["access_token"]
-            
-            # Get user info using v2 endpoint
-            user_response = await client.get(
-                "https://www.googleapis.com/oauth2/v2/userinfo",
-                headers={"Authorization": f"Bearer {access_token}"}
-            )
-            user_data = user_response.json()
-            
-            # Store user email in session
-            set_user_email(request, user_data["email"])
-            
-            # Clean up OAuth state
-            if session_id in sessions:
-                sessions[session_id].pop("oauth_state", None)
-            
-            response = templates.TemplateResponse("close_window.html", {"request": request, "success": True})
-            response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
-            return response
+            ) as token_response:
+                token_data = await token_response.json()
+                
+                if "error" in token_data:
+                    error_message = f"Token exchange failed: {token_data.get('error_description', 'Unknown error')}"
+                    return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+                
+                access_token = token_data["access_token"]
+                
+                # Get user info using v2 endpoint
+                async with session.get(
+                    "https://www.googleapis.com/oauth2/v2/userinfo",
+                    headers={"Authorization": f"Bearer {access_token}"}
+                ) as user_response:
+                    user_data = await user_response.json()
+                    
+                    # Store user email in session
+                    set_user_email(request, user_data["email"])
+                    
+                    # Clean up OAuth state
+                    if session_id in sessions:
+                        sessions[session_id].pop("oauth_state", None)
+                    
+                    response = templates.TemplateResponse("close_window.html", {"request": request, "success": True})
+                    response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
+                    return response
             
     except Exception as e:
         error_message = f"Authentication failed: {str(e)}"
