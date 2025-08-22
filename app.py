@@ -1100,6 +1100,30 @@ async def download_file(job_id: str, request: Request):
     return FileResponse(temp_files[job_id])
 
 
+@app.get("/export_words/{job_id}")
+async def export_words(job_id: str, request: Request):
+    """Export word-level timestamps as JSON"""
+    if job_id not in job_results:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    
+    job_data = job_results[job_id]
+    if job_data["progress"] < 1.0:
+        return JSONResponse({"error": "Job not completed"}, status_code=400)
+    
+    # Extract all words with timestamps
+    all_words = []
+    for segment in job_data.get("results", []):
+        if "words" in segment and segment["words"]:
+            for word in segment["words"]:
+                all_words.append({
+                    "word": word["word"].strip(),
+                    "start": round(word["start"], 3),  # Round to milliseconds
+                    "end": round(word["end"], 3)
+                })
+    
+    return JSONResponse(all_words)
+
+
 
 
 
@@ -1110,11 +1134,27 @@ async def process_segment(job_id, segment, duration):
         log_message(f"Terminating inactive job: {job_id}")
         return False
 
+    # Extract word-level data if available
+    words_data = []
+    if hasattr(segment, 'words') and segment.words:
+        for word in segment.words:
+            word_data = {
+                "word": clean_some_unicode_from_text(word.word),
+                "start": word.start,
+                "end": word.end,
+                "probability": word.probability,
+            }
+            # Include speaker if available
+            if hasattr(word, 'speaker') and word.speaker is not None:
+                word_data["speaker"] = word.speaker
+            words_data.append(word_data)
+
     segment_data = {
         "id": segment.extra_data.get("id"),
         "start": segment.start,
         "end": segment.end,
         "text": clean_some_unicode_from_text(segment.text),
+        "words": words_data,
         "avg_logprob": segment.extra_data.get("avg_logprob"),
         "compression_ratio": segment.extra_data.get("compression_ratio"),
         "no_speech_prob": segment.extra_data.get("no_speech_prob"),

@@ -124,20 +124,35 @@
         height: 100%;
         background-color: rgba(0, 0, 0, 0.5);
       }
+      .modal.show {
+        display: block;
+      }
       .modal-content {
         background-color: var(--container-bg);
-        margin: 10% auto;
-        padding: 2rem;
-        border-radius: 8px;
-        width: 80%;
-        max-width: 500px;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 480px;
+        max-height: 90vh;
+        overflow-y: auto;
         text-align: right;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
       }
       .modal-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.25rem;
+        padding-bottom: 0.75rem;
+      }
+      .modal-header h2 {
+        margin: 0;
+        font-size: 1.4rem;
+        color: var(--text-color);
       }
       .close {
         background: none;
@@ -178,16 +193,20 @@
       }
       .modal-buttons {
         display: flex;
-        justify-content: flex-end;
-        gap: 1rem;
+        justify-content: flex-start;
+        gap: 0.75rem;
         margin-top: 1.5rem;
+        padding-top: 1rem;
       }
       .btn {
-        padding: 0.5rem 1rem;
+        padding: 0.6rem 1.2rem;
         border: none;
-        border-radius: 4px;
+        border-radius: 6px;
         cursor: pointer;
-        font-size: 1rem;
+        font-size: 0.9rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+        min-height: 40px;
       }
       .btn-primary {
         background-color: var(--primary-color);
@@ -198,8 +217,106 @@
         color: var(--text-color);
         border: 1px solid var(--border-color);
       }
+      .btn-secondary:hover {
+        background-color: var(--container-bg);
+        border-color: var(--primary-color);
+        opacity: 1;
+      }
       .btn:hover {
-        opacity: 0.8;
+        opacity: 0.85;
+      }
+      .btn-primary:hover {
+        opacity: 0.9;
+      }
+
+      /* Settings Modal Styles */
+      .settings-section {
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border-color);
+      }
+      .settings-section:last-of-type {
+        border-bottom: none;
+        margin-bottom: 0.5rem;
+      }
+      .settings-section h3 {
+        font-size: 1.1rem;
+        color: var(--text-color);
+        margin: 0 0 0.75rem 0;
+        font-weight: 600;
+        text-align: right;
+      }
+      .form-label {
+        display: block;
+        font-weight: 500;
+        color: var(--text-color);
+        margin-bottom: 0.5rem;
+        text-align: right;
+        font-size: 0.95rem;
+      }
+      .form-help {
+        display: block;
+        font-size: 0.8rem;
+        color: var(--text-color);
+        opacity: 0.65;
+        margin-top: 0.25rem;
+        text-align: right;
+        line-height: 1.3;
+      }
+      .radio-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .radio-option {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.6rem 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        background-color: var(--secondary-color);
+        flex-direction: row-reverse;
+        min-height: 44px;
+      }
+      .radio-option:hover {
+        border-color: var(--primary-color);
+        background-color: var(--container-bg);
+      }
+      .radio-option input[type="radio"] {
+        margin: 0;
+        width: 16px;
+        height: 16px;
+        accent-color: var(--primary-color);
+        flex-shrink: 0;
+      }
+      .radio-option .radio-content {
+        flex: 1;
+        text-align: right;
+        direction: rtl;
+      }
+      .radio-option .radio-text {
+        font-weight: 500;
+        color: var(--text-color);
+        font-size: 0.9rem;
+        display: block;
+        margin-bottom: 0.1rem;
+        text-align: right;
+        direction: rtl;
+      }
+      .radio-option small {
+        font-size: 0.75rem;
+        color: var(--text-color);
+        opacity: 0.6;
+        line-height: 1.2;
+        text-align: right;
+        direction: rtl;
+      }
+      .radio-option input[type="radio"]:checked ~ .radio-content .radio-text {
+        color: var(--primary-color);
+        font-weight: 600;
       }
       h1 {
         margin-bottom: 2rem;
@@ -721,27 +838,33 @@
             <polyline points="10,9 9,9 8,9" />
           </svg>
         </button>
+        <button
+          id="export-words-btn"
+          disabled
+          title="ייצא מילים עם קודי זמן (JSON)"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+            />
+            <polyline points="14,2 14,8 20,8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <polyline points="10,9 9,9 8,9" />
+            <path d="M12 15l-3 3 3 3" />
+          </svg>
+        </button>
       </div>
       <div id="transcription-container">
         <textarea id="transcription" readonly></textarea>
-      </div>
-      <div class="display-options">
-        <span>טקסט רציף</span>
-        <div class="slider-container">
-          <label class="switch">
-            <input type="checkbox" id="segment-toggle" checked />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <span>פסקאות נפרדות</span>
-      </div>
-      <div class="display-options">
-        <label
-          style="display: flex; align-items: center; gap: 8px; font-size: 16px"
-        >
-          <input type="checkbox" id="timecode-toggle" style="margin: 0" />
-          <span>הוסף קודי זמן</span>
-        </label>
       </div>
       <div class="links-container">
         <a href="mailto:info@ivrit.ai" class="contact-link">
@@ -779,22 +902,101 @@
     <div id="settings-modal" class="modal">
       <div class="modal-content">
         <div class="modal-header">
-          <h2>הגדרות RunPod</h2>
+          <h2>הגדרות</h2>
           <button class="close" id="close-settings">&times;</button>
         </div>
         <form id="settings-form">
-          <div class="form-group">
-            <label dir="ltr" for="runpod-token">RunPod API Token:</label>
-            <input
-              type="password"
-              id="runpod-token"
-              name="runpod-token"
-              placeholder="הכנס את ה-API Token שלך"
-            />
+          <!-- RunPod Settings Section -->
+          <div class="settings-section">
+            <h3>הגדרות RunPod</h3>
+            <div class="form-group">
+              <label for="runpod-token">API Token של RunPod:</label>
+              <input
+                type="password"
+                id="runpod-token"
+                name="runpod-token"
+                placeholder="הכנס את ה-API Token שלך"
+                dir="ltr"
+              />
+              <small class="form-help"
+                >טוקן זה יאפשר לך להשתמש בשירותי RunPod המותאמים אישית</small
+              >
+            </div>
           </div>
+
+          <!-- Display Settings Section -->
+          <div class="settings-section">
+            <h3>הגדרות תצוגה</h3>
+
+            <!-- Text Format Options -->
+            <div class="form-group">
+              <label class="form-label">פורמט הטקסט:</label>
+              <div class="radio-group">
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="text-format"
+                    value="continuous"
+                    id="continuous-text"
+                    checked
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">טקסט רציף</span>
+                    <small>כל הטקסט ברצף אחד</small>
+                  </div>
+                </label>
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="text-format"
+                    value="segments"
+                    id="segment-text"
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">פסקאות נפרדות</span>
+                    <small>כל משפט בשורה נפרדת</small>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <!-- Timestamp Options -->
+            <div class="form-group">
+              <label class="form-label">קודי זמן:</label>
+              <div class="radio-group">
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="timestamp-format"
+                    value="none"
+                    id="no-timestamps"
+                    checked
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">ללא קודי זמן</span>
+                    <small>רק הטקסט ללא זמנים</small>
+                  </div>
+                </label>
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="timestamp-format"
+                    value="segments"
+                    id="segment-timestamps"
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">קודי זמן לפסקאות</span>
+                    <small>זמן התחלה וסיום לכל פסקה</small>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+
           <div class="modal-buttons">
+            <button type="submit" class="btn btn-primary">שמור</button>
             <button type="button" class="btn btn-secondary" id="clear-settings">
-              נקה הגדרות
+              נקה הכל
             </button>
             <button
               type="button"
@@ -803,7 +1005,6 @@
             >
               ביטול
             </button>
-            <button type="submit" class="btn btn-primary">שמור</button>
           </div>
         </form>
       </div>
@@ -820,8 +1021,7 @@
       const copyBtn = document.getElementById("copy-btn")
       const downloadBtn = document.getElementById("download-btn")
       const downloadDocxBtn = document.getElementById("download-docx-btn")
-      const segmentToggle = document.getElementById("segment-toggle")
-      const timecodeToggle = document.getElementById("timecode-toggle")
+      const exportWordsBtn = document.getElementById("export-words-btn")
       const settingsBtn = document.getElementById("settings-btn")
       const settingsModal = document.getElementById("settings-modal")
       const closeSettings = document.getElementById("close-settings")
@@ -834,6 +1034,13 @@
       const MAX_FILE_SIZE = 200 * 1024 * 1024 // 200MB in bytes
       let transcriptionSegments = []
       let activeTranscription = false
+      let currentJobId = null
+
+      // Display settings
+      let displaySettings = {
+        textFormat: "continuous", // "continuous" or "segments"
+        timestampFormat: "none", // "none", "segments", or "words"
+      }
 
       // Toast notification functions
       function showToast(message, type = "success") {
@@ -916,10 +1123,36 @@
       document.documentElement.setAttribute("data-theme", savedTheme)
       updateThemeIcon(savedTheme)
 
-      // Load settings from cookies
+      // Load saved display settings
+      const savedDisplaySettings = localStorage.getItem("displaySettings")
+      if (savedDisplaySettings) {
+        displaySettings = {
+          ...displaySettings,
+          ...JSON.parse(savedDisplaySettings),
+        }
+      }
+
+      // Load settings from cookies and localStorage
       function loadSettings() {
+        // Load RunPod token
         const token = getCookie("runpod_token")
         if (token) runpodTokenInput.value = token
+
+        // Load display settings from localStorage
+        const savedSettings = localStorage.getItem("displaySettings")
+        if (savedSettings) {
+          displaySettings = { ...displaySettings, ...JSON.parse(savedSettings) }
+        }
+
+        // Update form controls to match current settings
+        document.getElementById("continuous-text").checked =
+          displaySettings.textFormat === "continuous"
+        document.getElementById("segment-text").checked =
+          displaySettings.textFormat === "segments"
+        document.getElementById("no-timestamps").checked =
+          displaySettings.timestampFormat === "none"
+        document.getElementById("segment-timestamps").checked =
+          displaySettings.timestampFormat === "segments"
 
         // Update settings button appearance if credentials are saved
         updateSettingsButtonIndicator()
@@ -939,15 +1172,34 @@
         }
       }
 
-      // Save settings to cookies
+      // Save settings to cookies and localStorage
       async function saveSettings() {
+        // Save display settings
+        const textFormat =
+          document.querySelector('input[name="text-format"]:checked')?.value ||
+          "continuous"
+        const timestampFormat =
+          document.querySelector('input[name="timestamp-format"]:checked')
+            ?.value || "none"
+
+        displaySettings.textFormat = textFormat
+        displaySettings.timestampFormat = timestampFormat
+        localStorage.setItem("displaySettings", JSON.stringify(displaySettings))
+
+        // Update transcription display if there are results
+        if (transcriptionSegments.length > 0) {
+          updateTranscriptionDisplay()
+        }
+
         const token = runpodTokenInput.value.trim()
 
-        // If token is empty, just clear the cookies
+        // If token is empty, just clear the RunPod credentials but keep display settings
         if (!token) {
           deleteCookie("runpod_token")
           settingsModal.style.display = "none"
+          settingsModal.classList.remove("show")
           updateSettingsButtonIndicator()
+          showToast("הגדרות נשמרו בהצלחה!", "success")
           return
         }
 
@@ -991,6 +1243,7 @@
 
               alert(successMessage)
               settingsModal.style.display = "none"
+              settingsModal.classList.remove("show")
               updateSettingsButtonIndicator()
               checkBalance() // Update balance display
             } else {
@@ -1020,12 +1273,33 @@
         }
       }
 
-      // Clear settings from cookies
-      function clearSettingsFromCookies() {
+      // Clear all settings
+      function clearAllSettings() {
+        // Clear RunPod settings
         deleteCookie("runpod_token")
-        alert("הגדרות RunPod נמחקו בהצלחה!")
-        settingsModal.style.display = "none"
         runpodTokenInput.value = ""
+
+        // Clear display settings
+        displaySettings = {
+          textFormat: "continuous",
+          timestampFormat: "none",
+        }
+        localStorage.removeItem("displaySettings")
+
+        // Reset form controls to defaults
+        document.getElementById("continuous-text").checked = true
+        document.getElementById("segment-text").checked = false
+        document.getElementById("no-timestamps").checked = true
+        document.getElementById("segment-timestamps").checked = false
+
+        // Update display if there are results
+        if (transcriptionSegments.length > 0) {
+          updateTranscriptionDisplay()
+        }
+
+        showToast("כל ההגדרות נמחקו בהצלחה!", "success")
+        settingsModal.style.display = "none"
+        settingsModal.classList.remove("show")
         updateSettingsButtonIndicator()
 
         // Hide balance container when credentials are cleared
@@ -1137,18 +1411,21 @@
       // Settings modal handlers
       settingsBtn.addEventListener("click", () => {
         settingsModal.style.display = "block"
+        settingsModal.classList.add("show")
         loadSettings()
       })
 
       closeSettings.addEventListener("click", () => {
         settingsModal.style.display = "none"
+        settingsModal.classList.remove("show")
       })
 
       cancelSettings.addEventListener("click", () => {
         settingsModal.style.display = "none"
+        settingsModal.classList.remove("show")
       })
 
-      clearSettings.addEventListener("click", clearSettingsFromCookies)
+      clearSettings.addEventListener("click", clearAllSettings)
 
       settingsForm.addEventListener("submit", async (e) => {
         e.preventDefault()
@@ -1161,6 +1438,7 @@
       window.addEventListener("click", (e) => {
         if (e.target === settingsModal) {
           settingsModal.style.display = "none"
+          settingsModal.classList.remove("show")
         }
       })
       ;["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
@@ -1239,10 +1517,13 @@
         if (!token) {
           transcriptionArea.value = "מעלה את הקובץ..."
         }
-        transcriptionSegments = []
+        // Reset all states for new transcription
         copyBtn.disabled = true
         downloadBtn.disabled = true
         downloadDocxBtn.disabled = true
+        exportWordsBtn.disabled = true
+        transcriptionSegments = []
+        currentJobId = null
 
         const xhr = new XMLHttpRequest()
         xhr.open("POST", "/upload", true)
@@ -1299,6 +1580,7 @@
       }
 
       function pollJobStatus(jobId) {
+        currentJobId = jobId // Store the job ID for later use
         const pollInterval = 2000 // Poll every 2 seconds
 
         function poll() {
@@ -1375,7 +1657,8 @@
       function formatWithTimecodes(segments) {
         if (!segments || segments.length === 0) return ""
 
-        const separator = segmentToggle.checked ? " " : "\n"
+        const separator =
+          displaySettings.textFormat === "continuous" ? " " : "\n"
         const groups = []
         let currentGroup = []
         let currentTimeMarker = 30 // Start with 30 seconds
@@ -1445,16 +1728,17 @@
 
       function showError(message) {
         transcriptionArea.value = `שגיאה: ${message}`
-        resetUploadState()
+        resetAllState()
       }
 
       function updateTranscriptionDisplay() {
         let result
 
-        if (timecodeToggle.checked) {
+        if (displaySettings.timestampFormat === "segments") {
           result = formatWithTimecodes(transcriptionSegments)
         } else {
-          const separator = segmentToggle.checked ? " " : "\n"
+          const separator =
+            displaySettings.textFormat === "continuous" ? " " : "\n"
           result = transcriptionSegments
             .map((segment) => segment.text.trim())
             .join(separator)
@@ -1466,6 +1750,7 @@
         copyBtn.disabled = false
         downloadBtn.disabled = false
         downloadDocxBtn.disabled = false
+        exportWordsBtn.disabled = false
       }
 
       function resetUploadState() {
@@ -1474,6 +1759,21 @@
         fileName.textContent = ""
         progressContainer.style.display = "none"
         progressBar.style.width = "0%"
+        // Don't reset buttons or currentJobId here - they should stay enabled after successful transcription
+      }
+
+      function resetAllState() {
+        transcribeBtn.disabled = false
+        selectedFile = null
+        fileName.textContent = ""
+        progressContainer.style.display = "none"
+        progressBar.style.width = "0%"
+        copyBtn.disabled = true
+        downloadBtn.disabled = true
+        downloadDocxBtn.disabled = true
+        exportWordsBtn.disabled = true
+        currentJobId = null
+        transcriptionSegments = []
       }
 
       copyBtn.addEventListener("click", function () {
@@ -1620,6 +1920,41 @@
         }
       })
 
+      exportWordsBtn.addEventListener("click", async function () {
+        if (!currentJobId) {
+          showToast("לא ניתן לייצא - לא נמצא מזהה עבודה", "error")
+          return
+        }
+
+        try {
+          const response = await fetch(`/export_words/${currentJobId}`)
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`)
+          }
+
+          const wordsData = await response.json()
+
+          // Create and trigger download
+          const blob = new Blob([JSON.stringify(wordsData, null, 2)], {
+            type: "application/json",
+          })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement("a")
+          a.href = url
+          a.download = "words_timestamps.json"
+
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+          URL.revokeObjectURL(url)
+
+          showToast("קובץ קודי הזמן למילים ירד בהצלחה!", "success")
+        } catch (error) {
+          console.error("Error exporting words:", error)
+          showToast("שגיאה בייצוא קודי הזמן למילים", "error")
+        }
+      })
+
       function formatTime(seconds) {
         const hours = Math.floor(seconds / 3600)
         const minutes = Math.floor((seconds % 3600) / 60)
@@ -1671,20 +2006,6 @@
             e.preventDefault()
             return false
           }
-        }
-      })
-
-      // Toggle between line breaks and spaces for transcription display
-      segmentToggle.addEventListener("change", function () {
-        if (transcriptionSegments.length > 0) {
-          updateTranscriptionDisplay()
-        }
-      })
-
-      // Toggle for time codes
-      timecodeToggle.addEventListener("change", function () {
-        if (transcriptionSegments.length > 0) {
-          updateTranscriptionDisplay()
         }
       })
     </script>
