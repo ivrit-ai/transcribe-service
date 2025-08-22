@@ -366,7 +366,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token=""):
             wait_minutes = math.ceil(needed_minutes / (1 + replenish_rate_per_minute))
 
             # Convert time_fill_rate (per second) to minutes per minute
-            error_msg = f"עברת את מגבלת השימוש החופשי. אנא המתן {wait_minutes} דקות לפני העלאת קובץ חדש, או השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://www.youtube.com/watch?v=mEgfmO7zzdw"
+            error_msg = f"עברת את מגבלת השימוש החופשי. אנא המתן {wait_minutes} דקות לפני העלאת קובץ חדש, או השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://youtu.be/xr8RQRFERLs"
             
             return False, JSONResponse({"error": error_msg}, status_code=429)
 
