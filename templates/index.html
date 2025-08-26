@@ -271,6 +271,7 @@
       .radio-option {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 0.5rem;
         padding: 0.6rem 0.75rem;
         border: 1px solid var(--border-color);
@@ -278,8 +279,9 @@
         cursor: pointer;
         transition: all 0.2s ease;
         background-color: var(--secondary-color);
-        flex-direction: row-reverse;
+        direction: rtl;
         min-height: 44px;
+        position: relative;
       }
       .radio-option:hover {
         border-color: var(--primary-color);
@@ -291,11 +293,14 @@
         height: 16px;
         accent-color: var(--primary-color);
         flex-shrink: 0;
+        position: absolute;
+        left: 0.75rem;
       }
       .radio-option .radio-content {
         flex: 1;
         text-align: right;
         direction: rtl;
+        padding-left: 2rem;
       }
       .radio-option .radio-text {
         font-weight: 500;
@@ -910,16 +915,17 @@
           <div class="settings-section">
             <h3>הגדרות RunPod</h3>
             <div class="form-group">
-              <label for="runpod-token">API Token של RunPod:</label>
+              <label for="runpod-token" dir="ltr">RunPod API Key:</label>
               <input
                 type="password"
                 id="runpod-token"
                 name="runpod-token"
-                placeholder="הכנס את ה-API Token שלך"
-                dir="ltr"
+                placeholder="הכנס את ה-API Key שלך"
+                dir="rtl"
               />
               <small class="form-help"
-                >טוקן זה יאפשר לך להשתמש בשירותי RunPod המותאמים אישית</small
+                >הזנת API Key מאפשרת שימוש במשאבים פרטיים לעיבוד מהיר
+                יותר</small
               >
             </div>
           </div>
