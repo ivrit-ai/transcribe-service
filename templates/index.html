@@ -496,7 +496,8 @@
         const runpodTokenInput = document.getElementById('runpod-token');
 
         let selectedFile = null;
-        const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB in bytes
+        const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024; // 300MB in bytes
+        const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024; // 3GB in bytes
         let transcriptionSegments = [];
         let activeTranscription = false;
 
@@ -764,8 +765,17 @@
         function handleFiles(files) {
             if (files.length > 0) {
                 selectedFile = files[0];
-                if (selectedFile.size > MAX_FILE_SIZE) {
-                    alert('הקובץ גדול מדי. הגודל המקסימלי המותר הוא 250MB.');
+                
+                // Check if user has private RunPod credentials
+                const token = getCookie('runpod_token');
+                const hasPrivateCredentials = token && token.trim() !== '';
+                
+                // Determine which file size limit to use
+                const maxFileSize = hasPrivateCredentials ? MAX_FILE_SIZE_PRIVATE : MAX_FILE_SIZE_REGULAR;
+                const maxFileSizeText = hasPrivateCredentials ? '3GB' : '300MB';
+                
+                if (selectedFile.size > maxFileSize) {
+                    alert(`הקובץ גדול מדי. הגודל המקסימלי המותר הוא ${maxFileSizeText}.`);
                     selectedFile = null;
                     transcribeBtn.disabled = true;
                     fileName.textContent = '';

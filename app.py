@@ -971,16 +971,49 @@ async def upload_file(
 
     filename = secure_filename(file.filename)
 
+    # Get RunPod token early to determine file size limits
+    runpod_token = runpod_token.strip() if runpod_token else ""
+    has_private_credentials = bool(runpod_token)
+    
+    # Define file size limits
+    MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024  # 300MB
+    MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024  # 3GB
+    CHUNK_SIZE = 1024 * 1024  # 1MB chunks
+    
+    max_file_size = MAX_FILE_SIZE_PRIVATE if has_private_credentials else MAX_FILE_SIZE_REGULAR
+    max_file_size_text = "3GB" if has_private_credentials else "300MB"
+
+    # Check content-length header before reading file to validate size early
+    content_length = None
+    if 'content-length' in request.headers:
+        try:
+            content_length = int(request.headers['content-length'])
+        except (ValueError, TypeError):
+            pass
+
+    if content_length is not None and content_length > max_file_size:
+        return JSONResponse({"error": f"הקובץ גדול מדי. הגודל המקסימלי המותר הוא {max_file_size_text}."}, status_code=400)
+
     # Create a temporary file
     temp_file = tempfile.NamedTemporaryFile(delete=False)
     temp_file_path = temp_file.name
 
     try:
-        # Read file content and save to temp file
-        content = await file.read()
+        # Read file content in chunks to avoid memory overload
+        total_size = 0
         with open(temp_file_path, 'wb') as f:
-            f.write(content)
+            while chunk := await file.read(CHUNK_SIZE):
+                total_size += len(chunk)
+                if total_size > max_file_size:
+                    os.unlink(temp_file_path)
+                    return JSONResponse({"error": f"הקובץ גדול מדי. הגודל המקסימלי המותר הוא {max_file_size_text}."}, status_code=400)
+                f.write(chunk)
+        
+        file_size = total_size
     except Exception as e:
+        # Clean up temp file if it exists
+        if os.path.exists(temp_file_path):
+            os.unlink(temp_file_path)
         return JSONResponse({"error": f"העלאת הקובץ נכשלה: {str(e)}"}, status_code=200)
 
     # Get the MIME type of the file
@@ -995,9 +1028,6 @@ async def upload_file(
     if duration is None:
         return JSONResponse({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}, status_code=200)
 
-    # Get RunPod token if provided
-    runpod_token = runpod_token.strip() if runpod_token else ""
-    
     # Store the temporary file path
     temp_files[job_id] = temp_file_path
     
