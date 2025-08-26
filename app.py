@@ -231,10 +231,26 @@ class LeakyBucket:
         # Add resources based on fill rate
         self.seconds_remaining = min(self.max_seconds, self.seconds_remaining + self.time_fill_rate * elapsed)
 
-    def can_transcribe(self, duration_seconds):
-        """Check if transcription is allowed."""
+    def eta_to_credits(self, total_seconds):
+        """
+        Returns 0 if allowance is already available, otherwise seconds until credits are available,
+        or infinity if required credits are more than the bucket's max.
+        """
         self.update()
-        return self.seconds_remaining >= duration_seconds
+        
+        # If required credits exceed bucket capacity, return infinity
+        if total_seconds > self.max_seconds:
+            return float('inf')
+        
+        # If we already have enough credits, return 0
+        if self.seconds_remaining >= total_seconds:
+            return 0
+        
+        # Calculate how many seconds we need to wait for sufficient credits
+        needed_seconds = total_seconds - self.seconds_remaining
+        wait_time = needed_seconds / self.time_fill_rate
+        
+        return wait_time
 
     def consume(self, duration_seconds):
         """Consume resources for transcription."""
@@ -356,17 +372,17 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token=""):
     custom_runpod_credentials = bool(runpod_token)
     if not custom_runpod_credentials:
         user_bucket = get_user_quota(user_email)
-        if not user_bucket.can_transcribe(duration):
+        eta_seconds = user_bucket.eta_to_credits(duration)
+        
+        if eta_seconds > 0:
             remaining_minutes = user_bucket.get_remaining_minutes()
             log_message_in_session(f"Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
             
-            # Calculate how many minutes they need to wait, accounting for replenish rate
-            needed_minutes = (duration / 60) - remaining_minutes
-            replenish_rate_per_minute = user_bucket.time_fill_rate * 60
-            wait_minutes = math.ceil(needed_minutes / (1 + replenish_rate_per_minute))
-
-            # Convert time_fill_rate (per second) to minutes per minute
-            error_msg = f"עברת את מגבלת השימוש החופשי. אנא המתן {wait_minutes} דקות לפני העלאת קובץ חדש, או השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://youtu.be/xr8RQRFERLs"
+            if eta_seconds == float('inf'):
+                error_msg = f"הקובץ המבוקש גדול מדי ועובר את מגבלת השימוש החופשי הכוללת. אנא השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://youtu.be/xr8RQRFERLs"
+            else:
+                wait_minutes = math.ceil(eta_seconds / 60)
+                error_msg = f"עברת את מגבלת השימוש החופשי. אנא המתן {wait_minutes} דקות לפני העלאת קובץ חדש, או השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://youtu.be/xr8RQRFERLs"
             
             return False, JSONResponse({"error": error_msg}, status_code=429)
 
