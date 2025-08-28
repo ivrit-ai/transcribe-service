@@ -1115,7 +1115,9 @@ async def export_words(job_id: str, request: Request):
     for segment in job_data.get("results", []):
         if "words" in segment and segment["words"]:
             for word in segment["words"]:
-                    "start": round(word["start"], 3),  # Round to 3 decimal places for millisecond precision
+                all_words.append({
+                    "word": word["word"].strip(),
+                    "start": round(word["start"], 3),
                     "end": round(word["end"], 3)
                 })
     

@@ -1411,7 +1411,7 @@
           settingsModal.style.display = "none"
           settingsModal.classList.remove("show")
           updateSettingsButtonIndicator()
-          showToast("הגדרות נשמרו בהצלחה!", "success")
+          showToast("הגדרות נשמרו בהצלחה", "success")
           return
         }
 
@@ -1447,7 +1447,7 @@
               // Save credentials
               setCookie("runpod_token", token, 365 * 24 * 60 * 60) // 1 year
 
-              let successMessage = "האישורים נשמרו בהצלחה!"
+              let successMessage = "האישורים נשמרו בהצלחה"
               if (endpointResult.needsWait) {
                 successMessage +=
                   "<br />Endpoint חדש נוצר או עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
@@ -1510,7 +1510,7 @@
           updateTranscriptionDisplay()
         }
 
-        showToast("כל ההגדרות נמחקו בהצלחה!", "success")
+        showToast("כל ההגדרות נמחקו בהצלחה", "success")
         settingsModal.style.display = "none"
         settingsModal.classList.remove("show")
         updateSettingsButtonIndicator()
@@ -1997,7 +1997,7 @@
       copyBtn.addEventListener("click", function () {
         transcriptionArea.select()
         document.execCommand("copy")
-        showToast("הטקסט הועתק ללוח בהצלחה!", "success")
+        showToast("הטקסט הועתק ללוח בהצלחה", "success")
       })
 
       downloadBtn.addEventListener("click", function () {
