@@ -114,6 +114,51 @@
         color: #6c757d;
         font-style: italic;
       }
+      .modal .balance-container {
+        position: relative;
+        top: 0;
+        right: 0;
+        margin-top: 0.9rem;
+        z-index: 1;
+        background: linear-gradient(
+          135deg,
+          var(--input-bg) 0%,
+          rgba(0, 0, 0, 0) 100%
+        );
+        border: 1px solid var(--border-color);
+        display: none;
+        padding: 0.65rem 0.85rem;
+        border-radius: 10px;
+        font-size: 0.9rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+        direction: rtl;
+        text-align: right;
+      }
+      .modal .balance-container.visible {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.6rem;
+        width: fit-content;
+        white-space: nowrap;
+      }
+      .balance-icon svg {
+        width: 20px;
+        height: 20px;
+        color: var(--primary-color);
+      }
+      .balance-text {
+        display: flex;
+        align-items: baseline;
+        gap: 0.4rem;
+      }
+      .modal .balance-label {
+        margin: 0;
+        font-weight: 600;
+        color: var(--text-color);
+      }
+      .modal .balance-amount {
+        font-size: 0.95rem;
+      }
       .modal {
         display: none;
         position: fixed;
@@ -191,6 +236,14 @@
         outline: none;
         border-color: var(--primary-color);
       }
+      .form-help a {
+        color: var(--primary-color);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .form-help a:hover {
+        text-decoration: underline;
+      }
       .modal-buttons {
         display: flex;
         justify-content: flex-start;
@@ -229,7 +282,6 @@
         opacity: 0.9;
       }
 
-      /* Settings Modal Styles */
       .settings-section {
         margin-bottom: 1.5rem;
         padding-bottom: 1rem;
@@ -467,7 +519,6 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
-      /* Download menu (new unified button) */
       .download-menu {
         position: relative;
       }
@@ -480,8 +531,7 @@
       .download-menu {
         display: inline-block;
       }
-      .download-menu::after {
-        /* hover bridge to prevent flicker */
+  .download-menu::after {
         content: "";
         position: absolute;
         top: 100%;
@@ -717,7 +767,6 @@
         transform: translateX(24px);
       }
 
-      /* Toast Notifications */
       .toast-container {
         position: fixed;
         top: 20px;
@@ -737,6 +786,11 @@
         display: flex;
         align-items: center;
         min-width: 300px;
+        max-width: 420px;
+        direction: rtl;
+        text-align: right;
+        line-height: 1.4;
+        white-space: normal;
       }
       .toast.show {
         transform: translateX(0);
@@ -751,9 +805,9 @@
       .toast-message {
         flex: 1;
         color: var(--text-color);
+        white-space: normal;
       }
 
-      /* File Preview */
       .file-preview {
         display: none;
         background-color: var(--secondary-color);
@@ -801,10 +855,27 @@
         background-color: #f6463a;
         transform: translateY(-1px);
       }
+      .site-footer {
+        margin-top: 2rem;
+        font-size: 0.75rem;
+        color: #777;
+        text-align: center;
+        direction: rtl;
+      }
+      [data-theme="dark"] .site-footer {
+        color: #aaa;
+      }
+      .site-footer a {
+        color: var(--primary-color);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .site-footer a:hover {
+        text-decoration: underline;
+      }
     </style>
   </head>
   <body>
-    <!-- Toast Container -->
     <div class="toast-container" id="toast-container"></div>
 
     <div class="container">
@@ -848,10 +919,6 @@
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
         </svg>
       </button>
-      <div class="balance-container" id="balance-container">
-        <div class="balance-label">יתרה:</div>
-        <div class="balance-amount" id="balance-amount">טוען...</div>
-      </div>
       <button class="settings-btn" id="settings-btn" title="הגדרות">
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -874,7 +941,6 @@
         <input type="file" id="file-input" accept="audio/*,video/*" />
       </div>
 
-      <!-- File Preview -->
       <div class="file-preview" id="file-preview">
         <div class="file-info">
           <div class="file-details">
@@ -912,7 +978,6 @@
           </svg>
         </button>
 
-        <!-- Unified download button with dropdown menu -->
         <div class="download-menu">
           <button
             id="download-menu-btn"
@@ -1006,9 +1071,16 @@
           רוצים לתרום לנו?
         </a>
       </div>
+      <div class="site-footer">
+        <a
+          href="https://www.ivrit.ai/en/privacy/"
+          target="_blank"
+          rel="noopener"
+          >מדיניות פרטיות ותנאי שימוש</a
+        >
+      </div>
     </div>
 
-    <!-- Settings Modal -->
     <div id="settings-modal" class="modal">
       <div class="modal-content">
         <div class="modal-header">
@@ -1016,7 +1088,6 @@
           <button class="close" id="close-settings">&times;</button>
         </div>
         <form id="settings-form">
-          <!-- RunPod Settings Section -->
           <div class="settings-section">
             <h3>הגדרות RunPod</h3>
             <div class="form-group">
@@ -1029,17 +1100,45 @@
                 style="direction: rtl; text-align: right"
               />
               <small class="form-help"
-                >הזנת API Key מאפשרת שימוש במשאבים פרטיים לעיבוד מהיר
-                יותר</small
+                >הזנת מפתח פרטי מאפשרת שימוש במשאבים פרטיים לעיבוד מהיר יותר.<br />
+                <a
+                  href="https://youtu.be/xr8RQRFERLs?si=ibHcP6m0wdUh-gHU"
+                  target="_blank"
+                  rel="noopener"
+                  >לצפייה בסרטון הסבר</a
+                ></small
               >
+            </div>
+            <div
+              class="balance-container"
+              id="balance-container"
+              aria-live="polite"
+            >
+              <div class="balance-icon" aria-hidden="true">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                  <path d="M16 7V5a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v2" />
+                  <circle cx="16" cy="14" r="2" />
+                </svg>
+              </div>
+              <div class="balance-text">
+                <span class="balance-label">יתרה</span>
+                <span class="balance-amount" id="balance-amount">—</span>
+              </div>
             </div>
           </div>
 
-          <!-- Display Settings Section -->
           <div class="settings-section">
             <h3>הגדרות תצוגה</h3>
 
-            <!-- Text Format Options -->
             <div class="form-group">
               <label class="form-label">פורמט הטקסט:</label>
               <div class="radio-group">
@@ -1065,13 +1164,12 @@
                   />
                   <div class="radio-content">
                     <span class="radio-text">פסקאות נפרדות</span>
-                    <small>כל משפט בשורה נפרדת</small>
+                    <small>טקסט מחולק לפסקאות</small>
                   </div>
                 </label>
               </div>
             </div>
 
-            <!-- Timestamp Options -->
             <div class="form-group">
               <label class="form-label">קודי זמן:</label>
               <div class="radio-group">
@@ -1096,8 +1194,8 @@
                     id="segment-timestamps"
                   />
                   <div class="radio-content">
-                    <span class="radio-text">קודי זמן לפסקאות</span>
-                    <small>זמן התחלה וסיום לכל פסקה</small>
+                    <span class="radio-text">כולל קודי זמן</span>
+                    <small>זמני התחלה וסיום, לפי פורמט הטקסט</small>
                   </div>
                 </label>
               </div>
@@ -1106,15 +1204,15 @@
 
           <div class="modal-buttons">
             <button type="submit" class="btn btn-primary">שמור</button>
-            <button type="button" class="btn btn-secondary" id="clear-settings">
-              נקה הכל
-            </button>
             <button
               type="button"
               class="btn btn-secondary"
               id="cancel-settings"
             >
               ביטול
+            </button>
+            <button type="button" class="btn btn-secondary" id="clear-settings">
+              נקה הגדרות
             </button>
           </div>
         </form>
@@ -1153,35 +1251,34 @@
       let activeTranscription = false
       let currentJobId = null
 
-      // Display settings
       let displaySettings = {
-        textFormat: "continuous", // "continuous" or "segments"
-        timestampFormat: "none", // "none", "segments", or "words"
+        textFormat: "continuous",
+        timestampFormat: "none",
       }
 
-      // Toast notification functions
       function showToast(message, type = "success") {
         const toastContainer = document.getElementById("toast-container")
         const toast = document.createElement("div")
         toast.className = `toast ${type}`
 
+        // Support multi-line messages using \n
+        const formatted = (message || "").toString().replace(/\n/g, "<br />")
         toast.innerHTML = `
-          <span class="toast-message">${message}</span>
+          <span class="toast-message">${formatted}</span>
         `
 
         toastContainer.appendChild(toast)
 
-        // Trigger animation
         setTimeout(() => toast.classList.add("show"), 10)
 
-        // Auto remove after 3 seconds
+        // Duration: errors stay longer
+        const duration = type === "error" ? 10000 : 3000
         setTimeout(() => {
           toast.classList.remove("show")
           setTimeout(() => toast.remove(), 300)
-        }, 3000)
+        }, duration)
       }
 
-      // File preview functions
       function showFilePreview(file) {
         const preview = document.getElementById("file-preview")
         const fileName = document.getElementById("preview-file-name")
@@ -1200,7 +1297,6 @@
         document.getElementById("file-preview").classList.remove("show")
         document.getElementById("file-name").style.display = "block"
         document.getElementById("file-name").textContent = ""
-        // Clear the file input value so the same file can be selected again
         fileInput.value = ""
         showToast("קובץ הוסר בהצלחה", "success")
       }
@@ -1213,7 +1309,6 @@
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
       }
 
-      // Simple theme toggle
       function toggleTheme() {
         const currentTheme = document.documentElement.getAttribute("data-theme")
         const newTheme = currentTheme === "dark" ? "light" : "dark"
@@ -1341,9 +1436,9 @@
               data.error &&
               data.error.includes("401"))
           ) {
-            alert("שגיאה: API Token לא תקין")
+            showToast("שגיאה: API Token לא תקין", "error")
           } else if (!response.ok) {
-            alert(`שגיאה בבדיקת האישורים: ${response.status}`)
+            showToast(`שגיאה בבדיקת האישורים: ${response.status}`, "error")
           } else {
             // Credentials are valid, check endpoint
             const endpointResult = await checkAndCreateEndpoint(token)
@@ -1355,19 +1450,19 @@
               let successMessage = "האישורים נשמרו בהצלחה!"
               if (endpointResult.needsWait) {
                 successMessage +=
-                  "\n\nEndpoint חדש נוצר או עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
+                  "<br />Endpoint חדש נוצר או עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
               }
-
-              alert(successMessage)
+              showToast(successMessage, "success")
               settingsModal.style.display = "none"
               settingsModal.classList.remove("show")
               updateSettingsButtonIndicator()
               checkBalance() // Update balance display
             } else {
-              alert(
-                `שגיאה בבדיקת ה-endpoint: ${
+              showToast(
+                `שגיאה בבדיקת ה-endpoint:\n${
                   endpointResult.error || "לא ניתן לבדוק או ליצור endpoint"
-                }`
+                }`,
+                "error"
               )
             }
           }
@@ -1377,11 +1472,12 @@
             error.name === "TypeError" &&
             error.message.includes("Failed to fetch")
           ) {
-            alert(
-              "שגיאה: לא ניתן להתחבר לשרת RunPod. אנא בדוק את החיבור לאינטרנט ונסה שוב."
+            showToast(
+              "שגיאה: לא ניתן להתחבר לשרת RunPod.\nאנא בדוק את החיבור לאינטרנט ונסה שוב.",
+              "error"
             )
           } else {
-            alert("שגיאה בבדיקת האישורים. אנא נסה שוב.")
+            showToast("שגיאה בבדיקת האישורים.\nאנא נסה שוב.", "error")
           }
         } finally {
           // Restore button state
@@ -1547,8 +1643,6 @@
       settingsForm.addEventListener("submit", async (e) => {
         e.preventDefault()
         await saveSettings()
-        // Only close modal if save was successful (no error was shown)
-        // The modal will stay open if there was an error, allowing user to fix it
       })
 
       // Close modal when clicking outside
@@ -1624,7 +1718,6 @@
         const token = getCookie("runpod_token")
         if (token) {
           formData.append("runpod_token", token)
-          // Show indicator that custom credentials are being used
           transcriptionArea.value = "משתמש באישורי RunPod מותאמים אישית..."
         }
 
@@ -1634,7 +1727,6 @@
         if (!token) {
           transcriptionArea.value = "מעלה את הקובץ..."
         }
-        // Reset all states for new transcription
         copyBtn.disabled = true
         downloadBtn.disabled = true
         downloadDocxBtn.disabled = true
@@ -1697,7 +1789,7 @@
       }
 
       function pollJobStatus(jobId) {
-        currentJobId = jobId // Store the job ID for later use
+        currentJobId = jobId
         const pollInterval = 2000 // Poll every 2 seconds
 
         function poll() {
@@ -1868,7 +1960,6 @@
         downloadBtn.disabled = false
         downloadDocxBtn.disabled = false
         exportWordsBtn.disabled = false
-        // Enable unified menu buttons
         downloadMenuBtn.disabled = false
         menuVttBtn.disabled = false
         menuSrtBtn.disabled = false
@@ -1882,7 +1973,6 @@
         fileName.textContent = ""
         progressContainer.style.display = "none"
         progressBar.style.width = "0%"
-        // Don't reset buttons or currentJobId here - they should stay enabled after successful transcription
       }
 
       function resetAllState() {
@@ -2044,7 +2134,7 @@
           }, 1000)
         } catch (error) {
           console.error("Error creating DOCX:", error)
-          alert("שגיאה ביצירת קובץ Word. אנא נסה שוב.")
+          showToast("שגיאה ביצירת קובץ Word. אנא נסה שוב.", "error")
         }
       })
 
@@ -2062,7 +2152,6 @@
 
           const wordsData = await response.json()
 
-          // Create and trigger download
           const blob = new Blob([JSON.stringify(wordsData, null, 2)], {
             type: "application/json",
           })
@@ -2081,7 +2170,6 @@
         }
       })
 
-      // Unified download menu handlers - delegate to existing logic
       menuVttBtn.addEventListener("click", function () {
         if (!downloadBtn.disabled) {
           downloadBtn.click()
@@ -2089,7 +2177,6 @@
       })
       menuSrtBtn.addEventListener("click", function () {
         if (downloadBtn.disabled || !transcriptionSegments.length) return
-        // Build SRT content
         let srtContent = ""
         transcriptionSegments.forEach((segment, index) => {
           const start = formatTime(segment.start).replace(".", ",")
