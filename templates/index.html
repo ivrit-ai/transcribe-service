@@ -335,7 +335,7 @@
         background: linear-gradient(
           135deg,
           var(--secondary-color) 0%,
-          rgba(76, 175, 80, 0.05) 50%,
+          rgba(76, 175, 80, 0.12) 50%,
           var(--secondary-color) 100%
         );
         transition: all 0.3s ease;
@@ -467,6 +467,89 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
+      /* Download menu (new unified button) */
+      .download-menu {
+        position: relative;
+      }
+      .download-menu > button#download-menu-btn {
+        position: relative;
+      }
+      .download-menu > button#download-menu-btn:disabled {
+        cursor: not-allowed;
+      }
+      .download-menu {
+        display: inline-block;
+      }
+      .download-menu::after {
+        /* hover bridge to prevent flicker */
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        height: 6px; /* invisible area keeps hover while moving down */
+      }
+      .download-dropdown {
+        display: none;
+        position: absolute;
+        top: 100%; /* directly under button */
+        left: 0;
+        margin-top: 0;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 0.4rem 0;
+        min-width: 160px;
+        z-index: 200;
+        direction: rtl;
+        pointer-events: auto;
+      }
+      .download-menu:hover {
+        overflow: visible;
+      }
+      .download-menu:hover .download-dropdown {
+        display: block;
+      }
+      .download-menu:hover .download-dropdown {
+        display: block;
+      }
+      .download-dropdown button {
+        background: none;
+        border: none;
+        width: 100%;
+        text-align: right;
+        padding: 0.45rem 0.9rem;
+        cursor: pointer;
+        font-size: 0.8rem;
+        color: var(--text-color);
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        direction: rtl;
+      }
+      .download-dropdown-header {
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        padding: 0.35rem 0.9rem 0.25rem;
+        color: var(--text-color);
+        opacity: 0.7;
+        pointer-events: none;
+        border-bottom: 1px solid var(--border-color);
+        margin-bottom: 0.2rem;
+      }
+      .download-dropdown button:hover {
+        background: var(--secondary-color);
+        color: var(--primary-color);
+      }
+      .download-dropdown button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .hidden-download-original {
+        display: none !important;
+      }
       #copy-btn {
         background-color: var(--secondary-color);
         border: 1px solid var(--border-color);
@@ -484,6 +567,11 @@
         cursor: not-allowed;
       }
       #copy-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+      #download-menu-btn svg {
         width: 20px;
         height: 20px;
         color: var(--text-color);
@@ -823,50 +911,67 @@
             ></path>
           </svg>
         </button>
-        <button id="download-btn" disabled title="הורד כתוביות">🎬</button>
-        <button id="download-docx-btn" disabled title="הורד כמסמך Word">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
+
+        <!-- Unified download button with dropdown menu -->
+        <div class="download-menu">
+          <button
+            id="download-menu-btn"
+            disabled
+            title="הורדות"
+            aria-label="הורדות"
           >
-            <path
-              d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"
-            />
-            <polyline points="14,2 14,8 20,8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-            <polyline points="10,9 9,9 8,9" />
-          </svg>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+          </button>
+          <div class="download-dropdown">
+            <div class="download-dropdown-header">הורד כ...</div>
+            <button type="button" data-action="vtt" disabled id="menu-vtt">
+              VTT
+            </button>
+            <button type="button" data-action="srt" disabled id="menu-srt">
+              SRT
+            </button>
+            <button type="button" data-action="docx" disabled id="menu-docx">
+              Word DOCX
+            </button>
+            <button type="button" data-action="json" disabled id="menu-json">
+              JSON זמני מילים
+            </button>
+          </div>
+        </div>
+
+        <!-- Hidden original buttons kept for existing JS logic -->
+        <button
+          id="download-btn"
+          class="hidden-download-original"
+          disabled
+          title="הורד כתוביות"
+        >
+          🎬
         </button>
         <button
+          id="download-docx-btn"
+          class="hidden-download-original"
+          disabled
+          title="הורד כמסמך Word"
+        ></button>
+        <button
           id="export-words-btn"
+          class="hidden-download-original"
           disabled
           title="ייצא מילים עם קודי זמן (JSON)"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path
-              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
-            />
-            <polyline points="14,2 14,8 20,8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-            <polyline points="10,9 9,9 8,9" />
-            <path d="M12 15l-3 3 3 3" />
-          </svg>
-        </button>
+        ></button>
       </div>
       <div id="transcription-container">
         <textarea id="transcription" readonly></textarea>
@@ -921,7 +1026,7 @@
                 id="runpod-token"
                 name="runpod-token"
                 placeholder="הכנס את ה-API Key שלך"
-                dir="rtl"
+                style="direction: rtl; text-align: right"
               />
               <small class="form-help"
                 >הזנת API Key מאפשרת שימוש במשאבים פרטיים לעיבוד מהיר
@@ -1028,6 +1133,12 @@
       const downloadBtn = document.getElementById("download-btn")
       const downloadDocxBtn = document.getElementById("download-docx-btn")
       const exportWordsBtn = document.getElementById("export-words-btn")
+      // New unified download menu elements
+      const downloadMenuBtn = document.getElementById("download-menu-btn")
+      const menuVttBtn = document.getElementById("menu-vtt")
+      const menuSrtBtn = document.getElementById("menu-srt")
+      const menuDocxBtn = document.getElementById("menu-docx")
+      const menuJsonBtn = document.getElementById("menu-json")
       const settingsBtn = document.getElementById("settings-btn")
       const settingsModal = document.getElementById("settings-modal")
       const closeSettings = document.getElementById("close-settings")
@@ -1757,6 +1868,12 @@
         downloadBtn.disabled = false
         downloadDocxBtn.disabled = false
         exportWordsBtn.disabled = false
+        // Enable unified menu buttons
+        downloadMenuBtn.disabled = false
+        menuVttBtn.disabled = false
+        menuSrtBtn.disabled = false
+        menuDocxBtn.disabled = false
+        menuJsonBtn.disabled = false
       }
 
       function resetUploadState() {
@@ -1778,6 +1895,11 @@
         downloadBtn.disabled = true
         downloadDocxBtn.disabled = true
         exportWordsBtn.disabled = true
+        downloadMenuBtn.disabled = true
+        menuVttBtn.disabled = true
+        menuSrtBtn.disabled = true
+        menuDocxBtn.disabled = true
+        menuJsonBtn.disabled = true
         currentJobId = null
         transcriptionSegments = []
       }
@@ -1953,11 +2075,47 @@
           a.click()
           document.body.removeChild(a)
           URL.revokeObjectURL(url)
-
-          showToast("קובץ קודי הזמן למילים ירד בהצלחה!", "success")
         } catch (error) {
           console.error("Error exporting words:", error)
           showToast("שגיאה בייצוא קודי הזמן למילים", "error")
+        }
+      })
+
+      // Unified download menu handlers - delegate to existing logic
+      menuVttBtn.addEventListener("click", function () {
+        if (!downloadBtn.disabled) {
+          downloadBtn.click()
+        }
+      })
+      menuSrtBtn.addEventListener("click", function () {
+        if (downloadBtn.disabled || !transcriptionSegments.length) return
+        // Build SRT content
+        let srtContent = ""
+        transcriptionSegments.forEach((segment, index) => {
+          const start = formatTime(segment.start).replace(".", ",")
+          const end = formatTime(segment.end).replace(".", ",")
+          srtContent += `${
+            index + 1
+          }\n${start} --> ${end}\n${segment.text.trim()}\n\n`
+        })
+        const blob = new Blob([srtContent], { type: "text/plain" })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = "subtitles.srt"
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      })
+      menuDocxBtn.addEventListener("click", function () {
+        if (!downloadDocxBtn.disabled) {
+          downloadDocxBtn.click()
+        }
+      })
+      menuJsonBtn.addEventListener("click", function () {
+        if (!exportWordsBtn.disabled) {
+          exportWordsBtn.click()
         }
       })
 
