@@ -1477,7 +1477,7 @@
               "error"
             )
           } else {
-            showToast("שגיאה בבדיקת הגדרות RunPod.\nאנא נסה שוב.", "error")
+            showToast(`שגיאה בבדיקת הגדרות RunPod.\n ${error.message}`, "error")
           }
         } finally {
           // Restore button state
