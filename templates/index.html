@@ -1430,15 +1430,8 @@
           )
           const data = await response.json()
 
-          if (
-            response.status === 401 ||
-            (response.status === 500 &&
-              data.error &&
-              data.error.includes("401"))
-          ) {
-            showToast("שגיאה: API Token לא תקין", "error")
-          } else if (!response.ok) {
-            showToast(`שגיאה בבדיקת הגדרות RunPod: ${response.status}`, "error")
+          if (!response.ok) {
+            showToast(`שגיאה בבדיקת הגדרות RunPod:\n${response.status}: ${data.error}`, "error")
           } else {
             // Credentials are valid, check endpoint
             const endpointResult = await checkAndCreateEndpoint(token)
