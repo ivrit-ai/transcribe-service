@@ -531,7 +531,7 @@
       .download-menu {
         display: inline-block;
       }
-  .download-menu::after {
+      .download-menu::after {
         content: "";
         position: absolute;
         top: 100%;
@@ -1377,7 +1377,7 @@
 
         if (hasCredentials) {
           settingsBtn.style.color = "#4CAF50"
-          settingsBtn.title = "הגדרות (אישורי RunPod שמורים)"
+          settingsBtn.title = "הגדרות (הגדרות RunPod שמורות)"
         } else {
           settingsBtn.style.color = "#666"
           settingsBtn.title = "הגדרות"
@@ -1438,7 +1438,7 @@
           ) {
             showToast("שגיאה: API Token לא תקין", "error")
           } else if (!response.ok) {
-            showToast(`שגיאה בבדיקת האישורים: ${response.status}`, "error")
+            showToast(`שגיאה בבדיקת הגדרות RunPod: ${response.status}`, "error")
           } else {
             // Credentials are valid, check endpoint
             const endpointResult = await checkAndCreateEndpoint(token)
@@ -1447,10 +1447,10 @@
               // Save credentials
               setCookie("runpod_token", token, 365 * 24 * 60 * 60) // 1 year
 
-              let successMessage = "האישורים נשמרו בהצלחה"
+              let successMessage = "הגדרות RunPod נשמרו בהצלחה"
               if (endpointResult.needsWait) {
                 successMessage +=
-                  "<br />Endpoint חדש נוצר או עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
+                  "Endpoint חדש נוצר או עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
               }
               showToast(successMessage, "success")
               settingsModal.style.display = "none"
@@ -1477,7 +1477,7 @@
               "error"
             )
           } else {
-            showToast("שגיאה בבדיקת האישורים.\nאנא נסה שוב.", "error")
+            showToast("שגיאה בבדיקת הגדרות RunPod.\nאנא נסה שוב.", "error")
           }
         } finally {
           // Restore button state
@@ -1718,7 +1718,7 @@
         const token = getCookie("runpod_token")
         if (token) {
           formData.append("runpod_token", token)
-          transcriptionArea.value = "משתמש באישורי RunPod מותאמים אישית..."
+          transcriptionArea.value = "משתמש בהגדרות RunPod מותאמות אישית..."
         }
 
         transcribeBtn.disabled = true

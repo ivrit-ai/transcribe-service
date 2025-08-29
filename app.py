@@ -1124,9 +1124,6 @@ async def export_words(job_id: str, request: Request):
     return JSONResponse(all_words)
 
 
-
-
-
 async def process_segment(job_id, segment, duration):
     """Process a single segment and update job results"""
     # Check if the job should be terminated
@@ -1134,20 +1131,16 @@ async def process_segment(job_id, segment, duration):
         log_message(f"Terminating inactive job: {job_id}")
         return False
 
-    # Extract word-level data if available
+    # Extract word-level data
     words_data = []
-    if hasattr(segment, 'words') and segment.words:
-        for word in segment.words:
-            word_data = {
-                "word": clean_some_unicode_from_text(word.word),
-                "start": word.start,
-                "end": word.end,
-                "probability": word.probability,
-            }
-            # Include speaker if available
-            if hasattr(word, 'speaker') and word.speaker is not None:
-                word_data["speaker"] = word.speaker
-            words_data.append(word_data)
+    for word in segment.words:
+        word_data = {
+            "word": clean_some_unicode_from_text(word.word),
+            "start": word.start,
+            "end": word.end,
+            "probability": word.probability,
+        }
+        words_data.append(word_data)
 
     segment_data = {
         "id": segment.extra_data.get("id"),
