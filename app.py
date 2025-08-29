@@ -1100,28 +1100,6 @@ async def download_file(job_id: str, request: Request):
     return FileResponse(temp_files[job_id])
 
 
-@app.get("/export_words/{job_id}")
-async def export_words(job_id: str, request: Request):
-    """Export word-level timestamps as JSON"""
-    if job_id not in job_results:
-        return JSONResponse({"error": "Job not found"}, status_code=404)
-    
-    job_data = job_results[job_id]
-    if job_data["progress"] < 1.0:
-        return JSONResponse({"error": "Job not completed"}, status_code=400)
-    
-    # Extract all words with timestamps
-    all_words = []
-    for segment in job_data.get("results", []):
-        if "words" in segment and segment["words"]:
-            for word in segment["words"]:
-                all_words.append({
-                    "word": word["word"].strip(),
-                    "start": round(word["start"], 3),
-                    "end": round(word["end"], 3)
-                })
-    
-    return JSONResponse(all_words)
 
 
 async def process_segment(job_id, segment, duration):

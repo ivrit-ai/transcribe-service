@@ -2138,28 +2138,30 @@
         }
       })
 
-      exportWordsBtn.addEventListener("click", async function () {
-        if (!currentJobId) {
-          showToast("לא ניתן לייצא - לא נמצא מזהה עבודה", "error")
-          return
-        }
+      exportWordsBtn.addEventListener("click", function () {
+        if (!transcriptionSegments.length) return
 
         try {
-          const response = await fetch(`/export_words/${currentJobId}`)
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`)
-          }
+          const allWords = []
+          transcriptionSegments.forEach((segment) => {
+            if (segment.words) {
+              segment.words.forEach((w) => {
+                allWords.push({
+                  word: w.word.trim(),
+                  start: Number(w.start.toFixed(3)),
+                  end: Number(w.end.toFixed(3)),
+                })
+              })
+            }
+          })
 
-          const wordsData = await response.json()
-
-          const blob = new Blob([JSON.stringify(wordsData, null, 2)], {
+          const blob = new Blob([JSON.stringify(allWords, null, 2)], {
             type: "application/json",
           })
           const url = URL.createObjectURL(blob)
           const a = document.createElement("a")
           a.href = url
           a.download = "words_timestamps.json"
-
           document.body.appendChild(a)
           a.click()
           document.body.removeChild(a)
@@ -2176,7 +2178,8 @@
         }
       })
       menuSrtBtn.addEventListener("click", function () {
-        if (downloadBtn.disabled || !transcriptionSegments.length) return
+        if (!transcriptionSegments.length) return
+
         let srtContent = ""
         transcriptionSegments.forEach((segment, index) => {
           const start = formatTime(segment.start).replace(".", ",")
