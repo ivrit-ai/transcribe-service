@@ -1,905 +1,1743 @@
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="{{ url_for('static', path='favicon.png') }}">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="{{ url_for('static', path='favicon.png') }}" />
     <title>תמלול בעזרת ivrit.ai</title>
     <script src="https://unpkg.com/docx@9.5.1/dist/index.iife.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            background-color: #f0f0f0;
-        }
-        .container {
-            background-color: white;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            text-align: center;
-            width: 80%;
-            max-width: 600px;
-            position: relative;
-        }
-        .settings-btn {
-            position: absolute;
-            top: 1rem;
-            left: 1rem;
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: 0.5rem;
-            border-radius: 50%;
-            transition: background-color 0.2s;
-        }
-        .settings-btn:hover {
-            background-color: #f0f0f0;
-        }
-        .settings-btn svg {
-            width: 24px;
-            height: 24px;
-            color: #666;
-        }
-        .balance-container {
-            display: none;
-            position: absolute;
-            top: 1rem;
-            right: 1rem;
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            padding: 0.75rem 1rem;
-            font-size: 14px;
-            color: #495057;
-            text-align: right;
-            z-index: 10;
-        }
-        .balance-container.visible {
-            display: block;
-        }
-        .balance-label {
-            font-weight: bold;
-            margin-bottom: 0.25rem;
-        }
-        .balance-amount {
-            color: #28a745;
-            font-weight: bold;
-        }
-        .balance-loading {
-            color: #6c757d;
-            font-style: italic;
-        }
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-        }
-        .modal-content {
-            background-color: white;
-            margin: 10% auto;
-            padding: 2rem;
-            border-radius: 8px;
-            width: 80%;
-            max-width: 500px;
-            text-align: right;
-        }
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-        }
-        .close {
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            cursor: pointer;
-            padding: 0;
-            color: #666;
-        }
-        .close:hover {
-            color: #000;
-        }
-        .form-group {
-            margin-bottom: 1rem;
-            text-align: left;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: bold;
-        }
-        .form-group input {
-            width: 100%;
-            padding: 0.5rem;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            font-size: 1rem;
-            box-sizing: border-box;
-            text-align: left;
-            direction: ltr;
-        }
-        .form-group input:focus {
-            outline: none;
-            border-color: #4CAF50;
-        }
-        .modal-buttons {
-            display: flex;
-            justify-content: flex-end;
-            gap: 1rem;
-            margin-top: 1.5rem;
-        }
-        .btn {
-            padding: 0.5rem 1rem;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 1rem;
-        }
-        .btn-primary {
-            background-color: #4CAF50;
-            color: white;
-        }
-        .btn-secondary {
-            background-color: #ccc;
-            color: #333;
-        }
-        .btn:hover {
-            opacity: 0.8;
-        }
-        h1 {
-            margin-bottom: 2rem;
-        }
-        #drop-area {
-            border: 2px dashed #ccc;
-            border-radius: 8px;
-            padding: 2rem;
-            cursor: pointer;
-            margin-bottom: 1rem;
-        }
-        #drop-area.highlight {
-            border-color: #4CAF50;
-            background-color: #e8f5e9;
-        }
-        #file-input {
-            display: none;
-        }
-        #file-name {
-            margin-top: 1rem;
-            font-weight: bold;
-        }
-        #transcribe-btn {
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            padding: 0.5rem 1rem;
-            font-size: 1rem;
-            cursor: pointer;
-            border-radius: 4px;
-            margin-top: 1rem;
-        }
-        #transcribe-btn:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-        #progress-container {
-            width: 100%;
-            background-color: #f0f0f0;
-            border-radius: 4px;
-            margin-top: 1rem;
-            display: none;
-        }
-        #progress-bar {
-            width: 0;
-            height: 20px;
-            background-color: #4CAF50;
-            border-radius: 4px;
-            transition: width 0.3s;
-        }
-        #transcription-container {
-            position: relative;
-            margin-top: 0;
-        }
-        #transcription {
-            width: 100%;
-            height: 200px;
-            border: 1px solid #ccc;
-            padding: 0.5rem;
-            text-align: right;
-            white-space: pre-wrap;
-            overflow-y: auto;
-            resize: none;
-            font-size: 1rem;
-        }
-        .action-buttons {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 10px;
-            margin-top: 1rem;
-            margin-bottom: 0.5rem;
-        }
-        #copy-btn {
-            background-color: transparent;
-            border: none;
-            cursor: pointer;
-            padding: 5px;
-        }
-        #copy-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        #copy-btn svg {
-            width: 20px;
-            height: 20px;
-        }
-        #download-btn {
-            background-color: transparent;
-            border: none;
-            cursor: pointer;
-            padding: 5px;
-            font-size: 20px;
-            line-height: 1;
-        }
-        #download-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        #download-btn svg {
-            width: 20px;
-            height: 20px;
-        }
-        #download-docx-btn {
-            background-color: transparent;
-            border: none;
-            cursor: pointer;
-            padding: 5px;
-        }
-        #download-docx-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        #download-docx-btn svg {
-            width: 20px;
-            height: 20px;
-        }
-        .support-link {
-            margin-top: 0.5rem;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 0.5rem;
-            text-decoration: none;
-            color: #000000;
-            font-weight: bold;
-            transition: opacity 0.2s;
-            flex-direction: row-reverse;
-        }
-        .support-link:hover {
-            opacity: 0.8;
-        }
-        .support-link img {
-            width: 24px;
-            height: 24px;
-        }
-        .links-container {
-            margin-top: 1.5rem;
-            display: flex;
-            justify-content: center;
-            gap: 0.5rem;
-            flex-direction: column;
-            align-items: center;
-        }
-        .contact-link {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 0.5rem;
-            text-decoration: none;
-            color: #2196F3;
-            font-weight: bold;
-            transition: opacity 0.2s;
-            flex-direction: row-reverse;
-        }
-        .contact-link:hover {
-            opacity: 0.8;
-        }
-        .contact-link svg {
-            width: 24px;
-            height: 24px;
-        }
-        .divider {
-            width: 80%;
-            height: 1px;
-            background-color: #e0e0e0;
-            margin: 1rem 0;
-        }
-        .display-options {
-            margin-top: 1rem;
-            display: flex;
-            align-items: center;
-            justify-content: flex-start;
-            gap: 1rem;
-        }
-        .slider-container {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .switch {
-            position: relative;
-            display: inline-block;
-            width: 48px;
-            height: 24px;
-        }
-        .switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-        .slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #ccc;
-            transition: .4s;
-            border-radius: 24px;
-        }
-        .slider:before {
-            position: absolute;
-            content: "";
-            height: 18px;
-            width: 18px;
-            left: 3px;
-            bottom: 3px;
-            background-color: white;
-            transition: .4s;
-            border-radius: 50%;
-        }
-        input:checked + .slider {
-            background-color: #4CAF50;
-        }
-        input:checked + .slider:before {
-            transform: translateX(24px);
-        }
+      :root {
+        --bg-color: #f5f5f5;
+        --container-bg: #ffffff;
+        --text-color: #333333;
+        --border-color: #e0e0e0;
+        --primary-color: #4caf50;
+        --secondary-color: #f8f9fa;
+        --input-bg: #ffffff;
+      }
+
+      [data-theme="dark"] {
+        --bg-color: #1a1a1a;
+        --container-bg: #2d2d2d;
+        --text-color: #e0e0e0;
+        --border-color: #555555;
+        --primary-color: #66bb6a;
+        --secondary-color: #3a3a3a;
+        --input-bg: #1e1e1e;
+      }
+
+      body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+        background-color: var(--bg-color);
+        color: var(--text-color);
+      }
+      .container {
+        background-color: var(--container-bg);
+        padding: 2rem;
+        border-radius: 16px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        text-align: center;
+        width: 80%;
+        max-width: 600px;
+        position: relative;
+      }
+      .settings-btn {
+        position: absolute;
+        top: 1rem;
+        left: 1rem;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 50%;
+        transition: background-color 0.2s;
+      }
+      .settings-btn:hover {
+        background-color: #f0f0f0;
+      }
+      .settings-btn svg {
+        width: 24px;
+        height: 24px;
+        color: #666;
+      }
+      .theme-toggle {
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 50%;
+        transition: background-color 0.2s;
+      }
+      .theme-toggle:hover {
+        background-color: #f0f0f0;
+      }
+      .theme-toggle svg,
+      .theme-toggle i[data-lucide] {
+        width: 24px;
+        height: 24px;
+        color: #666;
+      }
+      .balance-container {
+        display: none;
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        font-size: 14px;
+        color: #495057;
+        text-align: right;
+        z-index: 10;
+      }
+      .balance-container.visible {
+        display: block;
+      }
+      .balance-label {
+        font-weight: bold;
+        margin-bottom: 0.25rem;
+      }
+      .balance-amount {
+        color: #28a745;
+        font-weight: bold;
+      }
+      .balance-loading {
+        color: #6c757d;
+        font-style: italic;
+      }
+      .modal .balance-container {
+        position: relative;
+        top: 0;
+        right: 0;
+        margin-top: 0.9rem;
+        z-index: 1;
+        background: linear-gradient(
+          135deg,
+          var(--input-bg) 0%,
+          rgba(0, 0, 0, 0) 100%
+        );
+        border: 1px solid var(--border-color);
+        display: none;
+        padding: 0.65rem 0.85rem;
+        border-radius: 10px;
+        font-size: 0.9rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+        direction: rtl;
+        text-align: right;
+      }
+      .modal .balance-container.visible {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.6rem;
+        width: fit-content;
+        white-space: nowrap;
+      }
+      .balance-icon svg {
+        width: 20px;
+        height: 20px;
+        color: var(--primary-color);
+      }
+      .balance-text {
+        display: flex;
+        align-items: baseline;
+        gap: 0.4rem;
+      }
+      .modal .balance-label {
+        margin: 0;
+        font-weight: 600;
+        color: var(--text-color);
+      }
+      .modal .balance-amount {
+        font-size: 0.95rem;
+      }
+      .modal {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+      }
+      .modal.show {
+        display: block;
+      }
+      .modal-content {
+        background-color: var(--container-bg);
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 480px;
+        max-height: 90vh;
+        overflow-y: auto;
+        text-align: right;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+      }
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.25rem;
+        padding-bottom: 0.75rem;
+      }
+      .modal-header h2 {
+        margin: 0;
+        font-size: 1.4rem;
+        color: var(--text-color);
+      }
+      .close {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 0;
+        color: var(--text-color);
+      }
+      .close:hover {
+        color: var(--primary-color);
+      }
+      .form-group {
+        margin-bottom: 1rem;
+        text-align: left;
+      }
+      .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: bold;
+        color: var(--text-color);
+      }
+      .form-group input {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        font-size: 1rem;
+        box-sizing: border-box;
+        text-align: left;
+        direction: ltr;
+        background-color: var(--input-bg);
+        color: var(--text-color);
+      }
+      .form-group input:focus {
+        outline: none;
+        border-color: var(--primary-color);
+      }
+      .form-help a {
+        color: var(--primary-color);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .form-help a:hover {
+        text-decoration: underline;
+      }
+      .modal-buttons {
+        display: flex;
+        justify-content: flex-start;
+        gap: 0.75rem;
+        margin-top: 1.5rem;
+        padding-top: 1rem;
+      }
+      .btn {
+        padding: 0.6rem 1.2rem;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+        min-height: 40px;
+      }
+      .btn-primary {
+        background-color: var(--primary-color);
+        color: white;
+      }
+      .btn-secondary {
+        background-color: var(--secondary-color);
+        color: var(--text-color);
+        border: 1px solid var(--border-color);
+      }
+      .btn-secondary:hover {
+        background-color: var(--container-bg);
+        border-color: var(--primary-color);
+        opacity: 1;
+      }
+      .btn:hover {
+        opacity: 0.85;
+      }
+      .btn-primary:hover {
+        opacity: 0.9;
+      }
+
+      .settings-section {
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border-color);
+      }
+      .settings-section:last-of-type {
+        border-bottom: none;
+        margin-bottom: 0.5rem;
+      }
+      .settings-section h3 {
+        font-size: 1.1rem;
+        color: var(--text-color);
+        margin: 0 0 0.75rem 0;
+        font-weight: 600;
+        text-align: right;
+      }
+      .form-label {
+        display: block;
+        font-weight: 500;
+        color: var(--text-color);
+        margin-bottom: 0.5rem;
+        text-align: right;
+        font-size: 0.95rem;
+      }
+      .form-help {
+        display: block;
+        font-size: 0.8rem;
+        color: var(--text-color);
+        opacity: 0.65;
+        margin-top: 0.25rem;
+        text-align: right;
+        line-height: 1.3;
+      }
+      .radio-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .radio-option {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.6rem 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        background-color: var(--secondary-color);
+        direction: rtl;
+        min-height: 44px;
+        position: relative;
+      }
+      .radio-option:hover {
+        border-color: var(--primary-color);
+        background-color: var(--container-bg);
+      }
+      .radio-option input[type="radio"] {
+        margin: 0;
+        width: 16px;
+        height: 16px;
+        accent-color: var(--primary-color);
+        flex-shrink: 0;
+        position: absolute;
+        left: 0.75rem;
+      }
+      .radio-option .radio-content {
+        flex: 1;
+        text-align: right;
+        direction: rtl;
+        padding-left: 2rem;
+      }
+      .radio-option .radio-text {
+        font-weight: 500;
+        color: var(--text-color);
+        font-size: 0.9rem;
+        display: block;
+        margin-bottom: 0.1rem;
+        text-align: right;
+        direction: rtl;
+      }
+      .radio-option small {
+        font-size: 0.75rem;
+        color: var(--text-color);
+        opacity: 0.6;
+        line-height: 1.2;
+        text-align: right;
+        direction: rtl;
+      }
+      .radio-option input[type="radio"]:checked ~ .radio-content .radio-text {
+        color: var(--primary-color);
+        font-weight: 600;
+      }
+      h1 {
+        margin-bottom: 2rem;
+      }
+      #drop-area {
+        border: 2px dashed var(--border-color);
+        border-radius: 12px;
+        padding: 2rem;
+        cursor: pointer;
+        margin-bottom: 1rem;
+        background: linear-gradient(
+          135deg,
+          var(--secondary-color) 0%,
+          rgba(76, 175, 80, 0.12) 50%,
+          var(--secondary-color) 100%
+        );
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+      }
+      #drop-area::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+          45deg,
+          transparent 40%,
+          rgba(76, 175, 80, 0.03) 50%,
+          transparent 60%
+        );
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+      #drop-area:hover::before {
+        opacity: 1;
+      }
+      #drop-area:hover {
+        border-color: var(--primary-color);
+        background: linear-gradient(
+          135deg,
+          rgba(76, 175, 80, 0.08) 0%,
+          rgba(76, 175, 80, 0.15) 50%,
+          rgba(76, 175, 80, 0.08) 100%
+        );
+        transform: translateY(-2px);
+      }
+      #drop-area.highlight {
+        border-color: var(--primary-color);
+        background: linear-gradient(
+          135deg,
+          rgba(76, 175, 80, 0.1) 0%,
+          rgba(76, 175, 80, 0.2) 50%,
+          rgba(76, 175, 80, 0.1) 100%
+        );
+        transform: translateY(-3px);
+      }
+      #file-input {
+        display: none;
+      }
+      #file-name {
+        margin-top: 1rem;
+        font-weight: bold;
+      }
+      #transcribe-btn {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+        cursor: pointer;
+        border-radius: 8px;
+        margin-top: 1rem;
+        transition: all 0.3s ease;
+      }
+      #transcribe-btn:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+      }
+      #transcribe-btn:disabled {
+        background-color: var(--border-color);
+        cursor: not-allowed;
+      }
+      #progress-container {
+        width: 100%;
+        background-color: #f0f0f0;
+        border-radius: 4px;
+        margin-top: 1rem;
+        display: none;
+      }
+      #progress-bar {
+        width: 0;
+        height: 20px;
+        background-color: #4caf50;
+        border-radius: 4px;
+        transition: width 0.3s;
+      }
+      #transcription-container {
+        position: relative;
+        margin: 1rem auto 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      #transcription {
+        width: 100%;
+        height: 200px;
+        border: 2px solid var(--border-color);
+        padding: 1rem;
+        text-align: right;
+        white-space: pre-wrap;
+        overflow-y: auto;
+        resize: vertical;
+        font-size: 1rem;
+        border-radius: 8px;
+        background-color: var(--input-bg);
+        color: var(--text-color);
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+      }
+      .action-buttons {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 1rem;
+        margin-bottom: 0.5rem;
+      }
+      .action-buttons button {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .action-buttons button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .download-menu {
+        position: relative;
+      }
+      .download-menu > button#download-menu-btn {
+        position: relative;
+      }
+      .download-menu > button#download-menu-btn:disabled {
+        cursor: not-allowed;
+      }
+      .download-menu {
+        display: inline-block;
+      }
+      .download-menu::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        height: 6px;
+      }
+      .download-dropdown {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 0;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 0.4rem 0;
+        min-width: 160px;
+        z-index: 200;
+        direction: rtl;
+        pointer-events: auto;
+      }
+      .download-menu:hover {
+        overflow: visible;
+      }
+      .download-menu:hover .download-dropdown {
+        display: block;
+      }
+      .download-menu:hover .download-dropdown {
+        display: block;
+      }
+      .download-dropdown button {
+        background: none;
+        border: none;
+        width: 100%;
+        text-align: right;
+        padding: 0.45rem 0.9rem;
+        cursor: pointer;
+        font-size: 0.8rem;
+        color: var(--text-color);
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        direction: rtl;
+      }
+      .download-dropdown-header {
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        padding: 0.35rem 0.9rem 0.25rem;
+        color: var(--text-color);
+        opacity: 0.7;
+        pointer-events: none;
+        border-bottom: 1px solid var(--border-color);
+        margin-bottom: 0.2rem;
+      }
+      .download-dropdown button:hover {
+        background: var(--secondary-color);
+        color: var(--primary-color);
+      }
+      .download-dropdown button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .hidden-download-original {
+        display: none !important;
+      }
+      #copy-btn {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #copy-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      #copy-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+      #download-menu-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+      #download-btn {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+      }
+      #download-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      #download-docx-btn {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #download-docx-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      #download-docx-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+      .support-link {
+        margin-top: 0.5rem;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+        text-decoration: none;
+        color: #000000;
+        font-weight: bold;
+        transition: opacity 0.2s;
+        flex-direction: row-reverse;
+      }
+      .support-link:hover {
+        opacity: 0.8;
+      }
+      .support-link img {
+        width: 24px;
+        height: 24px;
+      }
+      .links-container {
+        margin-top: 1.5rem;
+        display: flex;
+        justify-content: center;
+        gap: 0.5rem;
+        flex-direction: column;
+        align-items: center;
+      }
+      .contact-link {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+        text-decoration: none;
+        color: #2196f3;
+        font-weight: bold;
+        transition: opacity 0.2s;
+        flex-direction: row-reverse;
+      }
+      .contact-link:hover {
+        opacity: 0.8;
+      }
+      .contact-link svg {
+        width: 24px;
+        height: 24px;
+      }
+      .divider {
+        width: 80%;
+        height: 1px;
+        background-color: #e0e0e0;
+        margin: 1rem 0;
+      }
+      .display-options {
+        margin-top: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 1rem;
+      }
+      .slider-container {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 48px;
+        height: 24px;
+      }
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.4s;
+        border-radius: 24px;
+      }
+      .slider:before {
+        position: absolute;
+        content: "";
+        height: 18px;
+        width: 18px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: 0.4s;
+        border-radius: 50%;
+      }
+      input:checked + .slider {
+        background-color: #4caf50;
+      }
+      input:checked + .slider:before {
+        transform: translateX(24px);
+      }
+
+      .toast-container {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 2000;
+      }
+      .toast {
+        background-color: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem 1.5rem;
+        margin-bottom: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transform: translateX(400px);
+        opacity: 0;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        min-width: 300px;
+        max-width: 420px;
+        direction: rtl;
+        text-align: right;
+        line-height: 1.4;
+        white-space: normal;
+      }
+      .toast.show {
+        transform: translateX(0);
+        opacity: 1;
+      }
+      .toast.success {
+        border-left: 4px solid var(--primary-color);
+      }
+      .toast.error {
+        border-left: 4px solid #f44336;
+      }
+      .toast-message {
+        flex: 1;
+        color: var(--text-color);
+        white-space: normal;
+      }
+
+      .file-preview {
+        display: none;
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 1rem;
+        text-align: right;
+      }
+      .file-preview.show {
+        display: block;
+      }
+      .file-info {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-direction: row-reverse;
+      }
+      .file-details {
+        flex: 1;
+        text-align: left;
+      }
+      .file-details strong {
+        display: block;
+        margin-bottom: 0.5rem;
+        color: var(--text-color);
+      }
+      .file-size {
+        font-size: 0.9rem;
+        color: var(--text-color);
+        opacity: 0.7;
+      }
+      .remove-file-btn {
+        background-color: #f2554a;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: all 0.3s ease;
+      }
+      .remove-file-btn:hover {
+        background-color: #f6463a;
+        transform: translateY(-1px);
+      }
+      .site-footer {
+        margin-top: 2rem;
+        font-size: 0.75rem;
+        color: #777;
+        text-align: center;
+        direction: rtl;
+      }
+      [data-theme="dark"] .site-footer {
+        color: #aaa;
+      }
+      .site-footer a {
+        color: var(--primary-color);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .site-footer a:hover {
+        text-decoration: underline;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
+    <div class="toast-container" id="toast-container"></div>
+
     <div class="container">
-        <div class="balance-container" id="balance-container">
-            <div class="balance-label">יתרה:</div>
-            <div class="balance-amount" id="balance-amount">טוען...</div>
-        </div>
-        <button class="settings-btn" id="settings-btn" title="הגדרות">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1 1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
-        </button>
-        <h1>תמלול בעזרת ivrit.ai</h1>
-        <div id="drop-area">
-            <p>גרור קובץ לכאן או לחץ לבחירת קובץ</p>
-            <input type="file" id="file-input" accept="audio/*,video/*">
-        </div>
-        <div id="file-name"></div>
-        <button id="transcribe-btn" disabled>תמלל</button>
-        <div id="progress-container">
-            <div id="progress-bar"></div>
-        </div>
-        <div class="action-buttons">
-            <button id="copy-btn" disabled title="העתק את הטקסט">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                </svg>
-            </button>
-            <button id="download-btn" disabled title="הורד כתוביות">
-                🎬
-            </button>
-            <button id="download-docx-btn" disabled title="הורד כמסמך Word">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
-                    <polyline points="14,2 14,8 20,8"/>
-                    <line x1="16" y1="13" x2="8" y2="13"/>
-                    <line x1="16" y1="17" x2="8" y2="17"/>
-                    <polyline points="10,9 9,9 8,9"/>
-                </svg>
-            </button>
-        </div>
-        <div id="transcription-container">
-            <textarea id="transcription" readonly></textarea>
-        </div>
-        <div class="display-options">
-            <span>טקסט רציף</span>
-            <div class="slider-container">
-                <label class="switch">
-                    <input type="checkbox" id="segment-toggle" checked>
-                    <span class="slider"></span>
-                </label>
+      <button
+        class="theme-toggle"
+        id="theme-toggle"
+        onclick="toggleTheme()"
+        title="החלף מצב תאורה"
+        aria-label="החלף מצב תאורה"
+      >
+        <i data-lucide="sun" id="sun-icon"></i>
+        <i data-lucide="moon" id="moon-icon" style="display: none"></i>
+      </button>
+      <button
+        class="settings-btn"
+        id="settings-btn"
+        title="הגדרות"
+        aria-label="הגדרות"
+      >
+        <i data-lucide="settings"></i>
+      </button>
+      <h1>תמלול בעזרת ivrit.ai</h1>
+      <div id="drop-area">
+        <p>גרור קובץ לכאן או לחץ לבחירת קובץ</p>
+        <input type="file" id="file-input" accept="audio/*,video/*" />
+      </div>
+
+      <div class="file-preview" id="file-preview">
+        <div class="file-info">
+          <div class="file-details">
+            <strong id="preview-file-name">קובץ נבחר</strong>
+            <div class="file-size" id="preview-file-size" dir="ltr">
+              גודל קובץ
             </div>
-            <span>פסקאות נפרדות</span>
+          </div>
+          <button class="remove-file-btn" onclick="removeFile()">
+            הסר קובץ
+          </button>
         </div>
-        <div class="display-options">
-            <label style="display: flex; align-items: center; gap: 8px; font-size: 16px;">
-                <input type="checkbox" id="timecode-toggle" style="margin: 0;">
-                <span>הוסף קודי זמן</span>
-            </label>
+      </div>
+
+      <div id="file-name"></div>
+      <button id="transcribe-btn" disabled>תמלל</button>
+      <div id="progress-container">
+        <div id="progress-bar"></div>
+      </div>
+      <div class="action-buttons">
+        <button
+          id="copy-btn"
+          disabled
+          title="העתק את הטקסט"
+          aria-label="העתק טקסט"
+        >
+          <i data-lucide="copy"></i>
+        </button>
+
+        <div class="download-menu">
+          <button
+            id="download-menu-btn"
+            disabled
+            title="הורדות"
+            aria-label="הורדות"
+          >
+            <i data-lucide="download"></i>
+          </button>
+          <div class="download-dropdown">
+            <div class="download-dropdown-header">הורד כ...</div>
+            <button type="button" data-action="vtt" disabled id="menu-vtt">
+              VTT
+            </button>
+            <button type="button" data-action="srt" disabled id="menu-srt">
+              SRT
+            </button>
+            <button type="button" data-action="docx" disabled id="menu-docx">
+              Word DOCX
+            </button>
+            <button type="button" data-action="json" disabled id="menu-json">
+              JSON
+            </button>
+          </div>
         </div>
-        <div class="links-container">
-            <a href="mailto:info@ivrit.ai" class="contact-link">
-                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
-                    <polyline points="22,6 12,13 2,6"/>
-                </svg>
-                רוצים ליצור קשר? אנחנו כאן
-            </a>
-            <a href="https://www.patreon.com/ivrit_ai/membership" target="_blank" class="support-link">
-                <img src="{{ url_for('static', path='patreon.png') }}" alt="Patreon">
-                רוצים לתרום לנו?
-            </a>
-        </div>
+
+        <!-- Hidden original buttons kept for existing JS logic -->
+        <button
+          id="download-btn"
+          class="hidden-download-original"
+          disabled
+          title="הורד כתוביות"
+        >
+          🎬
+        </button>
+        <button
+          id="download-docx-btn"
+          class="hidden-download-original"
+          disabled
+          title="הורד כמסמך Word"
+        ></button>
+        <button
+          id="export-words-btn"
+          class="hidden-download-original"
+          disabled
+          title="ייצא נתוני תמלול מלאים (JSON)"
+        ></button>
+      </div>
+      <div id="transcription-container">
+        <textarea id="transcription" readonly></textarea>
+      </div>
+      <div class="links-container">
+        <a href="mailto:info@ivrit.ai" class="contact-link">
+          <i data-lucide="mail"></i>
+          רוצים ליצור קשר? אנחנו כאן
+        </a>
+        <a
+          href="https://www.patreon.com/ivrit_ai/membership"
+          target="_blank"
+          class="support-link"
+        >
+          <img
+            src="{{ url_for('static', path='patreon.png') }}"
+            alt="Patreon"
+          />
+          רוצים לתרום לנו?
+        </a>
+      </div>
+      <div class="site-footer">
+        <a
+          href="https://www.ivrit.ai/en/privacy/"
+          target="_blank"
+          rel="noopener"
+          >מדיניות פרטיות ותנאי שימוש</a
+        >
+      </div>
     </div>
 
-    <!-- Settings Modal -->
     <div id="settings-modal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>הגדרות RunPod</h2>
-                <button class="close" id="close-settings">&times;</button>
-            </div>
-            <form id="settings-form">
-                <div class="form-group">
-                    <label for="runpod-token">RunPod API Token:</label>
-                    <input type="password" id="runpod-token" name="runpod-token" placeholder="הכנס את ה-API Token שלך">
-                </div>
-                <div class="modal-buttons">
-                    <button type="button" class="btn btn-secondary" id="clear-settings">נקה הגדרות</button>
-                    <button type="button" class="btn btn-secondary" id="cancel-settings">ביטול</button>
-                    <button type="submit" class="btn btn-primary">שמור</button>
-                </div>
-            </form>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>הגדרות</h2>
+          <button class="close" id="close-settings">&times;</button>
         </div>
+        <form id="settings-form">
+          <div class="settings-section">
+            <h3>הגדרות RunPod</h3>
+            <div class="form-group">
+              <label for="runpod-token" dir="ltr">RunPod API Key:</label>
+              <input
+                type="password"
+                id="runpod-token"
+                name="runpod-token"
+                placeholder="הכנס את ה-API Key שלך"
+                style="direction: rtl; text-align: right"
+              />
+              <small class="form-help"
+                >הזנת מפתח פרטי מאפשרת שימוש במשאבים פרטיים לעיבוד מהיר יותר.<br />
+                <a
+                  href="https://youtu.be/xr8RQRFERLs?si=ibHcP6m0wdUh-gHU"
+                  target="_blank"
+                  rel="noopener"
+                  >לצפייה בסרטון הסבר</a
+                ></small
+              >
+            </div>
+            <div
+              class="balance-container"
+              id="balance-container"
+              aria-live="polite"
+            >
+              <div class="balance-icon" aria-hidden="true">
+                <i data-lucide="credit-card"></i>
+              </div>
+              <div class="balance-text">
+                <span class="balance-label">יתרה</span>
+                <span class="balance-amount" id="balance-amount">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>הגדרות תצוגה</h3>
+
+            <div class="form-group">
+              <label class="form-label">פורמט הטקסט:</label>
+              <div class="radio-group">
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="text-format"
+                    value="continuous"
+                    id="continuous-text"
+                    checked
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">טקסט רציף</span>
+                    <small>כל הטקסט ברצף אחד</small>
+                  </div>
+                </label>
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="text-format"
+                    value="segments"
+                    id="segment-text"
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">פסקאות נפרדות</span>
+                    <small>טקסט מחולק לפסקאות</small>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">קודי זמן:</label>
+              <div class="radio-group">
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="timestamp-format"
+                    value="none"
+                    id="no-timestamps"
+                    checked
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">ללא קודי זמן</span>
+                    <small>רק הטקסט ללא זמנים</small>
+                  </div>
+                </label>
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="timestamp-format"
+                    value="segments"
+                    id="segment-timestamps"
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">כולל קודי זמן</span>
+                    <small>זמני התחלה וסיום, לפי פורמט הטקסט</small>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-buttons">
+            <button type="submit" class="btn btn-primary">שמור</button>
+            <button
+              type="button"
+              class="btn btn-secondary"
+              id="cancel-settings"
+            >
+              ביטול
+            </button>
+            <button type="button" class="btn btn-secondary" id="clear-settings">
+              נקה הגדרות
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <script>
-        const dropArea = document.getElementById('drop-area');
-        const fileInput = document.getElementById('file-input');
-        const fileName = document.getElementById('file-name');
-        const transcribeBtn = document.getElementById('transcribe-btn');
-        const progressContainer = document.getElementById('progress-container');
-        const progressBar = document.getElementById('progress-bar');
-        const transcriptionArea = document.getElementById('transcription');
-        const copyBtn = document.getElementById('copy-btn');
-        const downloadBtn = document.getElementById('download-btn');
-        const downloadDocxBtn = document.getElementById('download-docx-btn');
-        const segmentToggle = document.getElementById('segment-toggle');
-        const timecodeToggle = document.getElementById('timecode-toggle');
-        const settingsBtn = document.getElementById('settings-btn');
-        const settingsModal = document.getElementById('settings-modal');
-        const closeSettings = document.getElementById('close-settings');
-        const cancelSettings = document.getElementById('cancel-settings');
-        const clearSettings = document.getElementById('clear-settings');
-        const settingsForm = document.getElementById('settings-form');
-        const runpodTokenInput = document.getElementById('runpod-token');
+      // Initialize Lucide icons after DOM is parsed
+      document.addEventListener("DOMContentLoaded", () => {
+        if (window.lucide && typeof window.lucide.createIcons === "function") {
+          window.lucide.createIcons()
+        }
+      })
+      const dropArea = document.getElementById("drop-area")
+      const fileInput = document.getElementById("file-input")
+      const fileName = document.getElementById("file-name")
+      const transcribeBtn = document.getElementById("transcribe-btn")
+      const progressContainer = document.getElementById("progress-container")
+      const progressBar = document.getElementById("progress-bar")
+      const transcriptionArea = document.getElementById("transcription")
+      const copyBtn = document.getElementById("copy-btn")
+      const downloadBtn = document.getElementById("download-btn")
+      const downloadDocxBtn = document.getElementById("download-docx-btn")
+      const exportWordsBtn = document.getElementById("export-words-btn")
+      // New unified download menu elements
+      const downloadMenuBtn = document.getElementById("download-menu-btn")
+      const menuVttBtn = document.getElementById("menu-vtt")
+      const menuSrtBtn = document.getElementById("menu-srt")
+      const menuDocxBtn = document.getElementById("menu-docx")
+      const menuJsonBtn = document.getElementById("menu-json")
+      const settingsBtn = document.getElementById("settings-btn")
+      const settingsModal = document.getElementById("settings-modal")
+      const closeSettings = document.getElementById("close-settings")
+      const cancelSettings = document.getElementById("cancel-settings")
+      const clearSettings = document.getElementById("clear-settings")
+      const settingsForm = document.getElementById("settings-form")
+      const runpodTokenInput = document.getElementById("runpod-token")
 
-        let selectedFile = null;
-        const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024; // 300MB in bytes
-        const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024; // 3GB in bytes
-        let transcriptionSegments = [];
-        let activeTranscription = false;
+      let selectedFile = null
+      const MAX_FILE_SIZE = 200 * 1024 * 1024 // 200MB in bytes
+      let transcriptionSegments = []
+      let activeTranscription = false
+      let currentJobId = null
 
-        // Load settings from cookies
-        function loadSettings() {
-            const token = getCookie('runpod_token');
-            if (token) runpodTokenInput.value = token;
-            
-            // Update settings button appearance if credentials are saved
-            updateSettingsButtonIndicator();
+      let displaySettings = {
+        textFormat: "continuous",
+        timestampFormat: "none",
+      }
+
+      function showToast(message, type = "success") {
+        const toastContainer = document.getElementById("toast-container")
+        const toast = document.createElement("div")
+        toast.className = `toast ${type}`
+
+        // Support multi-line messages using \n
+        const formatted = (message || "").toString().replace(/\n/g, "<br />")
+        toast.innerHTML = `
+          <span class="toast-message">${formatted}</span>
+        `
+
+        toastContainer.appendChild(toast)
+
+        setTimeout(() => toast.classList.add("show"), 10)
+
+        // Duration: errors stay longer
+        const duration = type === "error" ? 10000 : 3000
+        setTimeout(() => {
+          toast.classList.remove("show")
+          setTimeout(() => toast.remove(), 300)
+        }, duration)
+      }
+
+      function showFilePreview(file) {
+        const preview = document.getElementById("file-preview")
+        const fileName = document.getElementById("preview-file-name")
+        const fileSize = document.getElementById("preview-file-size")
+
+        fileName.textContent = file.name
+        fileSize.textContent = formatFileSize(file.size)
+
+        preview.classList.add("show")
+        document.getElementById("file-name").style.display = "none"
+      }
+
+      function removeFile() {
+        selectedFile = null
+        transcribeBtn.disabled = true
+        document.getElementById("file-preview").classList.remove("show")
+        document.getElementById("file-name").style.display = "block"
+        document.getElementById("file-name").textContent = ""
+        fileInput.value = ""
+        showToast("קובץ הוסר בהצלחה", "success")
+      }
+
+      function formatFileSize(bytes) {
+        if (bytes === 0) return "0 Bytes"
+        const k = 1024
+        const sizes = ["Bytes", "KB", "MB", "GB"]
+        const i = Math.floor(Math.log(bytes) / Math.log(k))
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
+      }
+
+      function toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute("data-theme")
+        const newTheme = currentTheme === "dark" ? "light" : "dark"
+        document.documentElement.setAttribute("data-theme", newTheme)
+        localStorage.setItem("theme", newTheme)
+        updateThemeIcon(newTheme)
+      }
+
+      function updateThemeIcon(theme) {
+        const sunIcon = document.getElementById("sun-icon")
+        const moonIcon = document.getElementById("moon-icon")
+        const isDark = theme === "dark"
+        sunIcon.style.display = isDark ? "none" : "inline-block"
+        moonIcon.style.display = isDark ? "inline-block" : "none"
+      }
+
+      // Load saved theme
+      const savedTheme = localStorage.getItem("theme") || "light"
+      document.documentElement.setAttribute("data-theme", savedTheme)
+      updateThemeIcon(savedTheme)
+
+      // Load saved display settings
+      const savedDisplaySettings = localStorage.getItem("displaySettings")
+      if (savedDisplaySettings) {
+        displaySettings = {
+          ...displaySettings,
+          ...JSON.parse(savedDisplaySettings),
+        }
+      }
+
+      // Load settings from cookies and localStorage
+      function loadSettings() {
+        // Load RunPod token
+        const token = getCookie("runpod_token")
+        if (token) runpodTokenInput.value = token
+
+        // Load display settings from localStorage
+        const savedSettings = localStorage.getItem("displaySettings")
+        if (savedSettings) {
+          displaySettings = { ...displaySettings, ...JSON.parse(savedSettings) }
         }
 
-        // Update settings button to show if credentials are saved
-        function updateSettingsButtonIndicator() {
-            const token = getCookie('runpod_token');
-            const hasCredentials = token;
-            
-            if (hasCredentials) {
-                settingsBtn.style.color = '#4CAF50';
-                settingsBtn.title = 'הגדרות (אישורי RunPod שמורים)';
+        // Update form controls to match current settings
+        document.getElementById("continuous-text").checked =
+          displaySettings.textFormat === "continuous"
+        document.getElementById("segment-text").checked =
+          displaySettings.textFormat === "segments"
+        document.getElementById("no-timestamps").checked =
+          displaySettings.timestampFormat === "none"
+        document.getElementById("segment-timestamps").checked =
+          displaySettings.timestampFormat === "segments"
+
+        // Update settings button appearance if credentials are saved
+        updateSettingsButtonIndicator()
+      }
+
+      // Update settings button to show if credentials are saved
+      function updateSettingsButtonIndicator() {
+        const token = getCookie("runpod_token")
+        const hasCredentials = token
+
+        if (hasCredentials) {
+          settingsBtn.style.color = "#4CAF50"
+          settingsBtn.title = "הגדרות (הגדרות RunPod שמורות)"
+        } else {
+          settingsBtn.style.color = "#666"
+          settingsBtn.title = "הגדרות"
+        }
+      }
+
+      // Save settings to cookies and localStorage
+      async function saveSettings() {
+        // Save display settings
+        const textFormat =
+          document.querySelector('input[name="text-format"]:checked')?.value ||
+          "continuous"
+        const timestampFormat =
+          document.querySelector('input[name="timestamp-format"]:checked')
+            ?.value || "none"
+
+        displaySettings.textFormat = textFormat
+        displaySettings.timestampFormat = timestampFormat
+        localStorage.setItem("displaySettings", JSON.stringify(displaySettings))
+
+        // Update transcription display if there are results
+        if (transcriptionSegments.length > 0) {
+          updateTranscriptionDisplay()
+        }
+
+        const token = runpodTokenInput.value.trim()
+
+        // If token is empty, just clear the RunPod credentials but keep display settings
+        if (!token) {
+          deleteCookie("runpod_token")
+          settingsModal.style.display = "none"
+          settingsModal.classList.remove("show")
+          updateSettingsButtonIndicator()
+          showToast("הגדרות נשמרו בהצלחה", "success")
+          return
+        }
+
+        // Show loading state
+        const saveBtn = document.querySelector(
+          '#settings-form button[type="submit"]'
+        )
+        const originalText = saveBtn.textContent
+        saveBtn.textContent = "בודק..."
+        saveBtn.disabled = true
+
+        try {
+          // Verify credentials by checking balance
+          const response = await fetch(
+            `/balance?runpod_token=${encodeURIComponent(token)}`
+          )
+          const data = await response.json()
+
+          if (!response.ok) {
+            showToast(
+              `שגיאה בבדיקת הגדרות RunPod:\n${response.status}: ${data.error}`,
+              "error"
+            )
+          } else {
+            // Credentials are valid, check endpoint
+            const endpointResult = await checkAndCreateEndpoint(token)
+
+            if (endpointResult.success) {
+              // Save credentials
+              setCookie("runpod_token", token, 365 * 24 * 60 * 60) // 1 year
+
+              let successMessage = "הגדרות RunPod נשמרו בהצלחה"
+              if (endpointResult.needsWait) {
+                successMessage +=
+                  "Endpoint חדש נוצר או עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
+              }
+              showToast(successMessage, "success")
+              settingsModal.style.display = "none"
+              settingsModal.classList.remove("show")
+              updateSettingsButtonIndicator()
+              checkBalance() // Update balance display
             } else {
-                settingsBtn.style.color = '#666';
-                settingsBtn.title = 'הגדרות';
+              showToast(
+                `שגיאה בבדיקת ה-endpoint:\n${
+                  endpointResult.error || "לא ניתן לבדוק או ליצור endpoint"
+                }`,
+                "error"
+              )
             }
+          }
+        } catch (error) {
+          console.error("Error verifying credentials:", error)
+          if (
+            error.name === "TypeError" &&
+            error.message.includes("Failed to fetch")
+          ) {
+            showToast(
+              "שגיאה: לא ניתן להתחבר לשרת RunPod.\nאנא בדוק את החיבור לאינטרנט ונסה שוב.",
+              "error"
+            )
+          } else {
+            showToast(`שגיאה בבדיקת הגדרות RunPod.\n ${error.message}`, "error")
+          }
+        } finally {
+          // Restore button state
+          saveBtn.textContent = originalText
+          saveBtn.disabled = false
+        }
+      }
+
+      // Clear all settings
+      function clearAllSettings() {
+        // Clear RunPod settings
+        deleteCookie("runpod_token")
+        runpodTokenInput.value = ""
+
+        // Clear display settings
+        displaySettings = {
+          textFormat: "continuous",
+          timestampFormat: "none",
+        }
+        localStorage.removeItem("displaySettings")
+
+        // Reset form controls to defaults
+        document.getElementById("continuous-text").checked = true
+        document.getElementById("segment-text").checked = false
+        document.getElementById("no-timestamps").checked = true
+        document.getElementById("segment-timestamps").checked = false
+
+        // Update display if there are results
+        if (transcriptionSegments.length > 0) {
+          updateTranscriptionDisplay()
         }
 
-        // Save settings to cookies
-        async function saveSettings() {
-            const token = runpodTokenInput.value.trim();
-            
-            // If token is empty, just clear the cookies
-            if (!token) {
-                deleteCookie('runpod_token');
-                settingsModal.style.display = 'none';
-                updateSettingsButtonIndicator();
-                return;
+        showToast("כל ההגדרות נמחקו בהצלחה", "success")
+        settingsModal.style.display = "none"
+        settingsModal.classList.remove("show")
+        updateSettingsButtonIndicator()
+
+        // Hide balance container when credentials are cleared
+        const balanceContainer = document.getElementById("balance-container")
+        balanceContainer.classList.remove("visible")
+      }
+
+      // Cookie utility functions
+      function setCookie(name, value, days) {
+        const expires = new Date()
+        expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000)
+        document.cookie =
+          name + "=" + value + ";expires=" + expires.toUTCString() + ";path=/"
+      }
+
+      function getCookie(name) {
+        const nameEQ = name + "="
+        const ca = document.cookie.split(";")
+        for (let i = 0; i < ca.length; i++) {
+          let c = ca[i]
+          while (c.charAt(0) === " ") c = c.substring(1, c.length)
+          if (c.indexOf(nameEQ) === 0)
+            return c.substring(nameEQ.length, c.length)
+        }
+        return null
+      }
+
+      function deleteCookie(name) {
+        document.cookie =
+          name + "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;"
+      }
+
+      // Check for RunPod credentials and fetch balance via backend API
+      async function checkBalance() {
+        const token = getCookie("runpod_token")
+
+        if (token) {
+          const balanceContainer = document.getElementById("balance-container")
+          const balanceAmount = document.getElementById("balance-amount")
+
+          balanceContainer.classList.add("visible")
+          balanceAmount.textContent = "טוען..."
+          balanceAmount.className = "balance-amount balance-loading"
+
+          try {
+            const response = await fetch(
+              `/balance?runpod_token=${encodeURIComponent(token)}`
+            )
+            const data = await response.json()
+
+            if (response.ok && data.clientBalance !== "N/A") {
+              const formattedBalance = parseFloat(data.clientBalance).toFixed(2)
+              balanceAmount.textContent = `$${formattedBalance}`
+              balanceAmount.className = "balance-amount"
+            } else {
+              balanceAmount.textContent = "שגיאה בטעינה"
+              balanceAmount.className = "balance-amount"
             }
-            
-            // Show loading state
-            const saveBtn = document.querySelector('#settings-form button[type="submit"]');
-            const originalText = saveBtn.textContent;
-            saveBtn.textContent = 'בודק...';
-            saveBtn.disabled = true;
-            
+          } catch (error) {
+            console.error("Balance fetch error:", error)
+            balanceAmount.textContent = "שגיאה בטעינה"
+            balanceAmount.className = "balance-amount"
+          }
+        }
+      }
+
+      // Check and create endpoint if needed (called automatically when saving settings)
+      async function checkAndCreateEndpoint(token) {
+        try {
+          const response = await fetch("/check_endpoint", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              runpod_token: token,
+            }),
+          })
+
+          const data = await response.json()
+
+          if (response.ok) {
+            if (data.action === "up_to_date") {
+              console.log("Endpoint is up to date")
+              return { success: true, needsWait: false }
+            } else if (data.action === "updated") {
+              console.log("Endpoint was updated")
+              return { success: true, needsWait: true }
+            } else if (data.action === "created") {
+              console.log("New endpoint was created")
+              return { success: true, needsWait: true }
+            }
+          } else {
+            console.error("Endpoint check failed:", data.error)
+            return { success: false, error: data.error }
+          }
+        } catch (error) {
+          console.error("Error checking endpoint:", error)
+          return { success: false, error: "שגיאה בבדיקת ה-endpoint" }
+        }
+      }
+
+      // Initialize settings button indicator on page load
+      updateSettingsButtonIndicator()
+
+      // Check balance on page load
+      checkBalance()
+
+      // Settings modal handlers
+      settingsBtn.addEventListener("click", () => {
+        settingsModal.style.display = "block"
+        settingsModal.classList.add("show")
+        loadSettings()
+      })
+
+      closeSettings.addEventListener("click", () => {
+        settingsModal.style.display = "none"
+        settingsModal.classList.remove("show")
+      })
+
+      cancelSettings.addEventListener("click", () => {
+        settingsModal.style.display = "none"
+        settingsModal.classList.remove("show")
+      })
+
+      clearSettings.addEventListener("click", clearAllSettings)
+
+      settingsForm.addEventListener("submit", async (e) => {
+        e.preventDefault()
+        await saveSettings()
+      })
+
+      // Close modal when clicking outside
+      window.addEventListener("click", (e) => {
+        if (e.target === settingsModal) {
+          settingsModal.style.display = "none"
+          settingsModal.classList.remove("show")
+        }
+      })
+      ;["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
+        dropArea.addEventListener(eventName, preventDefaults, false)
+      })
+
+      function preventDefaults(e) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+
+      ;["dragenter", "dragover"].forEach((eventName) => {
+        dropArea.addEventListener(eventName, highlight, false)
+      })
+      ;["dragleave", "drop"].forEach((eventName) => {
+        dropArea.addEventListener(eventName, unhighlight, false)
+      })
+
+      function highlight() {
+        dropArea.classList.add("highlight")
+      }
+
+      function unhighlight() {
+        dropArea.classList.remove("highlight")
+      }
+
+      dropArea.addEventListener("drop", handleDrop, false)
+
+      function handleDrop(e) {
+        const dt = e.dataTransfer
+        const files = dt.files
+        handleFiles(files)
+      }
+
+      fileInput.addEventListener("change", function () {
+        handleFiles(this.files)
+      })
+
+      function handleFiles(files) {
+        if (files.length > 0) {
+          selectedFile = files[0]
+          if (selectedFile.size > MAX_FILE_SIZE) {
+            showToast("הקובץ גדול מדי. הגודל המקסימלי המותר הוא 200MB", "error")
+            selectedFile = null
+            transcribeBtn.disabled = true
+            fileName.textContent = ""
+          } else {
+            transcribeBtn.disabled = false
+            showFilePreview(selectedFile)
+            showToast("קובץ נבחר בהצלחה", "success")
+          }
+        }
+      }
+
+      dropArea.addEventListener("click", () => fileInput.click())
+
+      transcribeBtn.addEventListener("click", uploadFile)
+
+      function uploadFile() {
+        if (!selectedFile) return
+
+        const formData = new FormData()
+        formData.append("file", selectedFile)
+
+        // Add RunPod credentials if available
+        const token = getCookie("runpod_token")
+        if (token) {
+          formData.append("runpod_token", token)
+          transcriptionArea.value = "משתמש בהגדרות RunPod מותאמות אישית..."
+        }
+
+        transcribeBtn.disabled = true
+        progressContainer.style.display = "block"
+        progressBar.style.width = "0%"
+        if (!token) {
+          transcriptionArea.value = "מעלה את הקובץ..."
+        }
+        copyBtn.disabled = true
+        downloadBtn.disabled = true
+        downloadDocxBtn.disabled = true
+        exportWordsBtn.disabled = true
+        transcriptionSegments = []
+        currentJobId = null
+
+        const xhr = new XMLHttpRequest()
+        xhr.open("POST", "/upload", true)
+
+        xhr.upload.onprogress = function (event) {
+          if (event.lengthComputable) {
+            const percentComplete = (event.loaded / event.total) * 100
+            progressBar.style.width = percentComplete + "%"
+            transcriptionArea.value = `מעלה את הקובץ... ${percentComplete.toFixed(
+              1
+            )}%`
+          }
+        }
+
+        xhr.onload = function () {
+          if (xhr.status === 200) {
+            const response = JSON.parse(xhr.responseText)
+            if (response.error) {
+              showError(response.error)
+            } else {
+              transcriptionArea.value = "קובץ הועלה. מתחיל בתמלול..."
+              pollJobStatus(response.job_id)
+            }
+          } else {
+            let errorMessage = undefined
             try {
-                // Verify credentials by checking balance
-                const response = await fetch(`/balance?runpod_token=${encodeURIComponent(token)}`);
-                const data = await response.json();
-                
-                if (response.status === 401 || (response.status === 500 && data.error && data.error.includes('401'))) {
-                    alert('שגיאה: API Token לא תקין');
-                } else if (!response.ok) {
-                    alert(`שגיאה בבדיקת האישורים: ${response.status}`);
-                } else {
-                    // Credentials are valid, check endpoint
-                    const endpointResult = await checkAndCreateEndpoint(token);
-                    
-                    if (endpointResult.success) {
-                        // Save credentials
-                        setCookie('runpod_token', token, 365 * 24 * 60 * 60); // 1 year
-                        
-                        let successMessage = 'האישורים נשמרו בהצלחה!';
-                        if (endpointResult.needsWait) {
-                            successMessage += '\n\nEndpoint חדש נוצר או עודכן. אנא המתן 3 דקות לפני העלאת קבצים.';
-                        }
-                        
-                        alert(successMessage);
-                        settingsModal.style.display = 'none';
-                        updateSettingsButtonIndicator();
-                        checkBalance(); // Update balance display
-                    } else {
-                        alert(`שגיאה בבדיקת ה-endpoint: ${endpointResult.error || 'לא ניתן לבדוק או ליצור endpoint'}`);
-                    }
-                }
-            } catch (error) {
-                console.error('Error verifying credentials:', error);
-                if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
-                    alert('שגיאה: לא ניתן להתחבר לשרת RunPod. אנא בדוק את החיבור לאינטרנט ונסה שוב.');
-                } else {
-                    alert('שגיאה בבדיקת האישורים. אנא נסה שוב.');
-                }
-            } finally {
-                // Restore button state
-                saveBtn.textContent = originalText;
-                saveBtn.disabled = false;
-            }
-        }
-
-        // Clear settings from cookies
-        function clearSettingsFromCookies() {
-            deleteCookie('runpod_token');
-            alert('הגדרות RunPod נמחקו בהצלחה!');
-            settingsModal.style.display = 'none';
-            runpodTokenInput.value = '';
-            updateSettingsButtonIndicator();
-            
-            // Hide balance container when credentials are cleared
-            const balanceContainer = document.getElementById('balance-container');
-            balanceContainer.classList.remove('visible');
-        }
-
-        // Cookie utility functions
-        function setCookie(name, value, days) {
-            const expires = new Date();
-            expires.setTime(expires.getTime() + (days * 24 * 60 * 60 * 1000));
-            document.cookie = name + "=" + value + ";expires=" + expires.toUTCString() + ";path=/";
-        }
-
-        function getCookie(name) {
-            const nameEQ = name + "=";
-            const ca = document.cookie.split(';');
-            for (let i = 0; i < ca.length; i++) {
-                let c = ca[i];
-                while (c.charAt(0) === ' ') c = c.substring(1, c.length);
-                if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
-            }
-            return null;
-        }
-
-        function deleteCookie(name) {
-            document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;";
-        }
-
-        // Check for RunPod credentials and fetch balance via backend API
-        async function checkBalance() {
-            const token = getCookie('runpod_token');
-            
-            if (token) {
-                const balanceContainer = document.getElementById('balance-container');
-                const balanceAmount = document.getElementById('balance-amount');
-                
-                balanceContainer.classList.add('visible');
-                balanceAmount.textContent = 'טוען...';
-                balanceAmount.className = 'balance-amount balance-loading';
-                
-                try {
-                    const response = await fetch(`/balance?runpod_token=${encodeURIComponent(token)}`);
-                    const data = await response.json();
-                    
-                    if (response.ok && data.clientBalance !== 'N/A') {
-                        const formattedBalance = parseFloat(data.clientBalance).toFixed(2);
-                        balanceAmount.textContent = `$${formattedBalance}`;
-                        balanceAmount.className = 'balance-amount';
-                    } else {
-                        balanceAmount.textContent = 'שגיאה בטעינה';
-                        balanceAmount.className = 'balance-amount';
-                    }
-                } catch (error) {
-                    console.error('Balance fetch error:', error);
-                    balanceAmount.textContent = 'שגיאה בטעינה';
-                    balanceAmount.className = 'balance-amount';
-                }
-            }
-        }
-
-        // Check and create endpoint if needed (called automatically when saving settings)
-        async function checkAndCreateEndpoint(token) {
-            try {
-                const response = await fetch('/check_endpoint', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        runpod_token: token
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    if (data.action === 'up_to_date') {
-                        console.log('Endpoint is up to date');
-                        return { success: true, needsWait: false };
-                    } else if (data.action === 'updated') {
-                        console.log('Endpoint was updated');
-                        return { success: true, needsWait: true };
-                    } else if (data.action === 'created') {
-                        console.log('New endpoint was created');
-                        return { success: true, needsWait: true };
-                    }
-                } else {
-                    console.error('Endpoint check failed:', data.error);
-                    return { success: false, error: data.error };
-                }
-            } catch (error) {
-                console.error('Error checking endpoint:', error);
-                return { success: false, error: 'שגיאה בבדיקת ה-endpoint' };
-            }
-        }
-
-        // Initialize settings button indicator on page load
-        updateSettingsButtonIndicator();
-        
-        // Check balance on page load
-        checkBalance();
-
-        // Settings modal handlers
-        settingsBtn.addEventListener('click', () => {
-            settingsModal.style.display = 'block';
-            loadSettings();
-        });
-
-        closeSettings.addEventListener('click', () => {
-            settingsModal.style.display = 'none';
-        });
-
-        cancelSettings.addEventListener('click', () => {
-            settingsModal.style.display = 'none';
-        });
-
-        clearSettings.addEventListener('click', clearSettingsFromCookies);
-
-        settingsForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            await saveSettings();
-            // Only close modal if save was successful (no error was shown)
-            // The modal will stay open if there was an error, allowing user to fix it
-        });
-
-        // Close modal when clicking outside
-        window.addEventListener('click', (e) => {
-            if (e.target === settingsModal) {
-                settingsModal.style.display = 'none';
-            }
-        });
-
-        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            dropArea.addEventListener(eventName, preventDefaults, false);
-        });
-
-        function preventDefaults(e) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
-
-        ['dragenter', 'dragover'].forEach(eventName => {
-            dropArea.addEventListener(eventName, highlight, false);
-        });
-
-        ['dragleave', 'drop'].forEach(eventName => {
-            dropArea.addEventListener(eventName, unhighlight, false);
-        });
-
-        function highlight() {
-            dropArea.classList.add('highlight');
-        }
-
-        function unhighlight() {
-            dropArea.classList.remove('highlight');
-        }
-
-        dropArea.addEventListener('drop', handleDrop, false);
-
-        function handleDrop(e) {
-            const dt = e.dataTransfer;
-            const files = dt.files;
-            handleFiles(files);
-        }
-
-        fileInput.addEventListener('change', function() {
-            handleFiles(this.files);
-        });
-
-        function handleFiles(files) {
-            if (files.length > 0) {
-                selectedFile = files[0];
-                
-                // Check if user has private RunPod credentials
-                const token = getCookie('runpod_token');
-                const hasPrivateCredentials = token && token.trim() !== '';
-                
-                // Determine which file size limit to use
-                const maxFileSize = hasPrivateCredentials ? MAX_FILE_SIZE_PRIVATE : MAX_FILE_SIZE_REGULAR;
-                const maxFileSizeText = hasPrivateCredentials ? '3GB' : '300MB';
-                
-                if (selectedFile.size > maxFileSize) {
-                    alert(`הקובץ גדול מדי. הגודל המקסימלי המותר הוא ${maxFileSizeText}.`);
-                    selectedFile = null;
-                    transcribeBtn.disabled = true;
-                    fileName.textContent = '';
-                } else {
-                    transcribeBtn.disabled = false;
-                    fileName.textContent = `קובץ נבחר: ${selectedFile.name}`;
-                }
-            }
-        }
-
-        dropArea.addEventListener('click', () => fileInput.click());
-
-        transcribeBtn.addEventListener('click', uploadFile);
-
-        function uploadFile() {
-            if (!selectedFile) return;
-
-            const formData = new FormData();
-            formData.append('file', selectedFile);
-
-            // Add RunPod credentials if available
-            const token = getCookie('runpod_token');
-            if (token) {
-                formData.append('runpod_token', token);
-                // Show indicator that custom credentials are being used
-                transcriptionArea.value = 'משתמש באישורי RunPod מותאמים אישית...';
+              const response = JSON.parse(xhr.responseText)
+              if (response.error) {
+                errorMessage = response.error
+              }
+            } catch (e) {
+              // If parsing fails, use statusText as fallback
             }
 
-            transcribeBtn.disabled = true;
-            progressContainer.style.display = 'block';
-            progressBar.style.width = '0%';
-            if (!token) {
-                transcriptionArea.value = 'מעלה את הקובץ...';
-            }
-            transcriptionSegments = [];
-            copyBtn.disabled = true;
-            downloadBtn.disabled = true;
-            downloadDocxBtn.disabled = true;
+            let reportMessage = `${errorMessage}`
 
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/upload', true);
-
-            xhr.upload.onprogress = function(event) {
-                if (event.lengthComputable) {
-                    const percentComplete = (event.loaded / event.total) * 100;
-                    progressBar.style.width = percentComplete + '%';
-                    transcriptionArea.value = `מעלה את הקובץ... ${percentComplete.toFixed(1)}%`;
-                }
-            };
-
-            xhr.onload = function() {
-                if (xhr.status === 200) {
-                    const response = JSON.parse(xhr.responseText);
-                    if (response.error) {
-                        showError(response.error);
-                    } else {
-                        transcriptionArea.value = 'קובץ הועלה. מתחיל בתמלול...';
-                        pollJobStatus(response.job_id);
-                    }
-                } else {
-                    let errorMessage = undefined;
-                    try {
-                        const response = JSON.parse(xhr.responseText);
-                        if (response.error) {
-                            errorMessage = response.error;
-                        }
-                    } catch (e) {
-                        // If parsing fails, use statusText as fallback
-                    }
-                    
-                    let reportMessage = `${errorMessage}`;
-                    
-                    if (! errorMessage) {
-                        const currentTime = new Date().toISOString();
-                        reportMessage = `אם השגיאה נמשכת, אנא שלחו דיווח לכתובת info@ivrit.ai עם הפרטים הבאים:
+            if (!errorMessage) {
+              const currentTime = new Date().toISOString()
+              reportMessage = `אם השגיאה נמשכת, אנא שלחו דיווח לכתובת info@ivrit.ai עם הפרטים הבאים:
 - כתובת האימייל שלכם
 - זמן השגיאה: ${currentTime}
-- פרטי השגיאה: ${xhr.statusText}`;
-                    }
-                    
-                    showError(reportMessage);
-                }
-            };
+- פרטי השגיאה: ${xhr.statusText}`
+            }
 
-            xhr.onerror = function() {
-                showError('שגיאה בהעלאת הקובץ. אנא נסה שוב.');
-            };
-
-            xhr.send(formData);
+            showError(reportMessage)
+          }
         }
 
-        function pollJobStatus(jobId) {
-            const pollInterval = 2000; // Poll every 2 seconds
+        xhr.onerror = function () {
+          showError("שגיאה בהעלאת הקובץ. אנא נסה שוב.")
+        }
 
-            function poll() {
-                fetch(`/job_status/${jobId}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.error) {
-                            showError(data.error);
-                            activeTranscription = false;
-                            return;
-                        }
+        xhr.send(formData)
+      }
 
-                        if (data.queue_position) {
-                            let statusMessage = `בתור במקום ${data.queue_position}. זמן משוער להתחלה: ${data.time_ahead}`;
-                            if (data.job_type) {
-                                let jobTypeText;
-                                switch(data.job_type) {
-                                    case 'short':
-                                        jobTypeText = 'קצרה';
-                                        break;
-                                    case 'long':
-                                        jobTypeText = 'ארוכה';
-                                        break;
-                                    case 'private':
-                                        jobTypeText = 'פרטית';
-                                        break;
-                                    default:
-                                        jobTypeText = data.job_type;
-                                }
-                                statusMessage += `, סוג עבודה: ${jobTypeText}`;
-                            }
-                            statusMessage += `
+      function pollJobStatus(jobId) {
+        currentJobId = jobId
+        const pollInterval = 2000 // Poll every 2 seconds
+
+        function poll() {
+          fetch(`/job_status/${jobId}`)
+            .then((response) => response.json())
+            .then((data) => {
+              if (data.error) {
+                showError(data.error)
+                activeTranscription = false
+                return
+              }
+
+              if (data.queue_position) {
+                let statusMessage = `בתור במקום ${data.queue_position}. זמן משוער להתחלה: ${data.time_ahead}`
+                if (data.job_type) {
+                  let jobTypeText
+                  switch (data.job_type) {
+                    case "short":
+                      jobTypeText = "קצרה"
+                      break
+                    case "long":
+                      jobTypeText = "ארוכה"
+                      break
+                    case "private":
+                      jobTypeText = "פרטית"
+                      break
+                    default:
+                      jobTypeText = data.job_type
+                  }
+                  statusMessage += `, סוג עבודה: ${jobTypeText}`
+                }
+                statusMessage += `
 
 בזמן שאתם ממתינים, אנו מזכירים ש-ivrit.ai הוא פרויקט ללא מטרות רווח.
 כל השירותים שלנו, כולל שירות התמלול בו אתם משתמשים כרגע, ניתנים בחינם.
@@ -908,327 +1746,428 @@
 
 ניתן לתרום דרך לינק לפטראון בתחתית המסך.
 
-תודה!`;
-                            transcriptionArea.value = statusMessage;
-                            progressBar.style.width = '0%';
-                            activeTranscription = true;
-                            setTimeout(poll, pollInterval);
-                        } else if (data.progress !== undefined) {
-                            progressBar.style.width = `${data.progress * 100}%`;
-                            transcriptionArea.value = `מתמלל... ${(data.progress * 100).toFixed(1)}%`;
-                            activeTranscription = true;
-                            
-                            if (data.progress < 1.0) {
-                                setTimeout(poll, pollInterval);
-                            } else {
-                                // Job is complete, update transcription display
-                                transcriptionSegments = data.results;
-                                updateTranscriptionDisplay();
-                                resetUploadState();
-                                activeTranscription = false;
-                            }
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        showError('אירעה שגיאה בבדיקת סטטוס העבודה');
-                        activeTranscription = false;
-                    });
-            }
+תודה!`
+                transcriptionArea.value = statusMessage
+                progressBar.style.width = "0%"
+                activeTranscription = true
+                setTimeout(poll, pollInterval)
+              } else if (data.progress !== undefined) {
+                progressBar.style.width = `${data.progress * 100}%`
+                transcriptionArea.value = `מתמלל... ${(
+                  data.progress * 100
+                ).toFixed(1)}%`
+                activeTranscription = true
 
-            poll();
-        }
-
-        function formatWithTimecodes(segments) {
-            if (!segments || segments.length === 0) return '';
-            
-            const separator = segmentToggle.checked ? ' ' : '\n';
-            const groups = [];
-            let currentGroup = [];
-            let currentTimeMarker = 30; // Start with 30 seconds
-            
-            for (let i = 0; i < segments.length; i++) {
-                const segment = segments[i];
-                currentGroup.push(segment);
-                
-                // Check if this segment should end the current group
-                const shouldEndGroup = 
-                    (segment.start <= currentTimeMarker && segment.end >= currentTimeMarker) ||
-                    (i === segments.length - 1) || // Last segment
-                    (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker);
-                
-                if (shouldEndGroup) {
-                    // Get start time of first segment and end time of last segment in group
-                    const startTime = currentGroup[0].start;
-                    const endTime = currentGroup[currentGroup.length - 1].end;
-                    
-                    const groupText = currentGroup
-                        .map(seg => seg.text.trim())
-                        .join(separator);
-                    
-                    const formattedStartTime = formatTimeForDisplay(startTime);
-                    const formattedEndTime = formatTimeForDisplay(endTime);
-                    groups.push('[' + formattedStartTime + '-' + formattedEndTime + ']\n' + groupText);
-                    
-                    // Reset for next group
-                    currentGroup = [];
-                    currentTimeMarker += 30;
-                    
-                    // Handle case where we need to advance time marker further
-                    while (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker) {
-                        currentTimeMarker += 30;
-                    }
+                if (data.progress < 1.0) {
+                  setTimeout(poll, pollInterval)
+                } else {
+                  // Job is complete, update transcription display
+                  transcriptionSegments = data.results
+                  updateTranscriptionDisplay()
+                  resetUploadState()
+                  activeTranscription = false
                 }
+              }
+            })
+            .catch((error) => {
+              console.error("Error:", error)
+              showError("אירעה שגיאה בבדיקת סטטוס העבודה")
+              activeTranscription = false
+            })
+        }
+
+        poll()
+      }
+
+      function formatWithTimecodes(segments) {
+        if (!segments || segments.length === 0) return ""
+
+        const separator =
+          displaySettings.textFormat === "continuous" ? " " : "\n"
+        const groups = []
+        let currentGroup = []
+        let currentTimeMarker = 30 // Start with 30 seconds
+
+        for (let i = 0; i < segments.length; i++) {
+          const segment = segments[i]
+          currentGroup.push(segment)
+
+          // Check if this segment should end the current group
+          const shouldEndGroup =
+            (segment.start <= currentTimeMarker &&
+              segment.end >= currentTimeMarker) ||
+            i === segments.length - 1 || // Last segment
+            (i < segments.length - 1 &&
+              segments[i + 1].start > currentTimeMarker)
+
+          if (shouldEndGroup) {
+            // Get start time of first segment and end time of last segment in group
+            const startTime = currentGroup[0].start
+            const endTime = currentGroup[currentGroup.length - 1].end
+
+            const groupText = currentGroup
+              .map((seg) => seg.text.trim())
+              .join(separator)
+
+            const formattedStartTime = formatTimeForDisplay(startTime)
+            const formattedEndTime = formatTimeForDisplay(endTime)
+            groups.push(
+              "[" +
+                formattedStartTime +
+                "-" +
+                formattedEndTime +
+                "]\n" +
+                groupText
+            )
+
+            // Reset for next group
+            currentGroup = []
+            currentTimeMarker += 30
+
+            // Handle case where we need to advance time marker further
+            while (
+              i < segments.length - 1 &&
+              segments[i + 1].start > currentTimeMarker
+            ) {
+              currentTimeMarker += 30
             }
-            
-            return groups.join('\n\n');
-        }
-        
-        function formatTimeForDisplay(seconds) {
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            const secs = Math.floor(seconds % 60);
-            
-            if (hours > 0) {
-                return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-            } else {
-                return `${minutes}:${String(secs).padStart(2, '0')}`;
-            }
+          }
         }
 
-        function showError(message) {
-            transcriptionArea.value = `שגיאה: ${message}`;
-            resetUploadState();
+        return groups.join("\n\n")
+      }
+
+      function formatTimeForDisplay(seconds) {
+        const hours = Math.floor(seconds / 3600)
+        const minutes = Math.floor((seconds % 3600) / 60)
+        const secs = Math.floor(seconds % 60)
+
+        if (hours > 0) {
+          return `${hours}:${String(minutes).padStart(2, "0")}:${String(
+            secs
+          ).padStart(2, "0")}`
+        } else {
+          return `${minutes}:${String(secs).padStart(2, "0")}`
+        }
+      }
+
+      function showError(message) {
+        transcriptionArea.value = `שגיאה: ${message}`
+        resetAllState()
+      }
+
+      function updateTranscriptionDisplay() {
+        let result
+
+        if (displaySettings.timestampFormat === "segments") {
+          result = formatWithTimecodes(transcriptionSegments)
+        } else {
+          const separator =
+            displaySettings.textFormat === "continuous" ? " " : "\n"
+          result = transcriptionSegments
+            .map((segment) => segment.text.trim())
+            .join(separator)
         }
 
-        function updateTranscriptionDisplay() {
-            let result;
-            
-            if (timecodeToggle.checked) {
-                result = formatWithTimecodes(transcriptionSegments);
-            } else {
-                const separator = segmentToggle.checked ? ' ' : '\n';
-                result = transcriptionSegments
-                    .map(segment => segment.text.trim())
-                    .join(separator);
-            }
+        result = result + "\n\n" + "תומלל באמצעות שירות התמלול של ivrit.ai"
 
-            result = result + '\n\n' + 'תומלל באמצעות שירות התמלול של ivrit.ai';
-            
-            transcriptionArea.value = result;
-            copyBtn.disabled = false;
-            downloadBtn.disabled = false;
-            downloadDocxBtn.disabled = false;
-        }
+        transcriptionArea.value = result
+        copyBtn.disabled = false
+        downloadBtn.disabled = false
+        downloadDocxBtn.disabled = false
+        exportWordsBtn.disabled = false
+        downloadMenuBtn.disabled = false
+        menuVttBtn.disabled = false
+        menuSrtBtn.disabled = false
+        menuDocxBtn.disabled = false
+        menuJsonBtn.disabled = false
+      }
 
-        function resetUploadState() {
-            transcribeBtn.disabled = false;
-            selectedFile = null;
-            fileName.textContent = '';
-            progressContainer.style.display = 'none';
-            progressBar.style.width = '0%';
-        }
+      function resetUploadState() {
+        transcribeBtn.disabled = false
+        selectedFile = null
+        fileName.textContent = ""
+        progressContainer.style.display = "none"
+        progressBar.style.width = "0%"
+      }
 
-        copyBtn.addEventListener('click', function() {
-            transcriptionArea.select();
-            document.execCommand('copy');
-            alert('הטקסט הועתק ללוח');
-        });
+      function resetAllState() {
+        transcribeBtn.disabled = false
+        selectedFile = null
+        fileName.textContent = ""
+        progressContainer.style.display = "none"
+        progressBar.style.width = "0%"
+        copyBtn.disabled = true
+        downloadBtn.disabled = true
+        downloadDocxBtn.disabled = true
+        exportWordsBtn.disabled = true
+        downloadMenuBtn.disabled = true
+        menuVttBtn.disabled = true
+        menuSrtBtn.disabled = true
+        menuDocxBtn.disabled = true
+        menuJsonBtn.disabled = true
+        currentJobId = null
+        transcriptionSegments = []
+      }
 
-        downloadBtn.addEventListener('click', function() {
-            if (!transcriptionSegments.length) return;
+      copyBtn.addEventListener("click", function () {
+        transcriptionArea.select()
+        document.execCommand("copy")
+        showToast("הטקסט הועתק ללוח בהצלחה", "success")
+      })
 
-            // Generate VTT content
-            let vttContent = 'WEBVTT\n\n';
-            
-            transcriptionSegments.forEach((segment, index) => {
-                const startTime = formatTime(segment.start);
-                const endTime = formatTime(segment.end);
-                vttContent += `${index + 1}\n`;
-                vttContent += `${startTime} --> ${endTime}\n`;
-                vttContent += `${segment.text.trim()}\n\n`;
-            });
+      downloadBtn.addEventListener("click", function () {
+        if (!transcriptionSegments.length) return
 
-            // Create and trigger download
-            const blob = new Blob([vttContent], { type: 'text/vtt' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'subtitles.vtt';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        });
+        // Generate VTT content
+        let vttContent = "WEBVTT\n\n"
 
-        downloadDocxBtn.addEventListener('click', async function() {
-            if (!transcriptionSegments.length) return;
+        transcriptionSegments.forEach((segment, index) => {
+          const startTime = formatTime(segment.start)
+          const endTime = formatTime(segment.end)
+          vttContent += `${index + 1}\n`
+          vttContent += `${startTime} --> ${endTime}\n`
+          vttContent += `${segment.text.trim()}\n\n`
+        })
 
-            try {
-                const paragraphs = [];
-                
-                // Add title
-                paragraphs.push(
-                    new docx.Paragraph({
-                        children: [
-                            new docx.TextRun({
-                                text: "תמלול",
-                                bold: true,
-                                size: 32,
-                                bidirectional: true,
-                            }),
-                        ],
-                        heading: docx.HeadingLevel.HEADING_1,
-                        alignment: docx.AlignmentType.RIGHT,
-                        bidirectional: true,
-                        spacing: {
-                            after: 400,
-                        },
-                    })
-                );
+        // Create and trigger download
+        const blob = new Blob([vttContent], { type: "text/vtt" })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = "subtitles.vtt"
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      })
 
-                // Get the text directly from the transcription textarea
-                const transcriptionText = transcriptionArea.value;
-                
-                // Split the text into lines and create paragraphs
-                const lines = transcriptionText.split('\n').filter(line => line.trim() !== '');
-                
-                lines.forEach(line => {
-                    paragraphs.push(
-                        new docx.Paragraph({
-                            children: [
-                                new docx.TextRun({
-                                    text: line,
-                                    size: 24,
-                                    bidirectional: true,
-                                }),
-                            ],
-                            alignment: docx.AlignmentType.RIGHT,
-                            bidirectional: true,
-                            spacing: {
-                                after: 200,
-                            },
-                            indent: {
-                                right: 0,
-                                left: 0,
-                            },
-                        })
-                    );
-                });
+      downloadDocxBtn.addEventListener("click", async function () {
+        if (!transcriptionSegments.length) return
 
-                // Create a new document with RTL support
-                const doc = new docx.Document({
-                    sections: [{
-                        properties: {
-                            page: {
-                                margin: {
-                                    top: 1440,    // 1 inch
-                                    right: 1440,  // 1 inch  
-                                    bottom: 1440, // 1 inch
-                                    left: 1440,   // 1 inch
-                                },
-                            },
-                        },
-                        children: paragraphs,
-                    }],
-                    styles: {
-                        default: {
-                            document: {
-                                run: {
-                                    bidirectional: true,
-                                },
-                            },
-                            paragraph: {
-                                alignment: docx.AlignmentType.RIGHT,
-                                bidirectional: true,
-                            },
-                        },
+        try {
+          const paragraphs = []
+
+          // Add title
+          paragraphs.push(
+            new docx.Paragraph({
+              children: [
+                new docx.TextRun({
+                  text: "תמלול",
+                  bold: true,
+                  size: 32,
+                  bidirectional: true,
+                }),
+              ],
+              heading: docx.HeadingLevel.HEADING_1,
+              alignment: docx.AlignmentType.RIGHT,
+              bidirectional: true,
+              spacing: {
+                after: 400,
+              },
+            })
+          )
+
+          // Get the text directly from the transcription textarea
+          const transcriptionText = transcriptionArea.value
+
+          // Split the text into lines and create paragraphs
+          const lines = transcriptionText
+            .split("\n")
+            .filter((line) => line.trim() !== "")
+
+          lines.forEach((line) => {
+            paragraphs.push(
+              new docx.Paragraph({
+                children: [
+                  new docx.TextRun({
+                    text: line,
+                    size: 24,
+                    bidirectional: true,
+                  }),
+                ],
+                alignment: docx.AlignmentType.RIGHT,
+                bidirectional: true,
+                spacing: {
+                  after: 200,
+                },
+                indent: {
+                  right: 0,
+                  left: 0,
+                },
+              })
+            )
+          })
+
+          // Create a new document with RTL support
+          const doc = new docx.Document({
+            sections: [
+              {
+                properties: {
+                  page: {
+                    margin: {
+                      top: 1440, // 1 inch
+                      right: 1440, // 1 inch
+                      bottom: 1440, // 1 inch
+                      left: 1440, // 1 inch
                     },
-                });
+                  },
+                },
+                children: paragraphs,
+              },
+            ],
+            styles: {
+              default: {
+                document: {
+                  run: {
+                    bidirectional: true,
+                  },
+                },
+                paragraph: {
+                  alignment: docx.AlignmentType.RIGHT,
+                  bidirectional: true,
+                },
+              },
+            },
+          })
 
-                // Generate the document blob
-                const buffer = await docx.Packer.toBlob(doc);
-                
-                // Download the document
-                const url = URL.createObjectURL(buffer);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'transcription.docx';
-                
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                
-                // Clean up the URL after a short delay
-                setTimeout(() => {
-                    URL.revokeObjectURL(url);
-                }, 1000);
-            } catch (error) {
-                console.error('Error creating DOCX:', error);
-                alert('שגיאה ביצירת קובץ Word. אנא נסה שוב.');
-            }
-        });
+          // Generate the document blob
+          const buffer = await docx.Packer.toBlob(doc)
 
-        function formatTime(seconds) {
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            const secs = Math.floor(seconds % 60);
-            const ms = Math.floor((seconds % 1) * 1000);
-            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+          // Download the document
+          const url = URL.createObjectURL(buffer)
+          const a = document.createElement("a")
+          a.href = url
+          a.download = "transcription.docx"
+
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+
+          // Clean up the URL after a short delay
+          setTimeout(() => {
+            URL.revokeObjectURL(url)
+          }, 1000)
+        } catch (error) {
+          console.error("Error creating DOCX:", error)
+          showToast("שגיאה ביצירת קובץ Word. אנא נסה שוב.", "error")
         }
+      })
 
-        // Custom confirmation dialog
-        function showExitWarning() {
-            return confirm('התמלול עדיין פעיל. יציאה מהדף תפסיק את התמלול. האם אתה בטוח שברצונך לצאת?');
+      exportWordsBtn.addEventListener("click", function () {
+        if (!transcriptionSegments.length) return
+
+        try {
+          // Export all segment data
+          const exportData = transcriptionSegments
+
+          const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+            type: "application/json",
+          })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement("a")
+          a.href = url
+          a.download = "transcription_data.json"
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+          URL.revokeObjectURL(url)
+        } catch (error) {
+          console.error("Error exporting transcription data:", error)
+          showToast("שגיאה בייצוא נתוני התמלול", "error")
         }
+      })
 
-        window.addEventListener('beforeunload', function (e) {
-            if (activeTranscription) {
-                // Show confirmation dialog
-                e.preventDefault();
-                e.returnValue = 'התמלול עדיין פעיל. יציאה מהדף תפסיק את התמלול. האם אתה בטוח שברצונך לצאת?';
-                return e.returnValue;
-            }
-        });
+      menuVttBtn.addEventListener("click", function () {
+        if (!downloadBtn.disabled) {
+          downloadBtn.click()
+        }
+      })
+      menuSrtBtn.addEventListener("click", function () {
+        if (!transcriptionSegments.length) return
 
-        // Handle refresh key combinations
-        window.addEventListener('keydown', function(e) {
-            if (activeTranscription && 
-                (e.key === 'F5' || 
-                 (e.key === 'r' && (e.ctrlKey || e.metaKey)))) {
-                if (!showExitWarning()) {
-                    e.preventDefault();
-                    return false;
-                }
-            }
-        });
+        let srtContent = ""
+        transcriptionSegments.forEach((segment, index) => {
+          const start = formatTime(segment.start).replace(".", ",")
+          const end = formatTime(segment.end).replace(".", ",")
+          srtContent += `${
+            index + 1
+          }\n${start} --> ${end}\n${segment.text.trim()}\n\n`
+        })
+        const blob = new Blob([srtContent], { type: "text/plain" })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = "subtitles.srt"
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      })
+      menuDocxBtn.addEventListener("click", function () {
+        if (!downloadDocxBtn.disabled) {
+          downloadDocxBtn.click()
+        }
+      })
+      menuJsonBtn.addEventListener("click", function () {
+        if (!exportWordsBtn.disabled) {
+          exportWordsBtn.click()
+        }
+      })
 
-        // Handle clicks on links
-        document.addEventListener('click', function(e) {
-            if (!activeTranscription) return;
-            
-            const link = e.target.closest('a');
-            if (link && !link.hasAttribute('download')) {
-                if (!showExitWarning()) {
-                    e.preventDefault();
-                    return false;
-                }
-            }
-        });
+      function formatTime(seconds) {
+        const hours = Math.floor(seconds / 3600)
+        const minutes = Math.floor((seconds % 3600) / 60)
+        const secs = Math.floor(seconds % 60)
+        const ms = Math.floor((seconds % 1) * 1000)
+        return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+          2,
+          "0"
+        )}:${String(secs).padStart(2, "0")}.${String(ms).padStart(3, "0")}`
+      }
 
-        // Toggle between line breaks and spaces for transcription display
-        segmentToggle.addEventListener('change', function() {
-            if (transcriptionSegments.length > 0) {
-                updateTranscriptionDisplay();
-            }
-        });
+      // Custom confirmation dialog
+      function showExitWarning() {
+        return confirm(
+          "התמלול עדיין פעיל. יציאה מהדף תפסיק את התמלול. האם אתה בטוח שברצונך לצאת?"
+        )
+      }
 
-        // Toggle for time codes
-        timecodeToggle.addEventListener('change', function() {
-            if (transcriptionSegments.length > 0) {
-                updateTranscriptionDisplay();
-            }
-        });
+      window.addEventListener("beforeunload", function (e) {
+        if (activeTranscription) {
+          // Show confirmation dialog
+          e.preventDefault()
+          e.returnValue =
+            "התמלול עדיין פעיל. יציאה מהדף תפסיק את התמלול. האם אתה בטוח שברצונך לצאת?"
+          return e.returnValue
+        }
+      })
+
+      // Handle refresh key combinations
+      window.addEventListener("keydown", function (e) {
+        if (
+          activeTranscription &&
+          (e.key === "F5" || (e.key === "r" && (e.ctrlKey || e.metaKey)))
+        ) {
+          if (!showExitWarning()) {
+            e.preventDefault()
+            return false
+          }
+        }
+      })
+
+      // Handle clicks on links
+      document.addEventListener("click", function (e) {
+        if (!activeTranscription) return
+
+        const link = e.target.closest("a")
+        if (link && !link.hasAttribute("download")) {
+          if (!showExitWarning()) {
+            e.preventDefault()
+            return false
+          }
+        }
+      })
     </script>
-</body>
+  </body>
 </html>

@@ -35,6 +35,7 @@ from urllib.parse import urljoin, urlencode
 from functools import wraps
 from typing import Optional
 from contextlib import asynccontextmanager
+import dataclasses
 
 import traceback
 
@@ -1156,19 +1157,19 @@ async def process_segment(job_id, segment, duration):
         log_message(f"Terminating inactive job: {job_id}")
         return False
 
-    segment_data = {
-        "id": segment.extra_data.get("id"),
-        "start": segment.start,
-        "end": segment.end,
-        "text": clean_some_unicode_from_text(segment.text),
-        "avg_logprob": segment.extra_data.get("avg_logprob"),
-        "compression_ratio": segment.extra_data.get("compression_ratio"),
-        "no_speech_prob": segment.extra_data.get("no_speech_prob"),
-    }
+    # Convert segment to dict using dataclasses.asdict
+    segment_dict = dataclasses.asdict(segment)
+    
+    # Clean text
+    segment_dict['text'] = clean_some_unicode_from_text(segment.text)
+    
+    # Clean word text
+    for word in segment_dict['words']:
+        word['word'] = clean_some_unicode_from_text(word['word'])
 
     progress = segment.end / duration
     job_results[job_id]["progress"] = progress
-    job_results[job_id]["results"].append(segment_data)
+    job_results[job_id]["results"].append(segment_dict)
 
     return True
 
