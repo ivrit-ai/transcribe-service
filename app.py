@@ -1148,7 +1148,6 @@ async def download_file(job_id: str, request: Request):
 
 
 
-
 async def process_segment(job_id, segment, duration):
     """Process a single segment and update job results"""
     # Check if the job should be terminated
@@ -1156,11 +1155,23 @@ async def process_segment(job_id, segment, duration):
         log_message(f"Terminating inactive job: {job_id}")
         return False
 
+    # Extract word-level data
+    words_data = []
+    for word in segment.words:
+        word_data = {
+            "word": clean_some_unicode_from_text(word.word),
+            "start": word.start,
+            "end": word.end,
+            "probability": word.probability,
+        }
+        words_data.append(word_data)
+
     segment_data = {
         "id": segment.extra_data.get("id"),
         "start": segment.start,
         "end": segment.end,
         "text": clean_some_unicode_from_text(segment.text),
+        "words": words_data,
         "avg_logprob": segment.extra_data.get("avg_logprob"),
         "compression_ratio": segment.extra_data.get("compression_ratio"),
         "no_speech_prob": segment.extra_data.get("no_speech_prob"),
