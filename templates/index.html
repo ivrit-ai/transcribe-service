@@ -955,7 +955,7 @@
               Word DOCX
             </button>
             <button type="button" data-action="json" disabled id="menu-json">
-              JSON זמני מילים
+              JSON
             </button>
           </div>
         </div>
@@ -979,7 +979,7 @@
           id="export-words-btn"
           class="hidden-download-original"
           disabled
-          title="ייצא מילים עם קודי זמן (JSON)"
+          title="ייצא נתוני תמלול מלאים (JSON)"
         ></button>
       </div>
       <div id="transcription-container">
@@ -2058,33 +2058,23 @@
         if (!transcriptionSegments.length) return
 
         try {
-          const allWords = []
-          transcriptionSegments.forEach((segment) => {
-            if (segment.words) {
-              segment.words.forEach((w) => {
-                allWords.push({
-                  word: w.word.trim(),
-                  start: Number(w.start.toFixed(3)),
-                  end: Number(w.end.toFixed(3)),
-                })
-              })
-            }
-          })
+          // Export all segment data
+          const exportData = transcriptionSegments
 
-          const blob = new Blob([JSON.stringify(allWords, null, 2)], {
+          const blob = new Blob([JSON.stringify(exportData, null, 2)], {
             type: "application/json",
           })
           const url = URL.createObjectURL(blob)
           const a = document.createElement("a")
           a.href = url
-          a.download = "words_timestamps.json"
+          a.download = "transcription_data.json"
           document.body.appendChild(a)
           a.click()
           document.body.removeChild(a)
           URL.revokeObjectURL(url)
         } catch (error) {
-          console.error("Error exporting words:", error)
-          showToast("שגיאה בייצוא קודי הזמן למילים", "error")
+          console.error("Error exporting transcription data:", error)
+          showToast("שגיאה בייצוא נתוני התמלול", "error")
         }
       })
 
