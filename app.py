@@ -996,7 +996,7 @@ async def upload_file(
     # Define file size limits
     MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024  # 300MB
     MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024  # 3GB
-    CHUNK_SIZE = 1024 * 1024  # 1MB chunks
+    CHUNK_SIZE = 50 * 1024 * 1024  # 50MB chunks
     
     max_file_size = MAX_FILE_SIZE_PRIVATE if has_private_credentials else MAX_FILE_SIZE_REGULAR
     max_file_size_text = "3GB" if has_private_credentials else "300MB"
