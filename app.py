@@ -1112,9 +1112,22 @@ async def job_status(job_id: str, request: Request):
         time_ahead_str = await calculate_queue_time(queue_to_use, running_jobs_to_check)
         return JSONResponse({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
 
+    # Check if job is running and update progress
+    for queue_type in [SHORT, LONG, PRIVATE]:
+        if job_id in running_jobs[queue_type]:
+            if job_results[job_id]["progress"] < 1.0:
+                return JSONResponse({"progress": job_results[job_id]["progress"]})
+
+            job_desc = running_jobs[queue_type][job_id]
+            # Calculate progress based on elapsed time with speedup factor of 15
+            if hasattr(job_desc, 'transcribe_start_time'):
+                elapsed_time = time.time() - job_desc.transcribe_start_time
+                estimated_total_time = job_desc.duration / 15  # Speedup factor of 15
+                progress = min(elapsed_time / estimated_total_time, 0.99)  # Cap at 1.0
+                job_results[job_id]["progress"] = progress
+            break
+    
     # If job is in progress, return only the progress
-    if job_results[job_id]["progress"] < 1.0:
-        return JSONResponse({"progress": job_results[job_id]["progress"]})
 
     # If job is complete, return the full job_result data
     result = job_results[job_id].copy()
@@ -1174,8 +1187,7 @@ async def process_segment(job_id, segment, duration):
     for word in segment_dict['words']:
         word['word'] = clean_some_unicode_from_text(word['word'])
 
-    progress = segment.end / duration
-    job_results[job_id]["progress"] = progress
+    # Progress calculation will be done in job_status endpoint
     job_results[job_id]["results"].append(segment_dict)
 
     return True
@@ -1201,6 +1213,8 @@ async def transcribe_job(job_desc):
             log_message(f"{job_desc.user_email}: using custom RunPod credentials, skipping quota consumption")
 
         transcribe_start_time = time.time()
+        # Store the start time in the job description for progress calculation
+        job_desc.transcribe_start_time = transcribe_start_time
         capture_event(
             job_id,
             "transcribe-start",
@@ -1225,18 +1239,18 @@ async def transcribe_job(job_desc):
             endpoint_id = os.environ["RUNPOD_ENDPOINT_ID"]
             log_message(f"{job_desc.user_email}: using default RunPod credentials")
         
-        m = ivrit.load_model(engine='runpod', model='ivrit-ai/whisper-large-v3-turbo-ct2', api_key=api_key, endpoint_id=endpoint_id)
+        m = ivrit.load_model(engine='runpod', model='ivrit-ai/whisper-large-v3-turbo-ct2', api_key=api_key, endpoint_id=endpoint_id, core_engine='stable-whisper')
         
         # Process streaming results
         try:
             if in_dev:
                 # In dev mode, use the local file
-                segs = m.transcribe_async(path=temp_file_path, stream=True)
+                segs = m.transcribe_async(path=temp_file_path, diarize=True)
             else:
                 # In production mode, send file as URL
                 base_url = os.environ["BASE_URL"]
                 download_url = urljoin(base_url, f"/download/{job_id}")
-                segs = m.transcribe_async(url=download_url, stream=True)
+                segs = m.transcribe_async(url=download_url, diarize=True)
             
             async for segment in segs:
                 if not await process_segment(job_id, segment, duration):
@@ -1257,7 +1271,7 @@ async def transcribe_job(job_desc):
             "transcribe-done",
             {
                 "user": job_desc.user_email,
-                "transcription_seconds": transcribe_done_time - transcribe_start_time,
+                "transcription_seconds": transcribe_done_time - job_desc.transcribe_start_time,
                 "audio_duration_seconds": duration,
                 "job-type": job_desc.job_type,
                 "custom-runpod": job_desc.uses_custom_runpod,

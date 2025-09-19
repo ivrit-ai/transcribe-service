@@ -496,7 +496,32 @@
         background-color: var(--input-bg);
         color: var(--text-color);
         box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+        line-height: 1.5;
       }
+      .speaker {
+        font-weight: bold;
+      }
+      .speaker-1 { color: #2196F3; } /* Blue */
+      .speaker-2 { color: #4CAF50; } /* Green */
+      .speaker-3 { color: #FF9800; } /* Orange */
+      .speaker-4 { color: #E91E63; } /* Pink */
+      .speaker-5 { color: #9C27B0; } /* Purple */
+      .speaker-6 { color: #F44336; } /* Red */
+      .speaker-7 { color: #00BCD4; } /* Cyan */
+      .speaker-8 { color: #8BC34A; } /* Light Green */
+      .speaker-9 { color: #FFC107; } /* Amber */
+      .speaker-10 { color: #607D8B; } /* Blue Grey */
+      /* Dark theme speaker colors */
+      [data-theme="dark"] .speaker-1 { color: #64B5F6; }
+      [data-theme="dark"] .speaker-2 { color: #81C784; }
+      [data-theme="dark"] .speaker-3 { color: #FFB74D; }
+      [data-theme="dark"] .speaker-4 { color: #F06292; }
+      [data-theme="dark"] .speaker-5 { color: #BA68C8; }
+      [data-theme="dark"] .speaker-6 { color: #EF5350; }
+      [data-theme="dark"] .speaker-7 { color: #4DD0E1; }
+      [data-theme="dark"] .speaker-8 { color: #AED581; }
+      [data-theme="dark"] .speaker-9 { color: #FFD54F; }
+      [data-theme="dark"] .speaker-10 { color: #90A4AE; }
       .action-buttons {
         display: flex;
         align-items: center;
@@ -983,7 +1008,7 @@
         ></button>
       </div>
       <div id="transcription-container">
-        <textarea id="transcription" readonly></textarea>
+        <div id="transcription" contenteditable="false"></div>
       </div>
       <div class="links-container">
         <a href="mailto:info@ivrit.ai" class="contact-link">
@@ -1119,6 +1144,37 @@
                 </label>
               </div>
             </div>
+
+            <div class="form-group">
+              <label class="form-label">הפרדת דוברים:</label>
+              <div class="radio-group">
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="diarization-display"
+                    value="enabled"
+                    id="diarization-enabled"
+                    checked
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">הצג דוברים</span>
+                    <small>הצג תוויות דוברים ושורות חדשות עם החלפת דובר</small>
+                  </div>
+                </label>
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="diarization-display"
+                    value="disabled"
+                    id="diarization-disabled"
+                  />
+                  <div class="radio-content">
+                    <span class="radio-text">הסתר דוברים</span>
+                    <small>הצג רק טקסט ללא תוויות דוברים</small>
+                  </div>
+                </label>
+              </div>
+            </div>
           </div>
 
           <div class="modal-buttons">
@@ -1179,6 +1235,7 @@
       let displaySettings = {
         textFormat: "continuous",
         timestampFormat: "none",
+        diarizationDisplay: "enabled",
       }
 
       function showToast(message, type = "success") {
@@ -1274,6 +1331,10 @@
         const savedSettings = localStorage.getItem("displaySettings")
         if (savedSettings) {
           displaySettings = { ...displaySettings, ...JSON.parse(savedSettings) }
+          // Ensure diarizationDisplay has a default value if not present in saved settings
+          if (!displaySettings.diarizationDisplay) {
+            displaySettings.diarizationDisplay = "enabled"
+          }
         }
 
         // Update form controls to match current settings
@@ -1285,6 +1346,10 @@
           displaySettings.timestampFormat === "none"
         document.getElementById("segment-timestamps").checked =
           displaySettings.timestampFormat === "segments"
+        document.getElementById("diarization-enabled").checked =
+          displaySettings.diarizationDisplay === "enabled"
+        document.getElementById("diarization-disabled").checked =
+          displaySettings.diarizationDisplay === "disabled"
 
         // Update settings button appearance if credentials are saved
         updateSettingsButtonIndicator()
@@ -1313,9 +1378,13 @@
         const timestampFormat =
           document.querySelector('input[name="timestamp-format"]:checked')
             ?.value || "none"
+        const diarizationDisplay =
+          document.querySelector('input[name="diarization-display"]:checked')
+            ?.value || "enabled"
 
         displaySettings.textFormat = textFormat
         displaySettings.timestampFormat = timestampFormat
+        displaySettings.diarizationDisplay = diarizationDisplay
         localStorage.setItem("displaySettings", JSON.stringify(displaySettings))
 
         // Update transcription display if there are results
@@ -1634,14 +1703,14 @@
         const token = getCookie("runpod_token")
         if (token) {
           formData.append("runpod_token", token)
-          transcriptionArea.value = "משתמש בהגדרות RunPod מותאמות אישית..."
+          transcriptionArea.innerHTML = "משתמש בהגדרות RunPod מותאמות אישית..."
         }
 
         transcribeBtn.disabled = true
         progressContainer.style.display = "block"
         progressBar.style.width = "0%"
         if (!token) {
-          transcriptionArea.value = "מעלה את הקובץ..."
+          transcriptionArea.innerHTML = "מעלה את הקובץ..."
         }
         copyBtn.disabled = true
         downloadBtn.disabled = true
@@ -1657,7 +1726,7 @@
           if (event.lengthComputable) {
             const percentComplete = (event.loaded / event.total) * 100
             progressBar.style.width = percentComplete + "%"
-            transcriptionArea.value = `מעלה את הקובץ... ${percentComplete.toFixed(
+            transcriptionArea.innerHTML = `מעלה את הקובץ... ${percentComplete.toFixed(
               1
             )}%`
           }
@@ -1669,7 +1738,7 @@
             if (response.error) {
               showError(response.error)
             } else {
-              transcriptionArea.value = "קובץ הועלה. מתחיל בתמלול..."
+              transcriptionArea.innerHTML = "קובץ הועלה. מתחיל בתמלול..."
               pollJobStatus(response.job_id)
             }
           } else {
@@ -1747,13 +1816,13 @@
 ניתן לתרום דרך לינק לפטראון בתחתית המסך.
 
 תודה!`
-                transcriptionArea.value = statusMessage
+                transcriptionArea.innerHTML = statusMessage.replace(/\n/g, '<br>')
                 progressBar.style.width = "0%"
                 activeTranscription = true
                 setTimeout(poll, pollInterval)
               } else if (data.progress !== undefined) {
                 progressBar.style.width = `${data.progress * 100}%`
-                transcriptionArea.value = `מתמלל... ${(
+                transcriptionArea.innerHTML = `מתמלל... ${(
                   data.progress * 100
                 ).toFixed(1)}%`
                 activeTranscription = true
@@ -1783,6 +1852,118 @@
         if (!segments || segments.length === 0) return ""
 
         const separator =
+          displaySettings.textFormat === "continuous" ? " " : "<br>"
+        const groups = []
+        let currentGroup = []
+        let currentTimeMarker = 30 // Start with 30 seconds
+
+        for (let i = 0; i < segments.length; i++) {
+          const segment = segments[i]
+          currentGroup.push(segment)
+
+          // Check if this segment should end the current group
+          const shouldEndGroup =
+            (segment.start <= currentTimeMarker &&
+              segment.end >= currentTimeMarker) ||
+            i === segments.length - 1 || // Last segment
+            (i < segments.length - 1 &&
+              segments[i + 1].start > currentTimeMarker)
+
+          if (shouldEndGroup) {
+            // Get start time of first segment and end time of last segment in group
+            const startTime = currentGroup[0].start
+            const endTime = currentGroup[currentGroup.length - 1].end
+
+            const groupText = displaySettings.diarizationDisplay === "enabled"
+              ? joinSegmentsWithSpeakerChanges(currentGroup, separator, "<br>", true)
+              : currentGroup.map((seg) => seg.text.trim()).join(separator)
+
+            const formattedStartTime = formatTimeForDisplay(startTime)
+            const formattedEndTime = formatTimeForDisplay(endTime)
+            groups.push(
+              "[" +
+                formattedStartTime +
+                "-" +
+                formattedEndTime +
+                "]<br>" +
+                groupText
+            )
+
+            // Reset for next group
+            currentGroup = []
+            currentTimeMarker += 30
+
+            // Handle case where we need to advance time marker further
+            while (
+              i < segments.length - 1 &&
+              segments[i + 1].start > currentTimeMarker
+            ) {
+              currentTimeMarker += 30
+            }
+          }
+        }
+
+        return groups.join("<br><br>")
+      }
+
+      function formatTimeForDisplay(seconds) {
+        const hours = Math.floor(seconds / 3600)
+        const minutes = Math.floor((seconds % 3600) / 60)
+        const secs = Math.floor(seconds % 60)
+
+        if (hours > 0) {
+          return `${hours}:${String(minutes).padStart(2, "0")}:${String(
+            secs
+          ).padStart(2, "0")}`
+        } else {
+          return `${minutes}:${String(secs).padStart(2, "0")}`
+        }
+      }
+
+      function getSpeakerLabel(segment) {
+        if (segment.speakers && segment.speakers.length > 0) {
+          // Fetch XY from segment.speakers[0] (format: SPEAKER_XY) and store as integer
+          const speakerNumber = parseInt(segment.speakers[0].replace("SPEAKER_", ""))
+
+          // Replace with "דובר speakerNumber"
+          const speakerLabel = `דובר ${speakerNumber}`
+          return `<span class="speaker speaker-${speakerNumber}">${speakerLabel}: </span>`
+        }
+        return `<span class="speaker">דובר לא מזוהה: </span>`
+      }
+      
+      function getSpeakerLabelPlain(segment) {
+        if (segment.speakers && segment.speakers.length > 0) {
+          // Fetch XY from segment.speakers[0] (format: SPEAKER_XY) and store as integer
+          const speakerNumber = parseInt(segment.speakers[0].replace("SPEAKER_", ""))
+          
+          // Replace with "דובר speakerNumber"
+          return `דובר ${speakerNumber}: `
+        }
+        return "דובר לא מזוהה: "
+      }
+      
+      function getPlainTextFromSegments() {
+        if (!transcriptionSegments || transcriptionSegments.length === 0) {
+          return ""
+        }
+        
+        let result
+        if (displaySettings.timestampFormat === "segments") {
+          result = formatWithTimecodesPlain(transcriptionSegments)
+        } else {
+          const continuousSeparator = displaySettings.textFormat === "continuous" ? " " : "\n"
+          const segmentSeparator = "\n"
+          result = joinSegmentsWithSpeakerChanges(transcriptionSegments, continuousSeparator, segmentSeparator, false)
+        }
+        
+        return result + "\n\n" + "תומלל באמצעות שירות התמלול של ivrit.ai"
+      }
+      
+      function formatWithTimecodesPlain(segments) {
+        if (!segments || segments.length === 0) return ""
+
+        const separator =
           displaySettings.textFormat === "continuous" ? " " : "\n"
         const groups = []
         let currentGroup = []
@@ -1805,9 +1986,9 @@
             const startTime = currentGroup[0].start
             const endTime = currentGroup[currentGroup.length - 1].end
 
-            const groupText = currentGroup
-              .map((seg) => seg.text.trim())
-              .join(separator)
+            const groupText = displaySettings.diarizationDisplay === "enabled"
+              ? joinSegmentsWithSpeakerChanges(currentGroup, separator, "\n", false)
+              : currentGroup.map((seg) => seg.text.trim()).join(separator)
 
             const formattedStartTime = formatTimeForDisplay(startTime)
             const formattedEndTime = formatTimeForDisplay(endTime)
@@ -1837,23 +2018,48 @@
         return groups.join("\n\n")
       }
 
-      function formatTimeForDisplay(seconds) {
-        const hours = Math.floor(seconds / 3600)
-        const minutes = Math.floor((seconds % 3600) / 60)
-        const secs = Math.floor(seconds % 60)
-
-        if (hours > 0) {
-          return `${hours}:${String(minutes).padStart(2, "0")}:${String(
-            secs
-          ).padStart(2, "0")}`
-        } else {
-          return `${minutes}:${String(secs).padStart(2, "0")}`
-        }
+      function showError(message) {
+        transcriptionArea.innerHTML = `שגיאה: ${message}`
+        resetAllState()
       }
 
-      function showError(message) {
-        transcriptionArea.value = `שגיאה: ${message}`
-        resetAllState()
+      function joinSegmentsWithSpeakerChanges(segments, continuousSeparator, segmentSeparator, isHTML = true) {
+        if (!segments || segments.length === 0) return ""
+        
+        const result = []
+        let currentSpeaker = null
+        const diarizationEnabled = displaySettings.diarizationDisplay === "enabled"
+        
+        for (let i = 0; i < segments.length; i++) {
+          const segment = segments[i]
+          const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
+          
+          // Determine if we should show the speaker label (only if diarization is enabled)
+          const showSpeakerLabel = diarizationEnabled && segmentSpeaker !== currentSpeaker
+          
+          // Get segment text with or without speaker label
+          const segmentText = showSpeakerLabel 
+            ? (isHTML ? getSpeakerLabel(segment) + segment.text.trim() : getSpeakerLabelPlain(segment) + segment.text.trim())
+            : segment.text.trim()
+          
+          if (i === 0) {
+            // First segment
+            result.push(segmentText)
+            currentSpeaker = segmentSpeaker
+          } else if (diarizationEnabled && segmentSpeaker !== currentSpeaker) {
+            // Speaker changed and diarization enabled - use double line break
+            result.push('<br><br>' + segmentText)
+            currentSpeaker = segmentSpeaker
+          } else {
+            // Same speaker OR diarization disabled - use the appropriate separator based on format
+            result.push(continuousSeparator + segmentText)
+            if (diarizationEnabled) {
+              currentSpeaker = segmentSpeaker
+            }
+          }
+        }
+        
+        return result.join("")
       }
 
       function updateTranscriptionDisplay() {
@@ -1862,16 +2068,14 @@
         if (displaySettings.timestampFormat === "segments") {
           result = formatWithTimecodes(transcriptionSegments)
         } else {
-          const separator =
-            displaySettings.textFormat === "continuous" ? " " : "\n"
-          result = transcriptionSegments
-            .map((segment) => segment.text.trim())
-            .join(separator)
+          const continuousSeparator = displaySettings.textFormat === "continuous" ? " " : "<br>"
+          const segmentSeparator = "<br>"
+          result = joinSegmentsWithSpeakerChanges(transcriptionSegments, continuousSeparator, segmentSeparator, true)
         }
 
-        result = result + "\n\n" + "תומלל באמצעות שירות התמלול של ivrit.ai"
+        result = result + "<br><br>" + "תומלל באמצעות שירות התמלול של ivrit.ai"
 
-        transcriptionArea.value = result
+        transcriptionArea.innerHTML = result
         copyBtn.disabled = false
         downloadBtn.disabled = false
         downloadDocxBtn.disabled = false
@@ -1911,9 +2115,20 @@
       }
 
       copyBtn.addEventListener("click", function () {
-        transcriptionArea.select()
-        document.execCommand("copy")
-        showToast("הטקסט הועתק ללוח בהצלחה", "success")
+        // Get plain text content for copying
+        const plainText = getPlainTextFromSegments()
+        navigator.clipboard.writeText(plainText).then(() => {
+          showToast("הטקסט הועתק ללוח בהצלחה", "success")
+        }).catch(() => {
+          // Fallback for older browsers
+          const range = document.createRange()
+          range.selectNode(transcriptionArea)
+          window.getSelection().removeAllRanges()
+          window.getSelection().addRange(range)
+          document.execCommand("copy")
+          window.getSelection().removeAllRanges()
+          showToast("הטקסט הועתק ללוח בהצלחה", "success")
+        })
       })
 
       downloadBtn.addEventListener("click", function () {
@@ -1927,7 +2142,7 @@
           const endTime = formatTime(segment.end)
           vttContent += `${index + 1}\n`
           vttContent += `${startTime} --> ${endTime}\n`
-          vttContent += `${segment.text.trim()}\n\n`
+          vttContent += `${getSpeakerLabelPlain(segment)}${segment.text.trim()}\n\n`
         })
 
         // Create and trigger download
@@ -1968,8 +2183,8 @@
             })
           )
 
-          // Get the text directly from the transcription textarea
-          const transcriptionText = transcriptionArea.value
+          // Get the text directly from the transcription content
+          const transcriptionText = getPlainTextFromSegments()
 
           // Split the text into lines and create paragraphs
           const lines = transcriptionText
@@ -2092,7 +2307,7 @@
           const end = formatTime(segment.end).replace(".", ",")
           srtContent += `${
             index + 1
-          }\n${start} --> ${end}\n${segment.text.trim()}\n\n`
+          }\n${start} --> ${end}\n${getSpeakerLabelPlain(segment)}${segment.text.trim()}\n\n`
         })
         const blob = new Blob([srtContent], { type: "text/plain" })
         const url = URL.createObjectURL(blob)
