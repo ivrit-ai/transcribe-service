@@ -1115,7 +1115,7 @@ async def job_status(job_id: str, request: Request):
     # Check if job is running and update progress
     for queue_type in [SHORT, LONG, PRIVATE]:
         if job_id in running_jobs[queue_type]:
-            if job_results[job_id]["progress"] < 1.0:
+            if job_results[job_id]["progress"] == 1.0:
                 return JSONResponse({"progress": job_results[job_id]["progress"]})
 
             job_desc = running_jobs[queue_type][job_id]
