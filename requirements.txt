@@ -8,4 +8,4 @@ python-magic==0.4.27
 ffmpeg-python==0.2.0
 posthog==3.4.0
 python-box
-ivrit==0.1.2
+ivrit==0.1.6
