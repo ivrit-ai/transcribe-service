@@ -1227,10 +1227,23 @@
       const runpodTokenInput = document.getElementById("runpod-token")
 
       let selectedFile = null
-      const MAX_FILE_SIZE = 200 * 1024 * 1024 // 200MB in bytes
+      const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024 // 300MB in bytes
+      const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024 // 3GB in bytes
       let transcriptionSegments = []
       let activeTranscription = false
       let currentJobId = null
+
+      // Function to get current max file size based on private key usage
+      function getMaxFileSize() {
+        const runpodToken = runpodTokenInput.value.trim()
+        return runpodToken ? MAX_FILE_SIZE_PRIVATE : MAX_FILE_SIZE_REGULAR
+      }
+
+      // Function to get max file size text for display
+      function getMaxFileSizeText() {
+        const runpodToken = runpodTokenInput.value.trim()
+        return runpodToken ? "3GB" : "300MB"
+      }
 
       let displaySettings = {
         textFormat: "continuous",
@@ -1676,8 +1689,10 @@
       function handleFiles(files) {
         if (files.length > 0) {
           selectedFile = files[0]
-          if (selectedFile.size > MAX_FILE_SIZE) {
-            showToast("הקובץ גדול מדי. הגודל המקסימלי המותר הוא 200MB", "error")
+          const maxFileSize = getMaxFileSize()
+          const maxFileSizeText = getMaxFileSizeText()
+          if (selectedFile.size > maxFileSize) {
+            showToast(`הקובץ גדול מדי. הגודל המקסימלי המותר הוא ${maxFileSizeText}`, "error")
             selectedFile = null
             transcribeBtn.disabled = true
             fileName.textContent = ""
