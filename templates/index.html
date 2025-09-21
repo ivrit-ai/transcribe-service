@@ -2157,7 +2157,7 @@
           const endTime = formatTime(segment.end)
           vttContent += `${index + 1}\n`
           vttContent += `${startTime} --> ${endTime}\n`
-          vttContent += `${getSpeakerLabelPlain(segment)}${segment.text.trim()}\n\n`
+          vttContent += `${segment.text.trim()}\n\n`
         })
 
         // Create and trigger download
@@ -2183,41 +2183,80 @@
             new docx.Paragraph({
               children: [
                 new docx.TextRun({
-                  text: "תמלול",
+                  text: "\u200F" + "תמלול",
                   bold: true,
                   size: 32,
                   bidirectional: true,
+                  rightToLeft: true,
                 }),
               ],
-              heading: docx.HeadingLevel.HEADING_1,
+              // Use explicit alignment and RTL instead of built-in heading style to avoid LTR defaults
               alignment: docx.AlignmentType.RIGHT,
               bidirectional: true,
+              rightToLeft: true,
               spacing: {
                 after: 400,
               },
             })
           )
 
-          // Get the text directly from the transcription content
-          const transcriptionText = getPlainTextFromSegments()
-
-          // Split the text into lines and create paragraphs
-          const lines = transcriptionText
-            .split("\n")
-            .filter((line) => line.trim() !== "")
-
-          lines.forEach((line) => {
+          // Generate content with speaker names for each segment
+          let currentSpeaker = null
+          
+          // Define speaker colors (matching HTML theme)
+          const speakerColors = {
+            1: "2196F3",   // Blue
+            2: "4CAF50",   // Green
+            3: "FF9800",   // Orange
+            4: "E91E63",   // Pink
+            5: "9C27B0",   // Purple
+            6: "F44336",   // Red
+            7: "00BCD4",   // Cyan
+            8: "8BC34A",   // Light Green
+            9: "FFC107",   // Amber
+            10: "607D8B"   // Blue Grey
+          }
+          
+          transcriptionSegments.forEach((segment) => {
+            const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
+            
+            // Format speaker text and get color
+            let speakerText = ""
+            let speakerNumber = null
+            let speakerColor = "000000" // Default black
+            
+            if (segmentSpeaker) {
+              speakerNumber = parseInt(segmentSpeaker.replace("SPEAKER_", ""))
+              speakerText = `דובר ${speakerNumber}: `
+              // Use color from mapping, cycling if more than 10 speakers
+              const colorIndex = ((speakerNumber - 1) % 10) + 1
+              speakerColor = speakerColors[colorIndex]
+            } else {
+              speakerText = "דובר לא מזוהה: "
+            }
+            
+            // Create paragraph with colored speaker name and text
             paragraphs.push(
               new docx.Paragraph({
                 children: [
                   new docx.TextRun({
-                    text: line,
+                    text: "\u200F" + speakerText,
                     size: 24,
                     bidirectional: true,
+                    rightToLeft: true,
+                    bold: true,
+                    color: speakerColor,
+                  }),
+                  new docx.TextRun({
+                    text: "\u200F" + segment.text.trim(),
+                    size: 24,
+                    bidirectional: true,
+                    rightToLeft: true,
                   }),
                 ],
                 alignment: docx.AlignmentType.RIGHT,
                 bidirectional: true,
+                rightToLeft: true,
                 spacing: {
                   after: 200,
                 },
@@ -2227,8 +2266,10 @@
                 },
               })
             )
+            
+            currentSpeaker = segmentSpeaker
           })
-
+          
           // Create a new document with RTL support
           const doc = new docx.Document({
             sections: [
@@ -2251,11 +2292,13 @@
                 document: {
                   run: {
                     bidirectional: true,
+                    rightToLeft: true,
                   },
                 },
                 paragraph: {
                   alignment: docx.AlignmentType.RIGHT,
                   bidirectional: true,
+                  rightToLeft: true,
                 },
               },
             },
@@ -2322,7 +2365,7 @@
           const end = formatTime(segment.end).replace(".", ",")
           srtContent += `${
             index + 1
-          }\n${start} --> ${end}\n${getSpeakerLabelPlain(segment)}${segment.text.trim()}\n\n`
+          }\n${start} --> ${end}\n${segment.text.trim()}\n\n`
         })
         const blob = new Blob([srtContent], { type: "text/plain" })
         const url = URL.createObjectURL(blob)
