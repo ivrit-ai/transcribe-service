@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="{{ url_for('static', path='favicon.png') }}" />
     <title>תמלול בעזרת ivrit.ai</title>
-    <script src="https://unpkg.com/docx@9.5.1/dist/index.iife.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html-docx-js/dist/html-docx.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
       :root {
@@ -525,10 +525,16 @@
       .action-buttons {
         display: flex;
         align-items: center;
-        justify-content: flex-end;
+        justify-content: space-between;
         gap: 10px;
         margin-top: 1rem;
         margin-bottom: 0.5rem;
+      }
+      .actions-right,
+      .actions-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
       }
       .action-buttons button {
         background-color: var(--secondary-color);
@@ -626,6 +632,23 @@
       }
       .hidden-download-original {
         display: none !important;
+      }
+      /* Standard inline SVG sizing inside action buttons */
+      .action-buttons button svg {
+        width: 20px;
+        height: 20px;
+      }
+      /* Active indication for text-format toggle */
+      .action-buttons button.toggle-active {
+        background-color: var(--primary-color);
+        border-color: var(--primary-color);
+        color: #ffffff;
+      }
+      .action-buttons button.toggle-active i[data-lucide] {
+        color: #ffffff;
+      }
+      .action-buttons button.toggle-active svg {
+        color: #ffffff;
       }
       #copy-btn {
         background-color: var(--secondary-color);
@@ -950,62 +973,76 @@
         <div id="progress-bar"></div>
       </div>
       <div class="action-buttons">
-        <button
-          id="copy-btn"
-          disabled
-          title="העתק את הטקסט"
-          aria-label="העתק טקסט"
-        >
-          <i data-lucide="copy"></i>
-        </button>
-
-        <div class="download-menu">
+        <div class="actions-right">
           <button
-            id="download-menu-btn"
-            disabled
-            title="הורדות"
-            aria-label="הורדות"
+            id="text-format-toggle"
+            title="פורמט הטקסט: טקסט רציף"
+            aria-label="פורמט הטקסט"
           >
-            <i data-lucide="download"></i>
+            <svg id="text-format-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 6h16M10 12h10M4 18h16"/>
+            </svg>
           </button>
-          <div class="download-dropdown">
-            <div class="download-dropdown-header">הורד כ...</div>
-            <button type="button" data-action="vtt" disabled id="menu-vtt">
-              VTT
-            </button>
-            <button type="button" data-action="srt" disabled id="menu-srt">
-              SRT
-            </button>
-            <button type="button" data-action="docx" disabled id="menu-docx">
-              Word DOCX
-            </button>
-            <button type="button" data-action="json" disabled id="menu-json">
-              JSON
-            </button>
-          </div>
         </div>
 
-        <!-- Hidden original buttons kept for existing JS logic -->
-        <button
-          id="download-btn"
-          class="hidden-download-original"
-          disabled
-          title="הורד כתוביות"
-        >
-          🎬
-        </button>
-        <button
-          id="download-docx-btn"
-          class="hidden-download-original"
-          disabled
-          title="הורד כמסמך Word"
-        ></button>
-        <button
-          id="export-words-btn"
-          class="hidden-download-original"
-          disabled
-          title="ייצא נתוני תמלול מלאים (JSON)"
-        ></button>
+        <div class="actions-left">
+          <button
+            id="copy-btn"
+            disabled
+            title="העתק את הטקסט"
+            aria-label="העתק טקסט"
+          >
+            <i data-lucide="copy"></i>
+          </button>
+
+          <div class="download-menu">
+            <button
+              id="download-menu-btn"
+              disabled
+              title="הורדות"
+              aria-label="הורדות"
+            >
+              <i data-lucide="download"></i>
+            </button>
+            <div class="download-dropdown">
+              <div class="download-dropdown-header">הורד כ...</div>
+              <button type="button" data-action="vtt" disabled id="menu-vtt">
+                VTT
+              </button>
+              <button type="button" data-action="srt" disabled id="menu-srt">
+                SRT
+              </button>
+              <button type="button" data-action="docx" disabled id="menu-docx">
+                Word DOCX
+              </button>
+              <button type="button" data-action="json" disabled id="menu-json">
+                JSON
+              </button>
+            </div>
+          </div>
+
+          <!-- Hidden original buttons kept for existing JS logic -->
+          <button
+            id="download-btn"
+            class="hidden-download-original"
+            disabled
+            title="הורד כתוביות"
+          >
+            🎬
+          </button>
+          <button
+            id="download-docx-btn"
+            class="hidden-download-original"
+            disabled
+            title="הורד כמסמך Word"
+          ></button>
+          <button
+            id="export-words-btn"
+            class="hidden-download-original"
+            disabled
+            title="ייצא נתוני תמלול מלאים (JSON)"
+          ></button>
+        </div>
       </div>
       <div id="transcription-container">
         <div id="transcription" contenteditable="false"></div>
@@ -1083,36 +1120,7 @@
           <div class="settings-section">
             <h3>הגדרות תצוגה</h3>
 
-            <div class="form-group">
-              <label class="form-label">פורמט הטקסט:</label>
-              <div class="radio-group">
-                <label class="radio-option">
-                  <input
-                    type="radio"
-                    name="text-format"
-                    value="continuous"
-                    id="continuous-text"
-                    checked
-                  />
-                  <div class="radio-content">
-                    <span class="radio-text">טקסט רציף</span>
-                    <small>כל הטקסט ברצף אחד</small>
-                  </div>
-                </label>
-                <label class="radio-option">
-                  <input
-                    type="radio"
-                    name="text-format"
-                    value="segments"
-                    id="segment-text"
-                  />
-                  <div class="radio-content">
-                    <span class="radio-text">פסקאות נפרדות</span>
-                    <small>טקסט מחולק לפסקאות</small>
-                  </div>
-                </label>
-              </div>
-            </div>
+            
 
             <div class="form-group">
               <label class="form-label">קודי זמן:</label>
@@ -1212,6 +1220,7 @@
       const downloadBtn = document.getElementById("download-btn")
       const downloadDocxBtn = document.getElementById("download-docx-btn")
       const exportWordsBtn = document.getElementById("export-words-btn")
+      const textFormatToggleBtn = document.getElementById("text-format-toggle")
       // New unified download menu elements
       const downloadMenuBtn = document.getElementById("download-menu-btn")
       const menuVttBtn = document.getElementById("menu-vtt")
@@ -1350,11 +1359,8 @@
           }
         }
 
-        // Update form controls to match current settings
-        document.getElementById("continuous-text").checked =
-          displaySettings.textFormat === "continuous"
-        document.getElementById("segment-text").checked =
-          displaySettings.textFormat === "segments"
+        // Update the toggle button icon/title based on current text format
+        updateTextFormatToggleUI()
         document.getElementById("no-timestamps").checked =
           displaySettings.timestampFormat === "none"
         document.getElementById("segment-timestamps").checked =
@@ -1385,9 +1391,7 @@
       // Save settings to cookies and localStorage
       async function saveSettings() {
         // Save display settings
-        const textFormat =
-          document.querySelector('input[name="text-format"]:checked')?.value ||
-          "continuous"
+        const textFormat = displaySettings.textFormat || "continuous"
         const timestampFormat =
           document.querySelector('input[name="timestamp-format"]:checked')
             ?.value || "none"
@@ -1498,8 +1502,9 @@
         localStorage.removeItem("displaySettings")
 
         // Reset form controls to defaults
-        document.getElementById("continuous-text").checked = true
-        document.getElementById("segment-text").checked = false
+        // Reset format to default; toggle UI will reflect later
+        displaySettings.textFormat = "continuous"
+        updateTextFormatToggleUI()
         document.getElementById("no-timestamps").checked = true
         document.getElementById("segment-timestamps").checked = false
 
@@ -2102,6 +2107,52 @@
         menuJsonBtn.disabled = false
       }
 
+      function updateTextFormatToggleUI() {
+        if (!textFormatToggleBtn) return
+        const isSegments = displaySettings.textFormat === "segments"
+        // Update inline SVG to reflect current mode
+        const svg = document.getElementById("text-format-icon")
+        if (svg) {
+          while (svg.firstChild) svg.removeChild(svg.firstChild)
+          if (isSegments) {
+            // Segments mode: bullet list (bullets on the right for RTL)
+            svg.insertAdjacentHTML(
+              "afterbegin",
+              '<circle cx="20" cy="6" r="2" fill="currentColor" stroke="none" />\n' +
+                '<circle cx="20" cy="12" r="2" fill="currentColor" stroke="none" />\n' +
+                '<circle cx="20" cy="18" r="2" fill="currentColor" stroke="none" />\n' +
+                '<path d="M17 6H4" />\n' +
+                '<path d="M17 12H7" />\n' +
+                '<path d="M17 18H4" />'
+            )
+          } else {
+            // Continuous mode: three lines with middle right-aligned
+            svg.insertAdjacentHTML(
+              "afterbegin",
+              '<path d="M4 6h16"/>\n' + '<path d="M10 12h10"/>\n' + '<path d="M4 18h16"/>'
+            )
+          }
+        }
+        textFormatToggleBtn.title = isSegments
+          ? "פורמט הטקסט: פסקאות נפרדות"
+          : "פורמט הטקסט: טקסט רציף"
+        textFormatToggleBtn.setAttribute('aria-pressed', String(isSegments))
+        textFormatToggleBtn.classList.toggle('toggle-active', isSegments)
+        // No lucide refresh needed for inline SVG
+      }
+
+      if (textFormatToggleBtn) {
+        textFormatToggleBtn.addEventListener("click", () => {
+          displaySettings.textFormat =
+            displaySettings.textFormat === "segments" ? "continuous" : "segments"
+          localStorage.setItem("displaySettings", JSON.stringify(displaySettings))
+          updateTextFormatToggleUI()
+          if (transcriptionSegments.length > 0) {
+            updateTranscriptionDisplay()
+          }
+        })
+      }
+
       function resetUploadState() {
         transcribeBtn.disabled = false
         selectedFile = null
@@ -2172,155 +2223,140 @@
         URL.revokeObjectURL(url)
       })
 
-      downloadDocxBtn.addEventListener("click", async function () {
+      downloadDocxBtn.addEventListener("click", function () {
         if (!transcriptionSegments.length) return
 
         try {
-          const paragraphs = []
-
-          // Add title
-          paragraphs.push(
-            new docx.Paragraph({
-              children: [
-                new docx.TextRun({
-                  text: "\u200F" + "תמלול",
-                  bold: true,
-                  size: 32,
-                  bidirectional: true,
-                  rightToLeft: true,
-                }),
-              ],
-              // Use explicit alignment and RTL instead of built-in heading style to avoid LTR defaults
-              alignment: docx.AlignmentType.RIGHT,
-              bidirectional: true,
-              rightToLeft: true,
-              spacing: {
-                after: 400,
-              },
-            })
-          )
-
-          // Generate content with speaker names for each segment
-          let currentSpeaker = null
-          
-          // Define speaker colors (matching HTML theme)
-          const speakerColors = {
-            1: "2196F3",   // Blue
-            2: "4CAF50",   // Green
-            3: "FF9800",   // Orange
-            4: "E91E63",   // Pink
-            5: "9C27B0",   // Purple
-            6: "F44336",   // Red
-            7: "00BCD4",   // Cyan
-            8: "8BC34A",   // Light Green
-            9: "FFC107",   // Amber
-            10: "607D8B"   // Blue Grey
+          if (!window.htmlDocx || typeof window.htmlDocx.asBlob !== "function") {
+            showToast("ספריית יצירת המסמך לא נטענה. בדקו את החיבור ונסו שוב.", "error")
+            return
           }
-          
-          transcriptionSegments.forEach((segment) => {
-            const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
-            
-            // Format speaker text and get color
-            let speakerText = ""
-            let speakerNumber = null
-            let speakerColor = "000000" // Default black
-            
-            if (segmentSpeaker) {
-              speakerNumber = parseInt(segmentSpeaker.replace("SPEAKER_", ""))
-              speakerText = `דובר ${speakerNumber}: `
-              // Use color from mapping, cycling if more than 10 speakers
-              const colorIndex = ((speakerNumber - 1) % 10) + 1
-              speakerColor = speakerColors[colorIndex]
-            } else {
-              speakerText = "דובר לא מזוהה: "
+
+          function escapeHtml(text) {
+            return (text || "").replace(/[&<>]/g, function (c) {
+              return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]
+            })
+          }
+
+          function buildDocxHTMLFromSegments() {
+            const speakerColors = {
+              1: "#2196F3",
+              2: "#4CAF50",
+              3: "#FF9800",
+              4: "#E91E63",
+              5: "#9C27B0",
+              6: "#F44336",
+              7: "#00BCD4",
+              8: "#8BC34A",
+              9: "#FFC107",
+              10: "#607D8B",
             }
-            
-            // Create paragraph with colored speaker name and text
-            paragraphs.push(
-              new docx.Paragraph({
-                children: [
-                  new docx.TextRun({
-                    text: "\u200F" + speakerText,
-                    size: 24,
-                    bidirectional: true,
-                    rightToLeft: true,
-                    bold: true,
-                    color: speakerColor,
-                  }),
-                  new docx.TextRun({
-                    text: "\u200F" + segment.text.trim(),
-                    size: 24,
-                    bidirectional: true,
-                    rightToLeft: true,
-                  }),
-                ],
-                alignment: docx.AlignmentType.RIGHT,
-                bidirectional: true,
-                rightToLeft: true,
-                spacing: {
-                  after: 200,
-                },
-                indent: {
-                  right: 0,
-                  left: 0,
-                },
-              })
-            )
-            
-            currentSpeaker = segmentSpeaker
-          })
-          
-          // Create a new document with RTL support
-          const doc = new docx.Document({
-            sections: [
-              {
-                properties: {
-                  page: {
-                    margin: {
-                      top: 1440, // 1 inch
-                      right: 1440, // 1 inch
-                      bottom: 1440, // 1 inch
-                      left: 1440, // 1 inch
-                    },
-                  },
-                },
-                children: paragraphs,
-              },
-            ],
-            styles: {
-              default: {
-                document: {
-                  run: {
-                    bidirectional: true,
-                    rightToLeft: true,
-                  },
-                },
-                paragraph: {
-                  alignment: docx.AlignmentType.RIGHT,
-                  bidirectional: true,
-                  rightToLeft: true,
-                },
-              },
-            },
-          })
 
-          // Generate the document blob
-          const buffer = await docx.Packer.toBlob(doc)
+            const lines = []
+            lines.push('<!DOCTYPE html>')
+            lines.push('<html lang="he" dir="rtl">')
+            lines.push('<head>')
+            lines.push('<meta charset="utf-8" />')
+            lines.push('<style>')
+            lines.push('body { font-family: Arial, "Noto Sans Hebrew", "Rubik", sans-serif; direction: rtl; unicode-bidi: embed; }')
+            lines.push('h1 { text-align: right; font-size: 24pt; margin: 0 0 18pt; }')
+            lines.push('p { text-align: right; line-height: 1.6; margin: 0 0 10pt; }')
+            lines.push('</style>')
+            lines.push('</head>')
+            lines.push('<body>')
+            lines.push('<h1>תמלול</h1>')
 
-          // Download the document
-          const url = URL.createObjectURL(buffer)
+            const diarizationEnabled = displaySettings.diarizationDisplay === "enabled"
+            const separateEachSegment = displaySettings.textFormat === "segments"
+
+            if (separateEachSegment) {
+              // One paragraph per segment
+              for (let i = 0; i < transcriptionSegments.length; i++) {
+                const seg = transcriptionSegments[i]
+                const text = escapeHtml((seg.text || '').trim())
+                const rawSpeaker = seg.speakers && seg.speakers.length > 0 ? seg.speakers[0] : null
+
+                if (diarizationEnabled) {
+                  if (rawSpeaker) {
+                    const speakerNumber = parseInt(rawSpeaker.replace('SPEAKER_', '')) || 0
+                    const colorIndex = ((speakerNumber - 1) % 10) + 1
+                    const color = speakerColors[colorIndex] || '#000000'
+                    const label = 'דובר ' + speakerNumber + ': '
+                    lines.push('<p><span style="color:' + color + '; font-weight:700">' + label + '</span>' + text + '</p>')
+                  } else {
+                    lines.push('<p><span style="font-weight:700">דובר לא מזוהה: </span>' + text + '</p>')
+                  }
+                } else {
+                  lines.push('<p>' + text + '</p>')
+                }
+              }
+            } else {
+              // Continuous mode: start a new paragraph only on speaker change
+              let currentSpeaker = undefined
+              let bufferParts = []
+              let currentLabelHTML = ''
+
+              const flushParagraph = () => {
+                if (bufferParts.length === 0) return
+                const content = bufferParts.join(' ').trim()
+                if (currentLabelHTML) {
+                  lines.push('<p>' + currentLabelHTML + content + '</p>')
+                } else {
+                  lines.push('<p>' + content + '</p>')
+                }
+                bufferParts = []
+                currentLabelHTML = ''
+              }
+
+              for (let i = 0; i < transcriptionSegments.length; i++) {
+                const seg = transcriptionSegments[i]
+                const rawSpeaker = seg.speakers && seg.speakers.length > 0 ? seg.speakers[0] : null
+                const segText = escapeHtml((seg.text || '').trim())
+
+                const speakerChanged = i === 0 ? true : rawSpeaker !== currentSpeaker
+                if (speakerChanged) {
+                  // Emit previous paragraph
+                  flushParagraph()
+                  // Prepare new label if diarization is enabled
+                  if (diarizationEnabled) {
+                    if (rawSpeaker) {
+                      const speakerNumber = parseInt(rawSpeaker.replace('SPEAKER_', '')) || 0
+                      const colorIndex = ((speakerNumber - 1) % 10) + 1
+                      const color = speakerColors[colorIndex] || '#000000'
+                      const label = 'דובר ' + speakerNumber + ': '
+                      currentLabelHTML = '<span style="color:' + color + '; font-weight:700">' + label + '</span>'
+                    } else {
+                      currentLabelHTML = '<span style="font-weight:700">דובר לא מזוהה: </span>'
+                    }
+                  } else {
+                    currentLabelHTML = ''
+                  }
+                  currentSpeaker = rawSpeaker
+                }
+
+                if (segText) bufferParts.push(segText)
+              }
+
+              // Flush the last paragraph
+              flushParagraph()
+            }
+
+            lines.push('<p style="color:#666; font-size:10pt; margin-top:16pt">תומלל באמצעות שירות התמלול של ivrit.ai</p>')
+            lines.push('</body>')
+            lines.push('</html>')
+            return lines.join('\n')
+          }
+
+          const html = buildDocxHTMLFromSegments()
+          const blob = window.htmlDocx.asBlob(html)
+          const url = URL.createObjectURL(blob)
           const a = document.createElement("a")
           a.href = url
           a.download = "transcription.docx"
-
           document.body.appendChild(a)
           a.click()
           document.body.removeChild(a)
-
-          // Clean up the URL after a short delay
-          setTimeout(() => {
-            URL.revokeObjectURL(url)
-          }, 1000)
+          URL.revokeObjectURL(url)
         } catch (error) {
           console.error("Error creating DOCX:", error)
           showToast("שגיאה ביצירת קובץ Word. אנא נסה שוב.", "error")
