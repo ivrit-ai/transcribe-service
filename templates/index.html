@@ -67,6 +67,60 @@
         height: 24px;
         color: #666;
       }
+      .lang-menu {
+        position: absolute;
+        top: 1rem;
+        left: 3.5rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+      }
+      .lang-menu button {
+        background: none;
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.45rem;
+        border-radius: 50%;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .lang-menu .dropdown {
+        position: relative;
+        display: inline-block;
+      }
+      .lang-menu .dropdown-content {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 0.25rem 0;
+        min-width: 120px;
+        z-index: 200;
+      }
+      .lang-menu .dropdown:hover .dropdown-content {
+        display: block;
+      }
+      .lang-menu .dropdown-content button {
+        display: block;
+        width: 100%;
+        background: none;
+        border: none;
+        text-align: right;
+        padding: 0.4rem 0.75rem;
+        cursor: pointer;
+        color: var(--text-color);
+      }
+      .lang-menu .dropdown-content button:hover {
+        background: var(--secondary-color);
+        color: var(--primary-color);
+      }
       .theme-toggle {
         position: absolute;
         top: 1rem;
@@ -461,6 +515,30 @@
         background-color: var(--border-color);
         cursor: not-allowed;
       }
+      /* Ensure perfect alignment of language select and transcribe button */
+      .transcribe-controls #transcribe-btn {
+        margin-top: 0;
+        height: 40px;
+        padding: 0 1rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .transcribe-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+      #language-select {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        height: 40px;
+        padding: 0 0.75rem; /* ~12px to match button's horizontal padding scale */
+        color: var(--text-color);
+        font-size: 1rem;
+      }
       #progress-container {
         width: 100%;
         background-color: #f0f0f0;
@@ -649,6 +727,11 @@
       }
       .action-buttons button.toggle-active svg {
         color: #ffffff;
+      }
+      /* Toggle emojis sizing */
+      #timestamps-toggle, #diarization-toggle {
+        font-size: 18px;
+        line-height: 1;
       }
       #copy-btn {
         background-color: var(--secondary-color);
@@ -923,6 +1006,32 @@
       .site-footer a:hover {
         text-decoration: underline;
       }
+
+      /* Localization layout adjustments */
+      html[dir] .modal-content {
+        text-align: start;
+      }
+      html[dir] .modal .form-group {
+        text-align: start;
+      }
+      html[dir] .modal .radio-content,
+      html[dir] .modal .radio-option .radio-text,
+      html[dir] .modal .form-help {
+        text-align: start;
+        direction: inherit;
+      }
+      html[dir] .modal .radio-option {
+        direction: inherit;
+      }
+      html[dir] .modal .balance-container {
+        direction: inherit;
+        text-align: start;
+      }
+      /* Keep RunPod token input LTR regardless of UI language */
+      #runpod-token {
+        direction: ltr;
+        text-align: left;
+      }
     </style>
   </head>
   <body>
@@ -933,8 +1042,7 @@
         class="theme-toggle"
         id="theme-toggle"
         onclick="toggleTheme()"
-        title="החלף מצב תאורה"
-        aria-label="החלף מצב תאורה"
+        data-i18n-title="themeToggle"
       >
         <i data-lucide="sun" id="sun-icon"></i>
         <i data-lucide="moon" id="moon-icon" style="display: none"></i>
@@ -942,33 +1050,45 @@
       <button
         class="settings-btn"
         id="settings-btn"
-        title="הגדרות"
-        aria-label="הגדרות"
+        data-i18n-title="settings"
       >
         <i data-lucide="settings"></i>
       </button>
-      <h1>תמלול בעזרת ivrit.ai</h1>
+      <div class="lang-menu" id="lang-menu">
+        <div class="dropdown">
+          <button id="lang-btn" title="שפה" aria-label="שפה">
+            <i data-lucide="globe"></i>
+          </button>
+          <div class="dropdown-content">
+            <button type="button" data-lang="he">עברית</button>
+            <button type="button" data-lang="yi">ייִדיש</button>
+            <button type="button" data-lang="en">English</button>
+          </div>
+        </div>
+      </div>
+      <h1 data-i18n="title">תמלול בעזרת ivrit.ai</h1>
       <div id="drop-area">
-        <p>גרור קובץ לכאן או לחץ לבחירת קובץ</p>
+        <p data-i18n="dropPrompt">גרור קובץ לכאן או לחץ לבחירת קובץ</p>
         <input type="file" id="file-input" accept="audio/*,video/*" />
       </div>
 
       <div class="file-preview" id="file-preview">
         <div class="file-info">
           <div class="file-details">
-            <strong id="preview-file-name">קובץ נבחר</strong>
-            <div class="file-size" id="preview-file-size" dir="ltr">
-              גודל קובץ
+            <strong id="preview-file-name" data-i18n="fileSelected">קובץ נבחר</strong>
+          <div class="file-size" id="preview-file-size" dir="ltr">
+              <span data-i18n="fileSize">גודל קובץ</span>
             </div>
           </div>
-          <button class="remove-file-btn" onclick="removeFile()">
-            הסר קובץ
-          </button>
+          <button class="remove-file-btn" onclick="removeFile()" data-i18n="removeFile">הסר קובץ</button>
         </div>
       </div>
 
       <div id="file-name"></div>
-      <button id="transcribe-btn" disabled>תמלל</button>
+      <div class="transcribe-controls">
+        <button id="transcribe-btn" disabled data-i18n="transcribe">תמלל</button>
+        <select id="language-select" title="שפת תמלול" aria-label="שפת תמלול"></select>
+      </div>
       <div id="progress-container">
         <div id="progress-bar"></div>
       </div>
@@ -983,14 +1103,27 @@
               <path d="M4 6h16M10 12h10M4 18h16"/>
             </svg>
           </button>
+          <button
+            id="timestamps-toggle"
+            title="קודי זמן"
+            aria-label="קודי זמן"
+          >
+            🕒
+          </button>
+          <button
+            id="diarization-toggle"
+            title="דוברים"
+            aria-label="דוברים"
+          >
+            🗣️
+          </button>
         </div>
 
         <div class="actions-left">
           <button
             id="copy-btn"
             disabled
-            title="העתק את הטקסט"
-            aria-label="העתק טקסט"
+            data-i18n-title="copyText"
           >
             <i data-lucide="copy"></i>
           </button>
@@ -999,13 +1132,12 @@
             <button
               id="download-menu-btn"
               disabled
-              title="הורדות"
-              aria-label="הורדות"
+              data-i18n-title="downloads"
             >
               <i data-lucide="download"></i>
             </button>
             <div class="download-dropdown">
-              <div class="download-dropdown-header">הורד כ...</div>
+              <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
               <button type="button" data-action="vtt" disabled id="menu-vtt">
                 VTT
               </button>
@@ -1013,7 +1145,7 @@
                 SRT
               </button>
               <button type="button" data-action="docx" disabled id="menu-docx">
-                Word DOCX
+                <span data-i18n="wordDocx">Word DOCX</span>
               </button>
               <button type="button" data-action="json" disabled id="menu-json">
                 JSON
@@ -1050,7 +1182,7 @@
       <div class="links-container">
         <a href="mailto:info@ivrit.ai" class="contact-link">
           <i data-lucide="mail"></i>
-          רוצים ליצור קשר? אנחנו כאן
+          <span data-i18n="contactUs">רוצים ליצור קשר? אנחנו כאן</span>
         </a>
         <a
           href="https://www.patreon.com/ivrit_ai/membership"
@@ -1061,7 +1193,7 @@
             src="{{ url_for('static', path='patreon.png') }}"
             alt="Patreon"
           />
-          רוצים לתרום לנו?
+          <span data-i18n="donateAsk">רוצים לתרום לנו?</span>
         </a>
       </div>
       <div class="site-footer">
@@ -1069,7 +1201,7 @@
           href="https://www.ivrit.ai/en/privacy/"
           target="_blank"
           rel="noopener"
-          >מדיניות פרטיות ותנאי שימוש</a
+          ><span data-i18n="privacyTos">מדיניות פרטיות ותנאי שימוש</span></a
         >
       </div>
     </div>
@@ -1077,28 +1209,28 @@
     <div id="settings-modal" class="modal">
       <div class="modal-content">
         <div class="modal-header">
-          <h2>הגדרות</h2>
+          <h2 data-i18n="settingsHeader">הגדרות</h2>
           <button class="close" id="close-settings">&times;</button>
         </div>
         <form id="settings-form">
           <div class="settings-section">
-            <h3>הגדרות RunPod</h3>
+            <h3 data-i18n="settingsRunpod">הגדרות RunPod</h3>
             <div class="form-group">
-              <label for="runpod-token" dir="ltr">RunPod API Key:</label>
+              <label for="runpod-token" dir="ltr" data-i18n="runpodKeyLabel">RunPod API Key:</label>
               <input
                 type="password"
                 id="runpod-token"
                 name="runpod-token"
+                data-i18n="runpodKeyPlaceholder"
                 placeholder="הכנס את ה-API Key שלך"
-                style="direction: rtl; text-align: right"
               />
               <small class="form-help"
-                >הזנת מפתח פרטי מאפשרת שימוש במשאבים פרטיים לעיבוד מהיר יותר.<br />
+                ><span data-i18n="runpodHelpText">הזנת מפתח פרטי מאפשרת שימוש במשאבים פרטיים לעיבוד מהיר יותר.</span><br />
                 <a
                   href="https://youtu.be/xr8RQRFERLs?si=ibHcP6m0wdUh-gHU"
                   target="_blank"
                   rel="noopener"
-                  >לצפייה בסרטון הסבר</a
+                  data-i18n="runpodHelpWatch">לצפייה בסרטון הסבר</a
                 ></small
               >
             </div>
@@ -1111,103 +1243,58 @@
                 <i data-lucide="credit-card"></i>
               </div>
               <div class="balance-text">
-                <span class="balance-label">יתרה</span>
+                <span class="balance-label" data-i18n="balanceLabel">יתרה</span>
                 <span class="balance-amount" id="balance-amount">—</span>
               </div>
             </div>
           </div>
 
-          <div class="settings-section">
-            <h3>הגדרות תצוגה</h3>
-
-            
-
-            <div class="form-group">
-              <label class="form-label">קודי זמן:</label>
-              <div class="radio-group">
-                <label class="radio-option">
-                  <input
-                    type="radio"
-                    name="timestamp-format"
-                    value="none"
-                    id="no-timestamps"
-                    checked
-                  />
-                  <div class="radio-content">
-                    <span class="radio-text">ללא קודי זמן</span>
-                    <small>רק הטקסט ללא זמנים</small>
-                  </div>
-                </label>
-                <label class="radio-option">
-                  <input
-                    type="radio"
-                    name="timestamp-format"
-                    value="segments"
-                    id="segment-timestamps"
-                  />
-                  <div class="radio-content">
-                    <span class="radio-text">כולל קודי זמן</span>
-                    <small>זמני התחלה וסיום, לפי פורמט הטקסט</small>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">הפרדת דוברים:</label>
-              <div class="radio-group">
-                <label class="radio-option">
-                  <input
-                    type="radio"
-                    name="diarization-display"
-                    value="enabled"
-                    id="diarization-enabled"
-                    checked
-                  />
-                  <div class="radio-content">
-                    <span class="radio-text">הצג דוברים</span>
-                    <small>הצג תוויות דוברים ושורות חדשות עם החלפת דובר</small>
-                  </div>
-                </label>
-                <label class="radio-option">
-                  <input
-                    type="radio"
-                    name="diarization-display"
-                    value="disabled"
-                    id="diarization-disabled"
-                  />
-                  <div class="radio-content">
-                    <span class="radio-text">הסתר דוברים</span>
-                    <small>הצג רק טקסט ללא תוויות דוברים</small>
-                  </div>
-                </label>
-              </div>
-            </div>
-          </div>
+          
 
           <div class="modal-buttons">
-            <button type="submit" class="btn btn-primary">שמור</button>
+            <button type="submit" class="btn btn-primary" data-i18n="save">שמור</button>
             <button
               type="button"
               class="btn btn-secondary"
               id="cancel-settings"
             >
-              ביטול
+              <span data-i18n="cancel">ביטול</span>
             </button>
             <button type="button" class="btn btn-secondary" id="clear-settings">
-              נקה הגדרות
+              <span data-i18n="clear">נקה הגדרות</span>
             </button>
           </div>
         </form>
       </div>
     </div>
 
+    <script src="{{ url_for('static', path='i18n.js') }}"></script>
     <script>
       // Initialize Lucide icons after DOM is parsed
       document.addEventListener("DOMContentLoaded", () => {
         if (window.lucide && typeof window.lucide.createIcons === "function") {
           window.lucide.createIcons()
         }
+        if (window.I18N) {
+          window.I18N.apply()
+          const langBtn = document.getElementById('lang-btn')
+          if (langBtn) {
+            langBtn.title = window.I18N.t('language')
+            langBtn.setAttribute('aria-label', window.I18N.t('language'))
+          }
+        }
+        initTranscriptionLanguages()
+        // Ensure toggles reflect initial defaults/saved state on first load
+        updateTextFormatToggleUI()
+        updateTimestampsToggleUI()
+        updateDiarizationToggleUI()
+        // Force diarization enabled by default visually on first load
+        if (!displaySettings.diarizationDisplay) {
+          displaySettings.diarizationDisplay = 'enabled'
+          localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
+          updateDiarizationToggleUI()
+        }
+        updateTranscriptionDirectionUI()
       })
       const dropArea = document.getElementById("drop-area")
       const fileInput = document.getElementById("file-input")
@@ -1216,11 +1303,14 @@
       const progressContainer = document.getElementById("progress-container")
       const progressBar = document.getElementById("progress-bar")
       const transcriptionArea = document.getElementById("transcription")
+      const languageSelect = document.getElementById("language-select")
       const copyBtn = document.getElementById("copy-btn")
       const downloadBtn = document.getElementById("download-btn")
       const downloadDocxBtn = document.getElementById("download-docx-btn")
       const exportWordsBtn = document.getElementById("export-words-btn")
       const textFormatToggleBtn = document.getElementById("text-format-toggle")
+      const timestampsToggleBtn = document.getElementById("timestamps-toggle")
+      const diarizationToggleBtn = document.getElementById("diarization-toggle")
       // New unified download menu elements
       const downloadMenuBtn = document.getElementById("download-menu-btn")
       const menuVttBtn = document.getElementById("menu-vtt")
@@ -1228,12 +1318,90 @@
       const menuDocxBtn = document.getElementById("menu-docx")
       const menuJsonBtn = document.getElementById("menu-json")
       const settingsBtn = document.getElementById("settings-btn")
+      const langMenu = document.getElementById("lang-menu")
+      // Language selection handlers
+      if (langMenu && window.I18N) {
+        langMenu.addEventListener('click', (e) => {
+          const btn = e.target.closest('button[data-lang]')
+          if (!btn) return
+          const lang = btn.getAttribute('data-lang')
+          window.I18N.setLanguage(lang)
+          window.I18N.apply()
+          if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons()
+          }
+          // Keep transcription language default aligned with UI language when user changes UI language
+          if (languageSelect) {
+            if ([...languageSelect.options].some(o => o.value === lang)) {
+              languageSelect.value = lang
+            }
+          }
+          updateTranscriptionDirectionUI()
+        })
+      }
       const settingsModal = document.getElementById("settings-modal")
       const closeSettings = document.getElementById("close-settings")
       const cancelSettings = document.getElementById("cancel-settings")
       const clearSettings = document.getElementById("clear-settings")
       const settingsForm = document.getElementById("settings-form")
       const runpodTokenInput = document.getElementById("runpod-token")
+
+      async function initTranscriptionLanguages() {
+        try {
+          const resp = await fetch('/languages')
+          const data = await resp.json()
+          const langs = (data && data.languages) ? data.languages : {}
+          if (!languageSelect) return
+          languageSelect.innerHTML = ''
+          const KNOWN = [
+            { key: 'he', label: 'עברית' },
+            { key: 'en', label: 'English' },
+            { key: 'fr', label: 'Français' },
+            { key: 'es', label: 'Español' },
+            { key: 'de', label: 'Deutsch' },
+            { key: 'zh', label: '中文' },
+          ]
+          const addIfEnabled = ({ key, label }) => {
+            const cfg = langs[key]
+            if (cfg && cfg.enabled) {
+              const opt = document.createElement('option')
+              opt.value = key
+              opt.textContent = label
+              languageSelect.appendChild(opt)
+            }
+          }
+          KNOWN.forEach(addIfEnabled)
+          const uiLang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
+          if ([...languageSelect.options].some(o => o.value === uiLang)) {
+            languageSelect.value = uiLang
+          } else if (languageSelect.options.length > 0) {
+            languageSelect.selectedIndex = 0
+          }
+          updateTranscriptionDirectionUI()
+        } catch (e) {
+          if (!languageSelect) return
+          if (languageSelect.options.length === 0) {
+            ;[
+              { key: 'he', label: 'עברית' },
+              { key: 'en', label: 'English' },
+              { key: 'fr', label: 'Français' },
+              { key: 'es', label: 'Español' },
+              { key: 'de', label: 'Deutsch' },
+              { key: 'zh', label: '中文' },
+            ].forEach(({ key, label }) => {
+              const opt = document.createElement('option')
+              opt.value = key
+              opt.textContent = label
+              languageSelect.appendChild(opt)
+            })
+            const uiLang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
+            if ([...languageSelect.options].some(o => o.value === uiLang)) {
+              languageSelect.value = uiLang
+            }
+            updateTranscriptionDirectionUI()
+          }
+        }
+      }
 
       let selectedFile = null
       const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024 // 300MB in bytes
@@ -1302,13 +1470,18 @@
         document.getElementById("file-name").style.display = "block"
         document.getElementById("file-name").textContent = ""
         fileInput.value = ""
-        showToast("קובץ הוסר בהצלחה", "success")
+        showToast(window.I18N.t('fileRemovedSuccess'), "success")
       }
 
       function formatFileSize(bytes) {
         if (bytes === 0) return "0 Bytes"
         const k = 1024
-        const sizes = ["Bytes", "KB", "MB", "GB"]
+        const sizes = [
+          window.I18N.t('unitBytes'),
+          window.I18N.t('unitKB'),
+          window.I18N.t('unitMB'),
+          window.I18N.t('unitGB')
+        ]
         const i = Math.floor(Math.log(bytes) / Math.log(k))
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
       }
@@ -1341,6 +1514,10 @@
           ...displaySettings,
           ...JSON.parse(savedDisplaySettings),
         }
+        // Ensure diarization is enabled by default when not present
+        if (!displaySettings.diarizationDisplay) {
+          displaySettings.diarizationDisplay = "enabled"
+        }
       }
 
       // Load settings from cookies and localStorage
@@ -1361,14 +1538,8 @@
 
         // Update the toggle button icon/title based on current text format
         updateTextFormatToggleUI()
-        document.getElementById("no-timestamps").checked =
-          displaySettings.timestampFormat === "none"
-        document.getElementById("segment-timestamps").checked =
-          displaySettings.timestampFormat === "segments"
-        document.getElementById("diarization-enabled").checked =
-          displaySettings.diarizationDisplay === "enabled"
-        document.getElementById("diarization-disabled").checked =
-          displaySettings.diarizationDisplay === "disabled"
+        updateTimestampsToggleUI()
+        updateDiarizationToggleUI()
 
         // Update settings button appearance if credentials are saved
         updateSettingsButtonIndicator()
@@ -1381,10 +1552,10 @@
 
         if (hasCredentials) {
           settingsBtn.style.color = "#4CAF50"
-          settingsBtn.title = "הגדרות (הגדרות RunPod שמורות)"
+          settingsBtn.title = window.I18N.t('settingsWithRunpodSaved')
         } else {
           settingsBtn.style.color = "#666"
-          settingsBtn.title = "הגדרות"
+          settingsBtn.title = window.I18N.t('settings')
         }
       }
 
@@ -1392,12 +1563,8 @@
       async function saveSettings() {
         // Save display settings
         const textFormat = displaySettings.textFormat || "continuous"
-        const timestampFormat =
-          document.querySelector('input[name="timestamp-format"]:checked')
-            ?.value || "none"
-        const diarizationDisplay =
-          document.querySelector('input[name="diarization-display"]:checked')
-            ?.value || "enabled"
+        const timestampFormat = displaySettings.timestampFormat || "none"
+        const diarizationDisplay = displaySettings.diarizationDisplay || "enabled"
 
         displaySettings.textFormat = textFormat
         displaySettings.timestampFormat = timestampFormat
@@ -1417,7 +1584,7 @@
           settingsModal.style.display = "none"
           settingsModal.classList.remove("show")
           updateSettingsButtonIndicator()
-          showToast("הגדרות נשמרו בהצלחה", "success")
+          showToast(window.I18N.t('settingsSaved'), "success")
           return
         }
 
@@ -1426,7 +1593,7 @@
           '#settings-form button[type="submit"]'
         )
         const originalText = saveBtn.textContent
-        saveBtn.textContent = "בודק..."
+        saveBtn.textContent = window.I18N.t('verifyChecking')
         saveBtn.disabled = true
 
         try {
@@ -1449,10 +1616,9 @@
               // Save credentials
               setCookie("runpod_token", token, 365 * 24 * 60 * 60) // 1 year
 
-              let successMessage = "הגדרות RunPod נשמרו בהצלחה"
+              let successMessage = window.I18N.t('runpodSettingsSaved')
               if (endpointResult.needsWait) {
-                successMessage +=
-                  "Endpoint חדש נוצר או עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
+                successMessage += ' ' + window.I18N.t('runpodEndpointWait')
               }
               showToast(successMessage, "success")
               settingsModal.style.display = "none"
@@ -1460,12 +1626,7 @@
               updateSettingsButtonIndicator()
               checkBalance() // Update balance display
             } else {
-              showToast(
-                `שגיאה בבדיקת ה-endpoint:\n${
-                  endpointResult.error || "לא ניתן לבדוק או ליצור endpoint"
-                }`,
-                "error"
-              )
+              showToast(`${window.I18N.t('endpointCheckError')}\n${endpointResult.error || ''}`.trim(), "error")
             }
           }
         } catch (error) {
@@ -1501,12 +1662,13 @@
         }
         localStorage.removeItem("displaySettings")
 
-        // Reset form controls to defaults
-        // Reset format to default; toggle UI will reflect later
+        // Reset form controls to defaults (UI buttons will reflect state)
         displaySettings.textFormat = "continuous"
+        displaySettings.timestampFormat = "none"
+        displaySettings.diarizationDisplay = "enabled"
         updateTextFormatToggleUI()
-        document.getElementById("no-timestamps").checked = true
-        document.getElementById("segment-timestamps").checked = false
+        updateTimestampsToggleUI()
+        updateDiarizationToggleUI()
 
         // Update display if there are results
         if (transcriptionSegments.length > 0) {
@@ -1557,7 +1719,7 @@
           const balanceAmount = document.getElementById("balance-amount")
 
           balanceContainer.classList.add("visible")
-          balanceAmount.textContent = "טוען..."
+          balanceAmount.textContent = window.I18N.t('loading')
           balanceAmount.className = "balance-amount balance-loading"
 
           try {
@@ -1571,12 +1733,12 @@
               balanceAmount.textContent = `$${formattedBalance}`
               balanceAmount.className = "balance-amount"
             } else {
-              balanceAmount.textContent = "שגיאה בטעינה"
+              balanceAmount.textContent = window.I18N.t('balanceLoadingError')
               balanceAmount.className = "balance-amount"
             }
           } catch (error) {
             console.error("Balance fetch error:", error)
-            balanceAmount.textContent = "שגיאה בטעינה"
+            balanceAmount.textContent = window.I18N.t('balanceLoadingError')
             balanceAmount.className = "balance-amount"
           }
         }
@@ -1697,14 +1859,14 @@
           const maxFileSize = getMaxFileSize()
           const maxFileSizeText = getMaxFileSizeText()
           if (selectedFile.size > maxFileSize) {
-            showToast(`הקובץ גדול מדי. הגודל המקסימלי המותר הוא ${maxFileSizeText}`, "error")
+            showToast((window.I18N ? window.I18N.t('fileTooLarge', { size: maxFileSizeText }) : `הקובץ גדול מדי. הגודל המקסימלי המותר הוא ${maxFileSizeText}`), "error")
             selectedFile = null
             transcribeBtn.disabled = true
             fileName.textContent = ""
           } else {
             transcribeBtn.disabled = false
             showFilePreview(selectedFile)
-            showToast("קובץ נבחר בהצלחה", "success")
+            showToast((window.I18N ? window.I18N.t('fileSelectedSuccess') : "קובץ נבחר בהצלחה"), "success")
           }
         }
       }
@@ -1723,15 +1885,22 @@
         const token = getCookie("runpod_token")
         if (token) {
           formData.append("runpod_token", token)
-          transcriptionArea.innerHTML = "משתמש בהגדרות RunPod מותאמות אישית..."
+          transcriptionArea.innerHTML = window.I18N.t('usingRunpod')
         }
+
+        // Include selected transcription language for backend
+        try {
+          const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
+          formData.append('language', selectedLang)
+        } catch {}
 
         transcribeBtn.disabled = true
         progressContainer.style.display = "block"
         progressBar.style.width = "0%"
         if (!token) {
-          transcriptionArea.innerHTML = "מעלה את הקובץ..."
+          transcriptionArea.innerHTML = window.I18N.t('uploading')
         }
+        updateTranscriptionDirectionUI()
         copyBtn.disabled = true
         downloadBtn.disabled = true
         downloadDocxBtn.disabled = true
@@ -1746,9 +1915,7 @@
           if (event.lengthComputable) {
             const percentComplete = (event.loaded / event.total) * 100
             progressBar.style.width = percentComplete + "%"
-            transcriptionArea.innerHTML = `מעלה את הקובץ... ${percentComplete.toFixed(
-              1
-            )}%`
+            transcriptionArea.innerHTML = window.I18N.t('uploadingProgress', { progress: percentComplete.toFixed(1) })
           }
         }
 
@@ -1758,7 +1925,7 @@
             if (response.error) {
               showError(response.error)
             } else {
-              transcriptionArea.innerHTML = "קובץ הועלה. מתחיל בתמלול..."
+              transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('uploadedStarting') : "קובץ הועלה. מתחיל בתמלול...")
               pollJobStatus(response.job_id)
             }
           } else {
@@ -1776,10 +1943,7 @@
 
             if (!errorMessage) {
               const currentTime = new Date().toISOString()
-              reportMessage = `אם השגיאה נמשכת, אנא שלחו דיווח לכתובת info@ivrit.ai עם הפרטים הבאים:
-- כתובת האימייל שלכם
-- זמן השגיאה: ${currentTime}
-- פרטי השגיאה: ${xhr.statusText}`
+              reportMessage = window.I18N.t('errorReportTemplate', { time: currentTime, details: xhr.statusText })
             }
 
             showError(reportMessage)
@@ -1787,7 +1951,7 @@
         }
 
         xhr.onerror = function () {
-          showError("שגיאה בהעלאת הקובץ. אנא נסה שוב.")
+          showError(window.I18N.t('uploadError'))
         }
 
         xhr.send(formData)
@@ -1808,43 +1972,32 @@
               }
 
               if (data.queue_position) {
-                let statusMessage = `בתור במקום ${data.queue_position}. זמן משוער להתחלה: ${data.time_ahead}`
+                let statusMessage = (window.I18N ? window.I18N.t('queuePosition', { position: data.queue_position, eta: data.time_ahead }) : `בתור במקום ${data.queue_position}. זמן משוער להתחלה: ${data.time_ahead}`)
                 if (data.job_type) {
                   let jobTypeText
                   switch (data.job_type) {
                     case "short":
-                      jobTypeText = "קצרה"
+                      jobTypeText = (window.I18N ? window.I18N.t('jobTypeShort') : "קצרה")
                       break
                     case "long":
-                      jobTypeText = "ארוכה"
+                      jobTypeText = (window.I18N ? window.I18N.t('jobTypeLong') : "ארוכה")
                       break
                     case "private":
-                      jobTypeText = "פרטית"
+                      jobTypeText = (window.I18N ? window.I18N.t('jobTypePrivate') : "פרטית")
                       break
                     default:
                       jobTypeText = data.job_type
                   }
-                  statusMessage += `, סוג עבודה: ${jobTypeText}`
+                  statusMessage += (window.I18N ? ('\n' + window.I18N.t('jobTypePrefix', { jobType: jobTypeText })) : `, סוג עבודה: ${jobTypeText}`)
                 }
-                statusMessage += `
-
-בזמן שאתם ממתינים, אנו מזכירים ש-ivrit.ai הוא פרויקט ללא מטרות רווח.
-כל השירותים שלנו, כולל שירות התמלול בו אתם משתמשים כרגע, ניתנים בחינם.
-
-נודה אם תוכלו לתרום בכדי שנוכל להנגיש את השירות ליותר משתמשים.
-
-ניתן לתרום דרך לינק לפטראון בתחתית המסך.
-
-תודה!`
+                statusMessage += `\n\n${(window.I18N ? window.I18N.t('waitingMsg') : '')}`
                 transcriptionArea.innerHTML = statusMessage.replace(/\n/g, '<br>')
                 progressBar.style.width = "0%"
                 activeTranscription = true
                 setTimeout(poll, pollInterval)
               } else if (data.progress !== undefined) {
                 progressBar.style.width = `${data.progress * 100}%`
-                transcriptionArea.innerHTML = `מתמלל... ${(
-                  data.progress * 100
-                ).toFixed(1)}%`
+                transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('transcribing', { progress: (data.progress * 100).toFixed(1) }) : `מתמלל... ${(data.progress * 100).toFixed(1)}%`)
                 activeTranscription = true
 
                 if (data.progress < 1.0) {
@@ -1860,7 +2013,7 @@
             })
             .catch((error) => {
               console.error("Error:", error)
-              showError("אירעה שגיאה בבדיקת סטטוס העבודה")
+              showError((window.I18N ? window.I18N.t('statusError') : "אירעה שגיאה בבדיקת סטטוס העבודה"))
               activeTranscription = false
             })
         }
@@ -1940,27 +2093,63 @@
         }
       }
 
-      function getSpeakerLabel(segment) {
-        if (segment.speakers && segment.speakers.length > 0) {
-          // Fetch XY from segment.speakers[0] (format: SPEAKER_XY) and store as integer
-          const speakerNumber = parseInt(segment.speakers[0].replace("SPEAKER_", ""))
-
-          // Replace with "דובר speakerNumber"
-          const speakerLabel = `דובר ${speakerNumber}`
-          return `<span class="speaker speaker-${speakerNumber}">${speakerLabel}: </span>`
+      // Update transcription area direction and alignment based on selected language
+      function updateTranscriptionDirectionUI() {
+        const lang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
+        const rtlLangs = ['he', 'yi']
+        const isRTL = rtlLangs.includes(lang)
+        if (transcriptionArea) {
+          transcriptionArea.style.direction = isRTL ? 'rtl' : 'ltr'
+          transcriptionArea.style.textAlign = isRTL ? 'right' : 'left'
         }
-        return `<span class="speaker">דובר לא מזוהה: </span>`
+      }
+
+      // Speaker label localization should follow the transcription target language, not UI language
+      function getTranscriptionLanguage() {
+        try {
+          if (languageSelect && languageSelect.value) return languageSelect.value
+        } catch {}
+        return (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
+      }
+
+      const SPEAKER_I18N = {
+        he: { speaker: 'דובר {num}', unknown: 'דובר לא מזוהה' },
+        yi: { speaker: 'רעדנדיקער {num}', unknown: 'ניט־ידענטיפֿיצירטער רעדנדיקער' },
+        en: { speaker: 'Speaker {num}', unknown: 'Unknown speaker' },
+        fr: { speaker: 'Locuteur {num}', unknown: 'Locuteur inconnu' },
+        es: { speaker: 'Hablante {num}', unknown: 'Hablante desconocido' },
+        de: { speaker: 'Sprecher {num}', unknown: 'Unbekannter Sprecher' },
+        zh: { speaker: '说话者 {num}', unknown: '未知说话者' }
+      }
+
+      function translateSpeakerLabelText(lang, num) {
+        const entry = SPEAKER_I18N[lang] || SPEAKER_I18N['en']
+        const template = entry.speaker || 'Speaker {num}'
+        return String(template).replace('{num}', String(num))
+      }
+
+      function translateSpeakerUnknownText(lang) {
+        const entry = SPEAKER_I18N[lang] || SPEAKER_I18N['en']
+        return entry.unknown || 'Unknown speaker'
+      }
+
+      function getSpeakerLabel(segment) {
+        const lang = getTranscriptionLanguage()
+        if (segment.speakers && segment.speakers.length > 0) {
+          const speakerNumber = parseInt(segment.speakers[0].replace("SPEAKER_", ""))
+          const speakerLabelText = translateSpeakerLabelText(lang, speakerNumber)
+          return `<span class="speaker speaker-${speakerNumber}">${speakerLabelText}: </span>`
+        }
+        return `<span class="speaker">${translateSpeakerUnknownText(lang)}: </span>`
       }
       
       function getSpeakerLabelPlain(segment) {
+        const lang = getTranscriptionLanguage()
         if (segment.speakers && segment.speakers.length > 0) {
-          // Fetch XY from segment.speakers[0] (format: SPEAKER_XY) and store as integer
           const speakerNumber = parseInt(segment.speakers[0].replace("SPEAKER_", ""))
-          
-          // Replace with "דובר speakerNumber"
-          return `דובר ${speakerNumber}: `
+          return `${translateSpeakerLabelText(lang, speakerNumber)}: `
         }
-        return "דובר לא מזוהה: "
+        return `${translateSpeakerUnknownText(lang)}: `
       }
       
       function getPlainTextFromSegments() {
@@ -1977,7 +2166,7 @@
           result = joinSegmentsWithSpeakerChanges(transcriptionSegments, continuousSeparator, segmentSeparator, false)
         }
         
-        return result + "\n\n" + "תומלל באמצעות שירות התמלול של ivrit.ai"
+        return result + "\n\n" + (window.I18N ? window.I18N.t('transcriptFooter') : "תומלל באמצעות שירות התמלול של ivrit.ai")
       }
       
       function formatWithTimecodesPlain(segments) {
@@ -2039,7 +2228,7 @@
       }
 
       function showError(message) {
-        transcriptionArea.innerHTML = `שגיאה: ${message}`
+        transcriptionArea.innerHTML = `${window.I18N.t('errorPrefix')}: ${message}`
         resetAllState()
       }
 
@@ -2093,9 +2282,10 @@
           result = joinSegmentsWithSpeakerChanges(transcriptionSegments, continuousSeparator, segmentSeparator, true)
         }
 
-        result = result + "<br><br>" + "תומלל באמצעות שירות התמלול של ivrit.ai"
+        result = result + "<br><br>" + (window.I18N ? window.I18N.t('transcriptFooter') : "תומלל באמצעות שירות התמלול של ivrit.ai")
 
         transcriptionArea.innerHTML = result
+        updateTranscriptionDirectionUI()
         copyBtn.disabled = false
         downloadBtn.disabled = false
         downloadDocxBtn.disabled = false
@@ -2134,11 +2324,31 @@
           }
         }
         textFormatToggleBtn.title = isSegments
-          ? "פורמט הטקסט: פסקאות נפרדות"
-          : "פורמט הטקסט: טקסט רציף"
+          ? window.I18N.t('textFormatSegmentsTitle')
+          : window.I18N.t('textFormatContinuousTitle')
         textFormatToggleBtn.setAttribute('aria-pressed', String(isSegments))
         textFormatToggleBtn.classList.toggle('toggle-active', isSegments)
         // No lucide refresh needed for inline SVG
+      }
+
+      function updateTimestampsToggleUI() {
+        if (!timestampsToggleBtn) return
+        const enabled = displaySettings.timestampFormat === "segments"
+        timestampsToggleBtn.classList.toggle('toggle-active', enabled)
+        timestampsToggleBtn.title = enabled
+          ? (window.I18N ? window.I18N.t('timestampsSegments') : 'כולל קודי זמן')
+          : (window.I18N ? window.I18N.t('timestampsNone') : 'ללא קודי זמן')
+        timestampsToggleBtn.setAttribute('aria-pressed', String(enabled))
+      }
+
+      function updateDiarizationToggleUI() {
+        if (!diarizationToggleBtn) return
+        const enabled = displaySettings.diarizationDisplay === "enabled"
+        diarizationToggleBtn.classList.toggle('toggle-active', enabled)
+        diarizationToggleBtn.title = enabled
+          ? (window.I18N ? window.I18N.t('diarizationEnabled') : 'הצג דוברים')
+          : (window.I18N ? window.I18N.t('diarizationDisabled') : 'הסתר דוברים')
+        diarizationToggleBtn.setAttribute('aria-pressed', String(enabled))
       }
 
       if (textFormatToggleBtn) {
@@ -2150,6 +2360,24 @@
           if (transcriptionSegments.length > 0) {
             updateTranscriptionDisplay()
           }
+        })
+      }
+
+      if (timestampsToggleBtn) {
+        timestampsToggleBtn.addEventListener('click', () => {
+          displaySettings.timestampFormat = displaySettings.timestampFormat === 'segments' ? 'none' : 'segments'
+          localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
+          updateTimestampsToggleUI()
+          if (transcriptionSegments.length > 0) updateTranscriptionDisplay()
+        })
+      }
+
+      if (diarizationToggleBtn) {
+        diarizationToggleBtn.addEventListener('click', () => {
+          displaySettings.diarizationDisplay = displaySettings.diarizationDisplay === 'enabled' ? 'disabled' : 'enabled'
+          localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
+          updateDiarizationToggleUI()
+          if (transcriptionSegments.length > 0) updateTranscriptionDisplay()
         })
       }
 
@@ -2184,7 +2412,7 @@
         // Get plain text content for copying
         const plainText = getPlainTextFromSegments()
         navigator.clipboard.writeText(plainText).then(() => {
-          showToast("הטקסט הועתק ללוח בהצלחה", "success")
+          showToast((window.I18N ? window.I18N.t('copySuccess') : "הטקסט הועתק ללוח בהצלחה"), "success")
         }).catch(() => {
           // Fallback for older browsers
           const range = document.createRange()
@@ -2193,7 +2421,7 @@
           window.getSelection().addRange(range)
           document.execCommand("copy")
           window.getSelection().removeAllRanges()
-          showToast("הטקסט הועתק ללוח בהצלחה", "success")
+          showToast((window.I18N ? window.I18N.t('copySuccess') : "הטקסט הועתק ללוח בהצלחה"), "success")
         })
       })
 
@@ -2254,17 +2482,21 @@
 
             const lines = []
             lines.push('<!DOCTYPE html>')
-            lines.push('<html lang="he" dir="rtl">')
+            const docLang = (typeof getTranscriptionLanguage === 'function') ? getTranscriptionLanguage() : 'he'
+            const isRTL = ['he', 'yi'].includes(docLang)
+            const docDir = isRTL ? 'rtl' : 'ltr'
+            const textAlign = isRTL ? 'right' : 'left'
+            lines.push('<html lang="' + docLang + '" dir="' + docDir + '">')
             lines.push('<head>')
             lines.push('<meta charset="utf-8" />')
             lines.push('<style>')
-            lines.push('body { font-family: Arial, "Noto Sans Hebrew", "Rubik", sans-serif; direction: rtl; unicode-bidi: embed; }')
-            lines.push('h1 { text-align: right; font-size: 24pt; margin: 0 0 18pt; }')
-            lines.push('p { text-align: right; line-height: 1.6; margin: 0 0 10pt; }')
+            lines.push('body { font-family: Arial, "Noto Sans Hebrew", "Rubik", sans-serif; direction: ' + docDir + '; unicode-bidi: embed; }')
+            lines.push('h1 { text-align: ' + textAlign + '; font-size: 24pt; margin: 0 0 18pt; }')
+            lines.push('p { text-align: ' + textAlign + '; line-height: 1.6; margin: 0 0 10pt; }')
             lines.push('</style>')
             lines.push('</head>')
             lines.push('<body>')
-            lines.push('<h1>תמלול</h1>')
+            lines.push('<h1>' + (window.I18N ? window.I18N.t('transcriptHeaderDocx') : 'תמלול') + '</h1>')
 
             const diarizationEnabled = displaySettings.diarizationDisplay === "enabled"
             const separateEachSegment = displaySettings.textFormat === "segments"
@@ -2281,10 +2513,11 @@
                     const speakerNumber = parseInt(rawSpeaker.replace('SPEAKER_', '')) || 0
                     const colorIndex = ((speakerNumber - 1) % 10) + 1
                     const color = speakerColors[colorIndex] || '#000000'
-                    const label = 'דובר ' + speakerNumber + ': '
+                    const label = (typeof translateSpeakerLabelText === 'function' ? translateSpeakerLabelText(docLang, speakerNumber) : ('Speaker ' + speakerNumber)) + ': '
                     lines.push('<p><span style="color:' + color + '; font-weight:700">' + label + '</span>' + text + '</p>')
                   } else {
-                    lines.push('<p><span style="font-weight:700">דובר לא מזוהה: </span>' + text + '</p>')
+                    const unknownText = (typeof translateSpeakerUnknownText === 'function' ? translateSpeakerUnknownText(docLang) : 'Unknown speaker')
+                    lines.push('<p><span style="font-weight:700">' + unknownText + ': </span>' + text + '</p>')
                   }
                 } else {
                   lines.push('<p>' + text + '</p>')
@@ -2323,10 +2556,11 @@
                       const speakerNumber = parseInt(rawSpeaker.replace('SPEAKER_', '')) || 0
                       const colorIndex = ((speakerNumber - 1) % 10) + 1
                       const color = speakerColors[colorIndex] || '#000000'
-                      const label = 'דובר ' + speakerNumber + ': '
+                      const label = (typeof translateSpeakerLabelText === 'function' ? translateSpeakerLabelText(docLang, speakerNumber) : ('Speaker ' + speakerNumber)) + ': '
                       currentLabelHTML = '<span style="color:' + color + '; font-weight:700">' + label + '</span>'
                     } else {
-                      currentLabelHTML = '<span style="font-weight:700">דובר לא מזוהה: </span>'
+                      const unknownText = (typeof translateSpeakerUnknownText === 'function' ? translateSpeakerUnknownText(docLang) : 'Unknown speaker')
+                      currentLabelHTML = '<span style="font-weight:700">' + unknownText + ': </span>'
                     }
                   } else {
                     currentLabelHTML = ''
@@ -2341,7 +2575,7 @@
               flushParagraph()
             }
 
-            lines.push('<p style="color:#666; font-size:10pt; margin-top:16pt">תומלל באמצעות שירות התמלול של ivrit.ai</p>')
+            lines.push('<p style="color:#666; font-size:10pt; margin-top:16pt">' + (window.I18N ? window.I18N.t('transcriptFooter') : 'תומלל באמצעות שירות התמלול של ivrit.ai') + '</p>')
             lines.push('</body>')
             lines.push('</html>')
             return lines.join('\n')
@@ -2438,7 +2672,7 @@
       // Custom confirmation dialog
       function showExitWarning() {
         return confirm(
-          "התמלול עדיין פעיל. יציאה מהדף תפסיק את התמלול. האם אתה בטוח שברצונך לצאת?"
+          window.I18N.t('exitWarning')
         )
       }
 
@@ -2446,8 +2680,7 @@
         if (activeTranscription) {
           // Show confirmation dialog
           e.preventDefault()
-          e.returnValue =
-            "התמלול עדיין פעיל. יציאה מהדף תפסיק את התמלול. האם אתה בטוח שברצונך לצאת?"
+          e.returnValue = window.I18N.t('exitWarning')
           return e.returnValue
         }
       })
