@@ -1,0 +1,34 @@
+{
+  "languages": {
+    "he": {
+      "model": "ivrit-ai/whisper-large-v3-turbo-ct2",
+      "general_availability": true,
+      "enabled": true
+    },
+    "en": {
+      "model": "large-v3-turbo",
+      "general_availability": false,
+      "enabled": true
+    },
+    "fr": {
+      "model": "large-v3-turbo",
+      "general_availability": false,
+      "enabled": true
+    },
+    "es": {
+      "model": "large-v3-turbo",
+      "general_availability": false,
+      "enabled": true
+    },
+    "de": {
+      "model": "large-v3-turbo",
+      "general_availability": false,
+      "enabled": true
+    },
+    "zh": {
+      "model": "large-v3-turbo",
+      "general_availability": false,
+      "enabled": true
+    }
+  }
+}
