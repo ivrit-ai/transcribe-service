@@ -1404,6 +1404,8 @@
       }
 
       let selectedFile = null
+      let selectedFiles = []
+      let batchMode = false
       const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024 // 300MB in bytes
       const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024 // 3GB in bytes
       let transcriptionSegments = []
@@ -1843,10 +1845,69 @@
 
       dropArea.addEventListener("drop", handleDrop, false)
 
-      function handleDrop(e) {
+      async function handleDrop(e) {
         const dt = e.dataTransfer
-        const files = dt.files
-        handleFiles(files)
+        // Allow dropping multiple files/folders only with private key
+        const isPrivate = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
+        if (isPrivate && dt.items && dt.items.length) {
+          const files = await extractFilesFromDataTransfer(dt)
+          handleFiles(files)
+        } else {
+          handleFiles(dt.files)
+        }
+      }
+
+      async function extractFilesFromDataTransfer(dt) {
+        const out = []
+        const items = dt.items
+        if (!items || !items.length) return Array.from(dt.files || [])
+
+        const traverseEntry = async (entry) => {
+          return new Promise((resolve) => {
+            try {
+              if (entry.isFile) {
+                entry.file((file) => resolve([file]))
+              } else if (entry.isDirectory) {
+                const dirReader = entry.createReader()
+                const all = []
+                const readAll = () => {
+                  dirReader.readEntries(async (entries) => {
+                    if (!entries.length) {
+                      resolve(all)
+                      return
+                    }
+                    const promises = entries.map((ent) => traverseEntry(ent))
+                    Promise.all(promises).then((nested) => {
+                      nested.forEach((arr) => all.push(...arr))
+                      readAll()
+                    })
+                  })
+                }
+                readAll()
+              } else {
+                resolve([])
+              }
+            } catch (err) {
+              resolve([])
+            }
+          })
+        }
+
+        const entryPromises = []
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i]
+          if (item.webkitGetAsEntry) {
+            const entry = item.webkitGetAsEntry()
+            if (entry) entryPromises.push(traverseEntry(entry))
+          } else if (item.kind === "file") {
+            const f = item.getAsFile()
+            if (f) out.push(f)
+          }
+        }
+
+        const nested = await Promise.all(entryPromises)
+        nested.forEach((arr) => out.push(...arr))
+        return out
       }
 
       fileInput.addEventListener("change", function () {
@@ -1854,8 +1915,39 @@
       })
 
       function handleFiles(files) {
-        if (files.length > 0) {
-          selectedFile = files[0]
+        const isPrivate = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
+        const list = Array.from(files || [])
+        if (!list.length) return
+
+        if (isPrivate && list.length > 1) {
+          // Multi-file mode (private key only)
+          const maxSize = getMaxFileSize()
+          const maxText = getMaxFileSizeText()
+          const valid = []
+          for (const f of list) {
+            if (f.size > maxSize) {
+              showToast((window.I18N ? window.I18N.t('fileTooLarge', { size: maxText }) : `הקובץ גדול מדי. הגודל המקסימלי המותר הוא ${maxText}`) + `: ${f.name}`, "error")
+              continue
+            }
+            valid.push(f)
+          }
+          if (!valid.length) {
+            selectedFiles = []
+            batchMode = false
+            transcribeBtn.disabled = true
+            return
+          }
+          selectedFiles = valid
+          selectedFile = null
+          batchMode = true
+          transcribeBtn.disabled = false
+          document.getElementById("file-preview").classList.remove("show")
+          document.getElementById("file-name").style.display = "block"
+          document.getElementById("file-name").textContent = (window.I18N ? window.I18N.t('filesSelectedCount', { count: valid.length }) : `${valid.length} קבצים נבחרו`)
+          showToast((window.I18N ? window.I18N.t('filesSelectedSuccess', { count: valid.length }) : `${valid.length} קבצים נבחרו בהצלחה`), "success")
+        } else {
+          // Single-file mode
+          selectedFile = list[0]
           const maxFileSize = getMaxFileSize()
           const maxFileSizeText = getMaxFileSizeText()
           if (selectedFile.size > maxFileSize) {
@@ -1864,6 +1956,8 @@
             transcribeBtn.disabled = true
             fileName.textContent = ""
           } else {
+            selectedFiles = []
+            batchMode = false
             transcribeBtn.disabled = false
             showFilePreview(selectedFile)
             showToast((window.I18N ? window.I18N.t('fileSelectedSuccess') : "קובץ נבחר בהצלחה"), "success")
@@ -1871,9 +1965,24 @@
         }
       }
 
-      dropArea.addEventListener("click", () => fileInput.click())
+      dropArea.addEventListener("click", () => {
+        const isPrivate = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
+        if (isPrivate) {
+          fileInput.setAttribute("multiple", "multiple")
+        } else {
+          fileInput.removeAttribute("multiple")
+        }
+        // Keep chooser as files-only; folders are supported via drag & drop
+        fileInput.click()
+      })
 
-      transcribeBtn.addEventListener("click", uploadFile)
+      transcribeBtn.addEventListener("click", function () {
+        if (batchMode && selectedFiles.length > 0) {
+          uploadBatch()
+        } else {
+          uploadFile()
+        }
+      })
 
       function uploadFile() {
         if (!selectedFile) return
@@ -1955,6 +2064,214 @@
         }
 
         xhr.send(formData)
+      }
+
+      async function uploadBatch() {
+        if (!selectedFiles || selectedFiles.length === 0) return
+
+        transcribeBtn.disabled = true
+        progressContainer.style.display = "block"
+        progressBar.style.width = "0%"
+        transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchStarting', { count: selectedFiles.length }) : `מתחיל עיבוד אצווה של ${selectedFiles.length} קבצים...`)
+        updateTranscriptionDirectionUI()
+        copyBtn.disabled = true
+        downloadBtn.disabled = true
+        downloadDocxBtn.disabled = true
+        exportWordsBtn.disabled = true
+        downloadMenuBtn.disabled = true
+
+        const token = getCookie("runpod_token")
+        const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
+
+        for (let i = 0; i < selectedFiles.length; i++) {
+          const file = selectedFiles[i]
+          transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchUploading', { index: i + 1, total: selectedFiles.length, filename: file.name }) : `מעלה ${i + 1}/${selectedFiles.length}: ${file.name}`)
+
+          const formData = new FormData()
+          formData.append("file", file)
+          formData.append('language', selectedLang)
+          if (token) formData.append("runpod_token", token)
+
+          let jobId = null
+          try {
+            const resp = await fetch("/upload", { method: "POST", body: formData })
+            const data = await resp.json()
+            if (!resp.ok || data.error) {
+              const err = data && data.error ? data.error : (window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')
+              showToast(`${file.name}: ${err}`, "error")
+              continue
+            }
+            jobId = data.job_id
+          } catch (err) {
+            showToast(`${file.name}: ${(window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')}`, "error")
+            continue
+          }
+
+          const results = await pollJobStatusBatch(jobId, i + 1, selectedFiles.length, file.name)
+          if (results && Array.isArray(results) && results.length > 0) {
+            try {
+              if (!window.htmlDocx || typeof window.htmlDocx.asBlob !== "function") {
+                showToast((window.I18N ? window.I18N.t('docxLibMissing') : 'ספריית יצירת המסמך לא נטענה. בדקו את החיבור ונסו שוב.'), "error")
+                continue
+              }
+              const html = buildDocxHTMLFromSegmentsParam(results)
+              const blob = window.htmlDocx.asBlob(html)
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement("a")
+              a.href = url
+              a.download = getDocxNameFromOriginal(file.name)
+              document.body.appendChild(a)
+              a.click()
+              document.body.removeChild(a)
+              URL.revokeObjectURL(url)
+              showToast((window.I18N ? window.I18N.t('docxDownloaded', { filename: file.name }) : `קובץ DOCX ירד: ${file.name}`), "success")
+            } catch (err) {
+              showToast(`${file.name}: ${(window.I18N ? window.I18N.t('docxCreateError') : 'שגיאה ביצירת DOCX')}`, "error")
+            }
+          }
+        }
+
+        resetUploadState()
+        transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchDone') : 'האצווה הושלמה')
+      }
+
+      function getDocxNameFromOriginal(originalName) {
+        if (!originalName) return 'transcription.docx'
+        const idx = originalName.lastIndexOf('.')
+        if (idx > 0) return originalName.slice(0, idx) + '.docx'
+        return originalName + '.docx'
+      }
+
+      async function pollJobStatusBatch(jobId, index, total, filename) {
+        const pollInterval = 2000
+        return new Promise((resolve) => {
+          const poll = () => {
+            fetch(`/job_status/${jobId}`)
+              .then((response) => response.json())
+              .then((data) => {
+                if (data.error) {
+                  showToast(`${filename}: ${data.error}`, "error")
+                  resolve(null)
+                  return
+                }
+                if (data.queue_position) {
+                  progressBar.style.width = "0%"
+                  transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchQueued', { index, total, position: data.queue_position, eta: data.time_ahead, filename }) : `בתור (${index}/${total}) ${filename} · מקום ${data.queue_position} · ETA ${data.time_ahead}`)
+                  setTimeout(poll, pollInterval)
+                } else if (data.progress !== undefined) {
+                  progressBar.style.width = `${data.progress * 100}%`
+                  transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchTranscribing', { index, total, filename, progress: (data.progress * 100).toFixed(1) }) : `מתמלל (${index}/${total}) ${filename} · ${(data.progress * 100).toFixed(1)}%`)
+                  if (data.progress < 1.0) {
+                    setTimeout(poll, pollInterval)
+                  } else {
+                    resolve(data.results || [])
+                  }
+                } else {
+                  setTimeout(poll, pollInterval)
+                }
+              })
+              .catch(() => {
+                showToast(`${filename}: ${(window.I18N ? window.I18N.t('statusError') : 'שגיאת סטטוס')}`, "error")
+                resolve(null)
+              })
+          }
+          poll()
+        })
+      }
+
+      function buildDocxHTMLFromSegmentsParam(segments) {
+        const docLang = getTranscriptionLanguage()
+        const diarizationEnabled = displaySettings.diarizationDisplay !== "disabled"
+        const speakerColors = {
+          1: "#2196F3",
+          2: "#4CAF50",
+          3: "#FF9800",
+          4: "#9C27B0",
+          5: "#009688",
+          6: "#E91E63",
+          7: "#3F51B5",
+          8: "#795548",
+          9: "#607D8B",
+          10: "#8BC34A"
+        }
+        const esc = (text) => String(text || '').replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
+
+        const lines = []
+        const isRTL = ['he', 'yi'].includes(docLang)
+        lines.push('<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">')
+        lines.push('<head><meta charset="utf-8"><title>Transcript</title></head>')
+        lines.push('<body style="font-family:\'Arial\', \'Helvetica\', sans-serif; font-size:12pt; direction:' + (isRTL ? 'rtl' : 'ltr') + '; text-align:' + (isRTL ? 'right' : 'left') + '">')
+
+        if (displaySettings.timestampFormat === "segments") {
+          for (let i = 0; i < segments.length; i++) {
+            const seg = segments[i]
+            const text = esc((seg.text || '').trim())
+            const start = formatTimeForDisplay(seg.start || 0)
+            const end = formatTimeForDisplay(seg.end || 0)
+            if (diarizationEnabled) {
+              if (seg.speakers && seg.speakers.length > 0) {
+                const speakerNumber = parseInt(seg.speakers[0].replace('SPEAKER_', '')) || 0
+                const colorIndex = ((speakerNumber - 1) % 10) + 1
+                const color = speakerColors[colorIndex] || '#000000'
+                const label = (typeof translateSpeakerLabelText === 'function' ? translateSpeakerLabelText(docLang, speakerNumber) : ('Speaker ' + speakerNumber)) + ': '
+                lines.push('<p>[' + start + '-' + end + '] ' + '<span style="color:' + color + '; font-weight:700">' + label + '</span>' + text + '</p>')
+              } else {
+                const unknownText = (typeof translateSpeakerUnknownText === 'function' ? translateSpeakerUnknownText(docLang) : 'Unknown speaker')
+                lines.push('<p>[' + start + '-' + end + '] ' + '<span style="font-weight:700">' + unknownText + ': </span>' + text + '</p>')
+              }
+            } else {
+              lines.push('<p>[' + start + '-' + end + '] ' + text + '</p>')
+            }
+          }
+        } else {
+          let currentSpeaker = undefined
+          let bufferParts = []
+          let currentLabelHTML = ''
+
+          const flushParagraph = () => {
+            if (bufferParts.length === 0) return
+            const content = bufferParts.join(' ').trim()
+            if (currentLabelHTML) {
+              lines.push('<p>' + currentLabelHTML + content + '</p>')
+            } else {
+              lines.push('<p>' + content + '</p>')
+            }
+            bufferParts = []
+            currentLabelHTML = ''
+          }
+
+          for (let i = 0; i < segments.length; i++) {
+            const seg = segments[i]
+            const rawSpeaker = seg.speakers && seg.speakers.length > 0 ? seg.speakers[0] : null
+            const segText = esc((seg.text || '').trim())
+            const speakerChanged = i === 0 ? true : rawSpeaker !== currentSpeaker
+            if (speakerChanged) {
+              flushParagraph()
+              if (diarizationEnabled) {
+                if (rawSpeaker) {
+                  const speakerNumber = parseInt(rawSpeaker.replace('SPEAKER_', '')) || 0
+                  const colorIndex = ((speakerNumber - 1) % 10) + 1
+                  const color = speakerColors[colorIndex] || '#000000'
+                  const label = (typeof translateSpeakerLabelText === 'function' ? translateSpeakerLabelText(docLang, speakerNumber) : ('Speaker ' + speakerNumber)) + ': '
+                  currentLabelHTML = '<span style="color:' + color + '; font-weight:700">' + label + '</span>'
+                } else {
+                  const unknownText = (typeof translateSpeakerUnknownText === 'function' ? translateSpeakerUnknownText(docLang) : 'Unknown speaker')
+                  currentLabelHTML = '<span style="font-weight:700">' + unknownText + ': </span>'
+                }
+              } else {
+                currentLabelHTML = ''
+              }
+              currentSpeaker = rawSpeaker
+            }
+            if (segText) bufferParts.push(segText)
+          }
+          flushParagraph()
+        }
+
+        lines.push('<p style="color:#666; font-size:10pt; margin-top:16pt">' + (window.I18N ? window.I18N.t('transcriptFooter') : 'תומלל באמצעות שירות התמלול של ivrit.ai') + '</p>')
+        lines.push('</body>')
+        lines.push('</html>')
+        return lines.join('\n')
       }
 
       function pollJobStatus(jobId) {
