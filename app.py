@@ -1326,6 +1326,7 @@ async def transcribe_job(job_desc):
                 "transcription_seconds": transcribe_done_time - job_desc.transcribe_start_time,
                 "audio_duration_seconds": duration,
                 "job-type": job_desc.job_type,
+                "language": job_desc.language,
                 "custom-runpod": job_desc.uses_custom_runpod,
             },
         )
