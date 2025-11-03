@@ -1007,6 +1007,105 @@
         text-decoration: underline;
       }
 
+      /* Tab navigation styles */
+      .tabs {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1.5rem;
+        border-bottom: 2px solid var(--border-color);
+      }
+      .tab-button {
+        padding: 0.75rem 1.5rem;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 500;
+        color: var(--text-color);
+        opacity: 0.6;
+        transition: all 0.2s ease;
+        border-bottom: 3px solid transparent;
+        margin-bottom: -2px;
+      }
+      .tab-button:hover {
+        opacity: 0.8;
+      }
+      .tab-button.active {
+        opacity: 1;
+        border-bottom-color: var(--primary-color);
+        color: var(--primary-color);
+      }
+      .tab-content {
+        display: none;
+      }
+      .tab-content.active {
+        display: block;
+      }
+
+      /* Files list styles */
+      .files-list {
+        margin-top: 1rem;
+      }
+      .file-item {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .file-item:hover {
+        background: var(--container-bg);
+        border-color: var(--primary-color);
+        transform: translateX(-2px);
+      }
+      .file-item-info {
+        flex: 1;
+        text-align: right;
+      }
+      .file-item-name {
+        font-weight: 600;
+        color: var(--text-color);
+        margin-bottom: 0.25rem;
+      }
+      .file-item-meta {
+        font-size: 0.85rem;
+        color: var(--text-color);
+        opacity: 0.6;
+      }
+      .file-item-icon {
+        margin-left: 1rem;
+      }
+      .file-item-icon svg {
+        width: 24px;
+        height: 24px;
+        color: var(--primary-color);
+      }
+      .files-loading {
+        text-align: center;
+        padding: 2rem;
+        color: var(--text-color);
+        opacity: 0.6;
+      }
+      .files-empty {
+        text-align: center;
+        padding: 3rem 2rem;
+        color: var(--text-color);
+        opacity: 0.6;
+      }
+      .files-error {
+        text-align: center;
+        padding: 2rem;
+        color: #f44336;
+        background: rgba(244, 67, 54, 0.1);
+        border-radius: 8px;
+        margin-top: 1rem;
+      }
+
       /* Localization layout adjustments */
       html[dir] .modal-content {
         text-align: start;
@@ -1067,6 +1166,15 @@
         </div>
       </div>
       <h1 data-i18n="title">תמלול בעזרת ivrit.ai</h1>
+      
+      <!-- Tab Navigation -->
+      <div class="tabs">
+        <button class="tab-button active" data-tab="transcribe" data-i18n="tabTranscribe">תמלול חדש</button>
+        <button class="tab-button" data-tab="files" data-i18n="tabMyFiles">הקבצים שלי</button>
+      </div>
+
+      <!-- Transcribe Tab Content -->
+      <div id="tab-transcribe" class="tab-content active">
       <div id="drop-area">
         <p data-i18n="dropPrompt">גרור קובץ לכאן או לחץ לבחירת קובץ</p>
         <input type="file" id="file-input" accept="audio/*,video/*" />
@@ -1179,6 +1287,27 @@
       <div id="transcription-container">
         <div id="transcription" contenteditable="false"></div>
       </div>
+      </div>
+      <!-- End Transcribe Tab -->
+
+      <!-- My Files Tab Content -->
+      <div id="tab-files" class="tab-content">
+        <div id="files-container">
+          <div class="files-loading" id="files-loading">
+            <p data-i18n="filesLoading">טוען קבצים...</p>
+          </div>
+          <div class="files-error" id="files-error" style="display: none;">
+            <p id="files-error-message"></p>
+          </div>
+          <div class="files-empty" id="files-empty" style="display: none;">
+            <i data-lucide="inbox" style="width: 48px; height: 48px; margin-bottom: 1rem;"></i>
+            <p data-i18n="filesEmpty">עדיין לא שמרת תמלולים</p>
+          </div>
+          <div class="files-list" id="files-list"></div>
+        </div>
+      </div>
+      <!-- End My Files Tab -->
+
       <div class="links-container">
         <a href="mailto:info@ivrit.ai" class="contact-link">
           <i data-lucide="mail"></i>
@@ -1295,6 +1424,8 @@
           updateDiarizationToggleUI()
         }
         updateTranscriptionDirectionUI()
+        // Initialize tab switching
+        initTabs()
       })
       const dropArea = document.getElementById("drop-area")
       const fileInput = document.getElementById("file-input")
@@ -3027,6 +3158,207 @@
           }
         }
       })
+
+      // Tab switching functionality
+      function initTabs() {
+        const tabButtons = document.querySelectorAll('.tab-button')
+        
+        tabButtons.forEach(button => {
+          button.addEventListener('click', () => {
+            const tabName = button.getAttribute('data-tab')
+            switchTab(tabName)
+          })
+        })
+      }
+
+      function switchTab(tabName) {
+        // Update button states
+        document.querySelectorAll('.tab-button').forEach(btn => {
+          if (btn.getAttribute('data-tab') === tabName) {
+            btn.classList.add('active')
+          } else {
+            btn.classList.remove('active')
+          }
+        })
+
+        // Update content visibility
+        document.querySelectorAll('.tab-content').forEach(content => {
+          content.classList.remove('active')
+        })
+        document.getElementById(`tab-${tabName}`).classList.add('active')
+
+        // Load files when switching to files tab
+        if (tabName === 'files') {
+          loadSavedFiles()
+        }
+
+        // Refresh Lucide icons after tab switch
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons()
+        }
+      }
+
+      // Load saved files from Google Drive
+      async function loadSavedFiles() {
+        const filesLoading = document.getElementById('files-loading')
+        const filesError = document.getElementById('files-error')
+        const filesEmpty = document.getElementById('files-empty')
+        const filesList = document.getElementById('files-list')
+        const filesErrorMessage = document.getElementById('files-error-message')
+
+        // Show loading state
+        filesLoading.style.display = 'block'
+        filesError.style.display = 'none'
+        filesEmpty.style.display = 'none'
+        filesList.innerHTML = ''
+
+        try {
+          const response = await fetch('/appdata/list')
+          const data = await response.json()
+
+          filesLoading.style.display = 'none'
+
+          if (!response.ok) {
+            filesError.style.display = 'block'
+            filesErrorMessage.textContent = data.error || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקבצים')
+            return
+          }
+
+          const files = data.files || []
+
+          if (files.length === 0) {
+            filesEmpty.style.display = 'block'
+            return
+          }
+
+          // Sort files by modified time (newest first)
+          files.sort((a, b) => {
+            const dateA = new Date(a.modifiedTime || a.createdTime)
+            const dateB = new Date(b.modifiedTime || b.createdTime)
+            return dateB - dateA
+          })
+
+          // Fetch metadata for each file to get source filename
+          const filesWithMetadata = await Promise.all(
+            files.map(async (file) => {
+              try {
+                const metaResponse = await fetch(`/appdata/download/${file.id}`)
+                if (metaResponse.ok) {
+                  const data = await metaResponse.json()
+                  file.sourceFilename = data.source_filename || file.name
+                  file.language = data.language
+                  file.durationSeconds = data.duration_seconds
+                } else {
+                  file.sourceFilename = file.name
+                }
+              } catch (err) {
+                file.sourceFilename = file.name
+              }
+              return file
+            })
+          )
+
+          // Render files
+          filesWithMetadata.forEach(file => {
+            const fileItem = createFileItem(file)
+            filesList.appendChild(fileItem)
+          })
+
+          // Refresh Lucide icons
+          if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons()
+          }
+
+        } catch (error) {
+          console.error('Error loading files:', error)
+          filesLoading.style.display = 'none'
+          filesError.style.display = 'block'
+          filesErrorMessage.textContent = (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקבצים')
+        }
+      }
+
+      // Create file item element
+      function createFileItem(file) {
+        const div = document.createElement('div')
+        div.className = 'file-item'
+        div.onclick = () => downloadSavedFile(file.id, file.name, file.sourceFilename)
+
+        const info = document.createElement('div')
+        info.className = 'file-item-info'
+
+        const name = document.createElement('div')
+        name.className = 'file-item-name'
+        // Use source filename if available, otherwise use the file name
+        name.textContent = file.sourceFilename || file.name
+
+        const meta = document.createElement('div')
+        meta.className = 'file-item-meta'
+        const date = new Date(file.modifiedTime || file.createdTime)
+        const dateStr = date.toLocaleDateString('he-IL', { 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+        meta.textContent = dateStr
+
+        info.appendChild(name)
+        info.appendChild(meta)
+
+        const icon = document.createElement('div')
+        icon.className = 'file-item-icon'
+        icon.innerHTML = '<i data-lucide="file-text"></i>'
+
+        div.appendChild(info)
+        div.appendChild(icon)
+
+        return div
+      }
+
+      // Download saved file
+      async function downloadSavedFile(fileId, fileName, sourceFilename) {
+        try {
+          showToast((window.I18N ? window.I18N.t('filesDownloading') : 'מוריד קובץ...'), 'success')
+
+          const response = await fetch(`/appdata/download/${fileId}`)
+          const data = await response.json()
+
+          if (!response.ok) {
+            showToast(data.error || (window.I18N ? window.I18N.t('filesDownloadError') : 'שגיאה בהורדת הקובץ'), 'error')
+            return
+          }
+
+          // Create download with a meaningful filename
+          let downloadName = fileName
+          if (sourceFilename) {
+            // Replace extension with .json
+            const nameParts = sourceFilename.split('.')
+            if (nameParts.length > 1) {
+              nameParts[nameParts.length - 1] = 'json'
+              downloadName = nameParts.join('.')
+            } else {
+              downloadName = sourceFilename + '.json'
+            }
+          }
+
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = downloadName
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+          URL.revokeObjectURL(url)
+
+          showToast((window.I18N ? window.I18N.t('filesDownloadSuccess') : 'הקובץ הורד בהצלחה'), 'success')
+
+        } catch (error) {
+          console.error('Error downloading file:', error)
+          showToast((window.I18N ? window.I18N.t('filesDownloadError') : 'שגיאה בהורדת הקובץ'), 'error')
+        }
+      }
     </script>
   </body>
 </html>

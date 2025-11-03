@@ -92,6 +92,14 @@
     batchTranscribing: "מתמלל ({index}/{total}) {filename} · {progress}%",
     batchDone: "האצווה הושלמה",
     docxDownloaded: "קובץ DOCX ירד: {filename}",
+    tabTranscribe: "תמלול חדש",
+    tabMyFiles: "הקבצים שלי",
+    filesLoading: "טוען קבצים...",
+    filesEmpty: "עדיין לא שמרת תמלולים",
+    filesLoadError: "שגיאה בטעינת הקבצים",
+    filesDownloading: "מוריד קובץ...",
+    filesDownloadSuccess: "הקובץ הורד בהצלחה",
+    filesDownloadError: "שגיאה בהורדת הקובץ",
   }
 
   const yi = {
@@ -187,6 +195,14 @@
     batchTranscribing: "טראַנסקריבירט ({index}/{total}) {filename} · {progress}%",
     batchDone: "באַטש פאַרענדיקט",
     docxDownloaded: "DOCX אַראָפּלאָדן: {filename}",
+    tabTranscribe: "נײַע טראַנסקריפּציע",
+    tabMyFiles: "מײַנע טעקעס",
+    filesLoading: "לאָדט טעקעס...",
+    filesEmpty: "איר האָט נאָך נישט אויפֿגעהיט טראַנסקריפּציעס",
+    filesLoadError: "טעות בײַם לאָדן טעקעס",
+    filesDownloading: "אַראָפּלאָדט טעקע...",
+    filesDownloadSuccess: "טעקע אַראָפּלאָדן געראָטן",
+    filesDownloadError: "טעות בײַם אַראָפּלאָדן טעקע",
   }
 
   const en = {
@@ -282,6 +298,14 @@
     batchTranscribing: "Transcribing ({index}/{total}) {filename} · {progress}%",
     batchDone: "Batch complete",
     docxDownloaded: "DOCX downloaded: {filename}",
+    tabTranscribe: "New Transcription",
+    tabMyFiles: "My Files",
+    filesLoading: "Loading files...",
+    filesEmpty: "You haven't saved any transcriptions yet",
+    filesLoadError: "Error loading files",
+    filesDownloading: "Downloading file...",
+    filesDownloadSuccess: "File downloaded successfully",
+    filesDownloadError: "Error downloading file",
   }
 
   const resources = { he, yi, en }

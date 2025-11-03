@@ -162,6 +162,123 @@ GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://transcribe.
 def log_message(message):
     logger.info(f"{message}")
 
+# ---------- Google OAuth token helpers ----------
+async def refresh_google_access_token(refresh_token: str) -> Optional[dict]:
+    """Use a refresh token to obtain a new access token."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+            ) as resp:
+                data = await resp.json()
+                if "error" in data:
+                    logger.error(f"Google token refresh failed: {data}")
+                    return None
+                return data
+    except Exception as e:
+        logger.error(f"Exception during token refresh: {e}")
+        return None
+
+async def get_access_token_from_refresh(refresh_token: Optional[str]) -> Optional[str]:
+    """Refresh and return a new Google access token using the provided refresh token."""
+    if not refresh_token:
+        return None
+    refreshed = await refresh_google_access_token(refresh_token)
+    if not refreshed:
+        return None
+    return refreshed.get("access_token")
+
+async def upload_to_google_appdata(refresh_token: Optional[str], filename: str, payload: dict, user_email: Optional[str] = None) -> bool:
+    """Upload a JSON file into the user's Drive appDataFolder using a refresh token."""
+    access_token = await get_access_token_from_refresh(refresh_token)
+    if not access_token:
+        logger.warning(f"No Google access token available; skipping appData upload for {user_email or 'unknown user'}")
+        return False
+    try:
+        form = aiohttp.FormData()
+        metadata = {
+            "name": filename,
+            "mimeType": "application/json",
+            "parents": ["appDataFolder"],
+        }
+        form.add_field("metadata", json.dumps(metadata), content_type="application/json; charset=UTF-8")
+        form.add_field("file", json.dumps(payload), content_type="application/json")
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+                data=form,
+                headers=headers,
+            ) as resp:
+                if resp.status >= 200 and resp.status < 300:
+                    logger.info(f"Uploaded transcription JSON to appData for {user_email} as {filename}")
+                    return True
+                err = await resp.text()
+                logger.error(f"Failed to upload to appData for {user_email}: {resp.status} {err}")
+                return False
+    except Exception as e:
+        logger.error(f"Exception uploading to appData for {user_email}: {e}")
+        return False
+
+async def list_google_appdata_files(refresh_token: Optional[str]) -> Optional[list]:
+    """List JSON files in the user's Drive appDataFolder."""
+    access_token = await get_access_token_from_refresh(refresh_token)
+    if not access_token:
+        logger.warning("No Google access token available for listing appData files")
+        return None
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name,createdTime,modifiedTime,size)",
+                headers=headers,
+            ) as resp:
+                if resp.status >= 200 and resp.status < 300:
+                    data = await resp.json()
+                    return data.get("files", [])
+                err = await resp.text()
+                logger.error(f"Failed to list appData files: {resp.status} {err}")
+                return None
+    except Exception as e:
+        logger.error(f"Exception listing appData files: {e}")
+        return None
+
+async def download_google_appdata_file(refresh_token: Optional[str], file_id: str) -> Optional[dict]:
+    """Download a specific file from the user's Drive appDataFolder."""
+    access_token = await get_access_token_from_refresh(refresh_token)
+    if not access_token:
+        logger.warning("No Google access token available for downloading appData file")
+        return None
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media",
+                headers=headers,
+            ) as resp:
+                if resp.status >= 200 and resp.status < 300:
+                    content = await resp.read()
+                    return json.loads(content)
+                err = await resp.text()
+                logger.error(f"Failed to download appData file {file_id}: {resp.status} {err}")
+                return None
+    except Exception as e:
+        logger.error(f"Exception downloading appData file {file_id}: {e}")
+        return None
+
 # PostHog configuration
 ph = None
 if "POSTHOG_API_KEY" in os.environ:
@@ -383,7 +500,7 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     return str(timedelta(seconds=int(time_ahead)))
 
 
-async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he"):
+async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he", refresh_token: Optional[str] = None):
     # Try to add the job to the queue
     log_message(f"{user_email}: Queuing job {job_id}...")
 
@@ -420,6 +537,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
         job_desc.runpod_token = runpod_token
         job_desc.uses_custom_runpod = bool(runpod_token)
         job_desc.language = language
+        job_desc.refresh_token = refresh_token
 
         # Determine queue type based on job characteristics
         if job_desc.uses_custom_runpod:
@@ -502,6 +620,40 @@ async def list_languages():
     return JSONResponse({"languages": langs})
 
 
+@app.get("/appdata/list")
+async def list_appdata_files(request: Request):
+    """List all JSON files in user's Google Drive appDataFolder."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    files = await list_google_appdata_files(refresh_token)
+    
+    if files is None:
+        return JSONResponse({"error": "Failed to list files"}, status_code=500)
+    
+    return JSONResponse({"files": files})
+
+
+@app.get("/appdata/download/{file_id}")
+async def download_appdata_file(file_id: str, request: Request):
+    """Download a specific file from user's Google Drive appDataFolder."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    file_content = await download_google_appdata_file(refresh_token, file_id)
+    
+    if file_content is None:
+        return JSONResponse({"error": "Failed to download file"}, status_code=500)
+    
+    return JSONResponse(file_content)
+
+
 @app.get("/login")
 async def login(request: Request):
     return templates.TemplateResponse("login.html", {"request": request, "google_analytics_tag": os.environ["GOOGLE_ANALYTICS_TAG"]})
@@ -522,7 +674,8 @@ async def authorize(request: Request):
         "client_id": GOOGLE_CLIENT_ID,
         "response_type": "code",
         "redirect_uri": GOOGLE_REDIRECT_URI,
-        "scope": "openid email profile",
+        # Request identity scopes + Drive AppData for storing results
+        "scope": "openid email profile https://www.googleapis.com/auth/drive.appdata",
         "access_type": "offline",
         "prompt": "consent",
         "state": state
@@ -986,7 +1139,14 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
                     user_data = await user_response.json()
                     
                     # Store user email in session
-                    set_user_email(request, user_data["email"])
+                    user_email = user_data["email"]
+                    set_user_email(request, user_email)
+                    # Persist refresh token in the session for later Drive uploads
+                    existing_refresh = sessions.get(session_id, {}).get("refresh_token")
+                    refresh_token = token_data.get("refresh_token", existing_refresh)
+                    if session_id not in sessions:
+                        sessions[session_id] = {}
+                    sessions[session_id]["refresh_token"] = refresh_token
                     
                     # Clean up OAuth state
                     if session_id in sessions:
@@ -1120,8 +1280,11 @@ async def upload_file(
                 message = "ה-endpoint שלך עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
             return JSONResponse({"error": message}, status_code=400)
 
+    # Retrieve Google refresh token from session and enqueue job with it
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
     # Use the background event loop to call the async function
-    queued, res = await queue_job(job_id, user_email, filename, duration, runpod_token, requested_lang)
+    queued, res = await queue_job(job_id, user_email, filename, duration, runpod_token, requested_lang, refresh_token)
     if queued:
         job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
     else:
@@ -1333,6 +1496,22 @@ async def transcribe_job(job_desc):
 
         job_results[job_id]["progress"] = 1.0
         job_results[job_id]["completion_time"] = datetime.now()
+
+        # After completion, store results JSON in user's Google Drive app data
+        try:
+            completed_at_iso = job_results[job_id]["completion_time"].isoformat()
+            payload = {
+                "job_id": job_id,
+                "source_filename": job_desc.filename,
+                "language": job_desc.language,
+                "duration_seconds": duration,
+                "completed_at": completed_at_iso,
+                "results": job_results[job_id]["results"],
+            }
+            unique_name = f"{uuid.uuid4()}.json"
+            await upload_to_google_appdata(job_desc.refresh_token, unique_name, payload, job_desc.user_email)
+        except Exception as e:
+            logger.error(f"Failed to upload transcription JSON for {job_id}: {e}")
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
     finally:
