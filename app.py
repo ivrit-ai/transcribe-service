@@ -279,6 +279,88 @@ async def download_google_appdata_file(refresh_token: Optional[str], file_id: st
         logger.error(f"Exception downloading appData file {file_id}: {e}")
         return None
 
+async def find_google_appdata_file_by_name(refresh_token: Optional[str], filename: str) -> Optional[str]:
+    """Find a file in appDataFolder by name and return its ID."""
+    access_token = await get_access_token_from_refresh(refresh_token)
+    if not access_token:
+        return None
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='{filename}'&fields=files(id)",
+                headers=headers,
+            ) as resp:
+                if resp.status >= 200 and resp.status < 300:
+                    data = await resp.json()
+                    files = data.get("files", [])
+                    if files:
+                        return files[0]["id"]
+                    return None
+                return None
+    except Exception as e:
+        logger.error(f"Exception finding file by name {filename}: {e}")
+        return None
+
+async def download_toc(refresh_token: Optional[str]) -> dict:
+    """Download TOC file, return empty dict if not found."""
+    file_id = await find_google_appdata_file_by_name(refresh_token, "toc.json")
+    if not file_id:
+        return {"entries": []}
+    
+    toc_data = await download_google_appdata_file(refresh_token, file_id)
+    if not toc_data:
+        return {"entries": []}
+    
+    return toc_data
+
+async def update_google_appdata_file(refresh_token: Optional[str], file_id: str, payload: dict, user_email: Optional[str] = None) -> bool:
+    """Update an existing file in appDataFolder with new content."""
+    access_token = await get_access_token_from_refresh(refresh_token)
+    if not access_token:
+        logger.warning(f"No Google access token available; skipping appData update for {user_email or 'unknown user'}")
+        return False
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(
+                f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
+                headers=headers,
+                data=json.dumps(payload),
+            ) as resp:
+                if resp.status >= 200 and resp.status < 300:
+                    logger.info(f"Updated file {file_id} in appData for {user_email}")
+                    return True
+                err = await resp.text()
+                logger.error(f"Failed to update file {file_id} for {user_email}: {resp.status} {err}")
+                return False
+    except Exception as e:
+        logger.error(f"Exception updating file {file_id} for {user_email}: {e}")
+        return False
+
+async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: Optional[str] = None) -> bool:
+    """Upload TOC file, updating existing one atomically or creating new one."""
+    # Find existing toc.json
+    existing_id = await find_google_appdata_file_by_name(refresh_token, "toc.json")
+    
+    if existing_id:
+        # Update existing file atomically
+        return await update_google_appdata_file(refresh_token, existing_id, toc_data, user_email)
+    else:
+        # Create new file
+        return await upload_to_google_appdata(refresh_token, "toc.json", toc_data, user_email)
+
+def get_toc_lock(user_email: str) -> asyncio.Lock:
+    """Get or create a lock for a specific user's TOC updates."""
+    if user_email not in toc_locks:
+        toc_locks[user_email] = asyncio.Lock()
+    return toc_locks[user_email]
+
 # PostHog configuration
 ph = None
 if "POSTHOG_API_KEY" in os.environ:
@@ -351,6 +433,9 @@ job_last_accessed = {}
 
 # Dictionary to store user rate limiting buckets
 user_buckets = {}
+
+# Per-user locks for TOC updates
+toc_locks = {}
 
 
 
@@ -620,37 +705,45 @@ async def list_languages():
     return JSONResponse({"languages": langs})
 
 
-@app.get("/appdata/list")
-async def list_appdata_files(request: Request):
-    """List all JSON files in user's Google Drive appDataFolder."""
+@app.get("/appdata/toc")
+async def get_toc(request: Request):
+    """Get TOC (table of contents) with all transcription metadata."""
     session_id = get_session_id(request)
     refresh_token = sessions.get(session_id, {}).get("refresh_token")
     
     if not refresh_token:
         return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
     
-    files = await list_google_appdata_files(refresh_token)
+    toc_data = await download_toc(refresh_token)
     
-    if files is None:
-        return JSONResponse({"error": "Failed to list files"}, status_code=500)
+    if toc_data is None:
+        return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
     
-    return JSONResponse({"files": files})
+    return JSONResponse(toc_data)
 
 
-@app.get("/appdata/download/{file_id}")
-async def download_appdata_file(file_id: str, request: Request):
-    """Download a specific file from user's Google Drive appDataFolder."""
+@app.get("/appdata/results/{results_id}")
+async def get_transcription_results(results_id: str, request: Request):
+    """Download transcription results by UUID."""
     session_id = get_session_id(request)
     refresh_token = sessions.get(session_id, {}).get("refresh_token")
     
     if not refresh_token:
         return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    # Find the results file
+    filename = f"{results_id}.json"
+    file_id = await find_google_appdata_file_by_name(refresh_token, filename)
+    
+    if not file_id:
+        return JSONResponse({"error": "Results file not found"}, status_code=404)
     
     file_content = await download_google_appdata_file(refresh_token, file_id)
     
     if file_content is None:
-        return JSONResponse({"error": "Failed to download file"}, status_code=500)
+        return JSONResponse({"error": "Failed to download results"}, status_code=500)
     
+    # Return the full content (which includes metadata + results)
     return JSONResponse(file_content)
 
 
@@ -1497,21 +1590,69 @@ async def transcribe_job(job_desc):
         job_results[job_id]["progress"] = 1.0
         job_results[job_id]["completion_time"] = datetime.now()
 
-        # After completion, store results JSON in user's Google Drive app data
+        # After completion, store results separately and update TOC
         try:
             completed_at_iso = job_results[job_id]["completion_time"].isoformat()
-            payload = {
+            results_id = str(uuid.uuid4())
+            
+            # Get TOC version from environment
+            toc_version = os.environ.get("TOC_VER", "1.0")
+            
+            # Create TOC entry (metadata only)
+            toc_entry = {
+                "results_id": results_id,
                 "job_id": job_id,
                 "source_filename": job_desc.filename,
                 "language": job_desc.language,
                 "duration_seconds": duration,
                 "completed_at": completed_at_iso,
+                "toc_version": toc_version,
+            }
+            
+            # Create full payload with both metadata AND results
+            # This allows TOC to be rebuilt from individual files if needed
+            full_payload = {
+                "results_id": results_id,
+                "job_id": job_id,
+                "source_filename": job_desc.filename,
+                "language": job_desc.language,
+                "duration_seconds": duration,
+                "completed_at": completed_at_iso,
+                "toc_version": toc_version,
                 "results": job_results[job_id]["results"],
             }
-            unique_name = f"{uuid.uuid4()}.json"
-            await upload_to_google_appdata(job_desc.refresh_token, unique_name, payload, job_desc.user_email)
+            
+            # Upload results file first (before TOC update)
+            # This ensures results exist before TOC references them
+            results_filename = f"{results_id}.json"
+            upload_success = await upload_to_google_appdata(
+                job_desc.refresh_token,
+                results_filename,
+                full_payload,
+                job_desc.user_email
+            )
+            
+            if not upload_success:
+                logger.error(f"Failed to upload results file for {job_id}, skipping TOC update")
+                return
+            
+            # Acquire per-user lock for TOC updates
+            toc_lock = get_toc_lock(job_desc.user_email)
+            async with toc_lock:
+                # Download current TOC
+                toc_data = await download_toc(job_desc.refresh_token)
+                
+                # Append new entry
+                if "entries" not in toc_data:
+                    toc_data["entries"] = []
+                toc_data["entries"].append(toc_entry)
+                
+                # Upload updated TOC atomically
+                await upload_toc(job_desc.refresh_token, toc_data, job_desc.user_email)
+            
+            log_message(f"{job_desc.user_email}: Uploaded transcription to TOC (results_id: {results_id})")
         except Exception as e:
-            logger.error(f"Failed to upload transcription JSON for {job_id}: {e}")
+            logger.error(f"Failed to upload transcription for {job_id}: {e}")
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
     finally:

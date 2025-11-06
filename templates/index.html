@@ -3296,7 +3296,7 @@
         }
       }
 
-      // Load saved files from Google Drive
+      // Load saved files from Google Drive TOC
       async function loadSavedFiles() {
         const filesLoading = document.getElementById('files-loading')
         const filesError = document.getElementById('files-error')
@@ -3311,7 +3311,7 @@
         filesList.innerHTML = ''
 
         try {
-          const response = await fetch('/appdata/list')
+          const response = await fetch('/appdata/toc')
           const data = await response.json()
 
           filesLoading.style.display = 'none'
@@ -3322,43 +3322,23 @@
             return
           }
 
-          const files = data.files || []
+          const entries = data.entries || []
 
-          if (files.length === 0) {
+          if (entries.length === 0) {
             filesEmpty.style.display = 'block'
             return
           }
 
-          // Sort files by modified time (newest first)
-          files.sort((a, b) => {
-            const dateA = new Date(a.modifiedTime || a.createdTime)
-            const dateB = new Date(b.modifiedTime || b.createdTime)
+          // Sort entries by completion time (newest first)
+          entries.sort((a, b) => {
+            const dateA = new Date(a.completed_at)
+            const dateB = new Date(b.completed_at)
             return dateB - dateA
           })
 
-          // Fetch metadata for each file to get source filename
-          const filesWithMetadata = await Promise.all(
-            files.map(async (file) => {
-              try {
-                const metaResponse = await fetch(`/appdata/download/${file.id}`)
-                if (metaResponse.ok) {
-                  const data = await metaResponse.json()
-                  file.sourceFilename = data.source_filename || file.name
-                  file.language = data.language
-                  file.durationSeconds = data.duration_seconds
-                } else {
-                  file.sourceFilename = file.name
-                }
-              } catch (err) {
-                file.sourceFilename = file.name
-              }
-              return file
-            })
-          )
-
-          // Render files
-          filesWithMetadata.forEach(file => {
-            const fileItem = createFileItem(file)
+          // Render files from TOC entries
+          entries.forEach(entry => {
+            const fileItem = createFileItemFromTOC(entry)
             filesList.appendChild(fileItem)
           })
 
@@ -3378,23 +3358,24 @@
       // Store current viewer data
       let currentViewerData = null
       let currentViewerLanguage = 'he'
+      let currentViewerEntry = null
 
-      // Create file item element
-      function createFileItem(file) {
+      // Create file item element from TOC entry
+      function createFileItemFromTOC(entry) {
         const div = document.createElement('div')
         div.className = 'file-item'
 
         const info = document.createElement('div')
         info.className = 'file-item-info'
-        info.onclick = () => viewSavedFile(file.id, file.sourceFilename || file.name)
+        info.onclick = () => viewSavedFileFromTOC(entry)
 
         const name = document.createElement('div')
         name.className = 'file-item-name'
-        name.textContent = file.sourceFilename || file.name
+        name.textContent = entry.source_filename || 'Untitled'
 
         const meta = document.createElement('div')
         meta.className = 'file-item-meta'
-        const date = new Date(file.modifiedTime || file.createdTime)
+        const date = new Date(entry.completed_at)
         const dateStr = date.toLocaleDateString('he-IL', { 
           year: 'numeric', 
           month: 'long', 
@@ -3421,12 +3402,16 @@
         
         const downloadDropdown = document.createElement('div')
         downloadDropdown.className = 'download-dropdown'
+        
+        // Store entry as JSON string in data attribute, properly escaped
+        const entryJson = JSON.stringify(entry).replace(/'/g, '&apos;').replace(/"/g, '&quot;')
+        
         downloadDropdown.innerHTML = `
           <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
-          <button type="button" onclick="event.stopPropagation(); downloadFileAs('${file.id}', '${file.sourceFilename || file.name}', 'vtt')">VTT</button>
-          <button type="button" onclick="event.stopPropagation(); downloadFileAs('${file.id}', '${file.sourceFilename || file.name}', 'srt')">SRT</button>
-          <button type="button" onclick="event.stopPropagation(); downloadFileAs('${file.id}', '${file.sourceFilename || file.name}', 'docx')"><span data-i18n="wordDocx">Word DOCX</span></button>
-          <button type="button" onclick="event.stopPropagation(); downloadFileAs('${file.id}', '${file.sourceFilename || file.name}', 'json')">JSON</button>
+          <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'vtt')">VTT</button>
+          <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'srt')">SRT</button>
+          <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'docx')"><span data-i18n="wordDocx">Word DOCX</span></button>
+          <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'json')">JSON</button>
         `
         
         downloadMenu.appendChild(downloadBtn)
@@ -3439,10 +3424,11 @@
         return div
       }
 
-      // View saved file in viewer tab
-      async function viewSavedFile(fileId, fileName) {
+      // View saved file from TOC entry
+      async function viewSavedFileFromTOC(entry) {
         try {
-          const response = await fetch(`/appdata/download/${fileId}`)
+          // Fetch results
+          const response = await fetch(`/appdata/results/${entry.results_id}`)
           const data = await response.json()
 
           if (!response.ok) {
@@ -3450,12 +3436,13 @@
             return
           }
 
-          // Store data for viewer
-          currentViewerData = data
-          currentViewerLanguage = data.language || 'he'
+          // Store data for viewer (results file now contains full payload)
+          currentViewerData = { results: data.results || [] }
+          currentViewerLanguage = data.language || entry.language || 'he'
+          currentViewerEntry = entry
 
           // Set filename in viewer
-          document.getElementById('viewer-file-name').textContent = fileName
+          document.getElementById('viewer-file-name').textContent = entry.source_filename
 
           // Update transcription display
           updateViewerTranscriptionDisplay()
@@ -3480,10 +3467,10 @@
         }
       }
 
-      // Download file in specific format
-      async function downloadFileAs(fileId, fileName, format) {
+      // Download file from TOC in specific format
+      async function downloadFileFromTOC(resultsId, fileName, language, format) {
         try {
-          const response = await fetch(`/appdata/download/${fileId}`)
+          const response = await fetch(`/appdata/results/${resultsId}`)
           const data = await response.json()
 
           if (!response.ok) {
@@ -3491,8 +3478,10 @@
             return
           }
 
+          // Results file now contains full payload with metadata + results
           const segments = data.results || []
-          downloadInFormat(segments, fileName, format, data.language || 'he')
+          const lang = data.language || language || 'he'
+          downloadInFormat(segments, fileName, format, lang)
 
         } catch (error) {
           console.error('Error downloading file:', error)
