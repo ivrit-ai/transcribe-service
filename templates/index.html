@@ -2153,7 +2153,12 @@
             if (response.error) {
               showError(response.error)
             } else {
-              pollJobStatus(response.job_id)
+              // Job queued successfully
+              resetUploadState()
+              activeTranscription = false
+              showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.'), 'success')
+              // Switch to My Files tab
+              switchTab('files')
             }
           } else {
             let errorMessage = undefined
@@ -2194,6 +2199,7 @@
         const token = getCookie("runpod_token")
         const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
 
+        let successCount = 0
         for (let i = 0; i < selectedFiles.length; i++) {
           const file = selectedFiles[i]
 
@@ -2202,7 +2208,6 @@
           formData.append('language', selectedLang)
           if (token) formData.append("runpod_token", token)
 
-          let jobId = null
           try {
             const resp = await fetch("/upload", { method: "POST", body: formData })
             const data = await resp.json()
@@ -2211,80 +2216,24 @@
               showToast(`${file.name}: ${err}`, "error")
               continue
             }
-            jobId = data.job_id
+            successCount++
+            // Update progress
+            progressBar.style.width = `${(i + 1) / selectedFiles.length * 100}%`
           } catch (err) {
             showToast(`${file.name}: ${(window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')}`, "error")
             continue
           }
-
-          const results = await pollJobStatusBatch(jobId, i + 1, selectedFiles.length, file.name)
-          if (results && Array.isArray(results) && results.length > 0) {
-            try {
-              if (!window.htmlDocx || typeof window.htmlDocx.asBlob !== "function") {
-                showToast((window.I18N ? window.I18N.t('docxLibMissing') : 'ספריית יצירת המסמך לא נטענה. בדקו את החיבור ונסו שוב.'), "error")
-                continue
-              }
-              const html = buildDocxHTMLFromSegmentsParam(results, selectedLang)
-              const blob = window.htmlDocx.asBlob(html)
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement("a")
-              a.href = url
-              a.download = getDocxNameFromOriginal(file.name)
-              document.body.appendChild(a)
-              a.click()
-              document.body.removeChild(a)
-              URL.revokeObjectURL(url)
-              showToast((window.I18N ? window.I18N.t('docxDownloaded', { filename: file.name }) : `קובץ DOCX ירד: ${file.name}`), "success")
-            } catch (err) {
-              showToast(`${file.name}: ${(window.I18N ? window.I18N.t('docxCreateError') : 'שגיאה ביצירת DOCX')}`, "error")
-            }
-          }
         }
 
         resetUploadState()
-        showToast((window.I18N ? window.I18N.t('batchDone') : 'האצווה הושלמה'), 'success')
-      }
-
-      function getDocxNameFromOriginal(originalName) {
-        if (!originalName) return 'transcription.docx'
-        const idx = originalName.lastIndexOf('.')
-        if (idx > 0) return originalName.slice(0, idx) + '.docx'
-        return originalName + '.docx'
-      }
-
-      async function pollJobStatusBatch(jobId, index, total, filename) {
-        const pollInterval = 2000
-        return new Promise((resolve) => {
-          const poll = () => {
-            fetch(`/job_status/${jobId}`)
-              .then((response) => response.json())
-              .then((data) => {
-                if (data.error) {
-                  showToast(`${filename}: ${data.error}`, "error")
-                  resolve(null)
-                  return
-                }
-                if (data.queue_position) {
-                  progressBar.style.width = "0%"
-                  setTimeout(poll, pollInterval)
-                } else if (data.progress !== undefined) {
-                  progressBar.style.width = `${data.progress * 100}%`
-                  if (data.progress < 1.0) {
-                    setTimeout(poll, pollInterval)
-                  } else {
-                    resolve(data.results || [])
-                  }
-                } else {
-                  setTimeout(poll, pollInterval)
-                }
-              })
-              .catch(() => {
-                showToast(`${filename}: ${(window.I18N ? window.I18N.t('statusError') : 'שגיאת סטטוס')}`, "error")
-                resolve(null)
-              })
-          }
-          poll()
-        })
+        activeTranscription = false
+        if (successCount > 0) {
+          showToast((window.I18N ? window.I18N.t('batchQueued', { count: successCount }) : `${successCount} קבצים נשלחו לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.`), 'success')
+          // Switch to My Files tab
+          switchTab('files')
+        } else {
+          showToast((window.I18N ? window.I18N.t('batchFailed') : 'כל הקבצים נכשלו'), 'error')
+        }
       }
 
       function buildDocxHTMLFromSegmentsParam(segments, language) {
@@ -2382,69 +2331,6 @@
         return lines.join('\n')
       }
 
-      function pollJobStatus(jobId) {
-        currentJobId = jobId
-        const pollInterval = 2000 // Poll every 2 seconds
-
-        function poll() {
-          fetch(`/job_status/${jobId}`)
-            .then((response) => response.json())
-            .then((data) => {
-              if (data.error) {
-                showError(data.error)
-                activeTranscription = false
-                return
-              }
-
-              if (data.queue_position) {
-                let statusMessage = (window.I18N ? window.I18N.t('queuePosition', { position: data.queue_position, eta: data.time_ahead }) : `בתור במקום ${data.queue_position}. זמן משוער להתחלה: ${data.time_ahead}`)
-                if (data.job_type) {
-                  let jobTypeText
-                  switch (data.job_type) {
-                    case "short":
-                      jobTypeText = (window.I18N ? window.I18N.t('jobTypeShort') : "קצרה")
-                      break
-                    case "long":
-                      jobTypeText = (window.I18N ? window.I18N.t('jobTypeLong') : "ארוכה")
-                      break
-                    case "private":
-                      jobTypeText = (window.I18N ? window.I18N.t('jobTypePrivate') : "פרטית")
-                      break
-                    default:
-                      jobTypeText = data.job_type
-                  }
-                  statusMessage += (window.I18N ? ('\n' + window.I18N.t('jobTypePrefix', { jobType: jobTypeText })) : `, סוג עבודה: ${jobTypeText}`)
-                }
-                statusMessage += `\n\n${(window.I18N ? window.I18N.t('waitingMsg') : '')}`
-                progressBar.style.width = "0%"
-                activeTranscription = true
-                setTimeout(poll, pollInterval)
-              } else if (data.progress !== undefined) {
-                progressBar.style.width = `${data.progress * 100}%`
-                activeTranscription = true
-
-                if (data.progress < 1.0) {
-                  setTimeout(poll, pollInterval)
-                } else {
-                  // Job is complete
-                  transcriptionSegments = data.results
-                  resetUploadState()
-                  activeTranscription = false
-                  showToast((window.I18N ? window.I18N.t('transcriptionComplete') : 'תמלול הושלם בהצלחה'), 'success')
-                  // Switch to My Files tab to view the result
-                  switchTab('files')
-                }
-              }
-            })
-            .catch((error) => {
-              console.error("Error:", error)
-              showError((window.I18N ? window.I18N.t('statusError') : "אירעה שגיאה בבדיקת סטטוס העבודה"))
-              activeTranscription = false
-            })
-        }
-
-        poll()
-      }
 
       function formatWithTimecodes(segments) {
         if (!segments || segments.length === 0) return ""
