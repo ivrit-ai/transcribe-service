@@ -1424,15 +1424,11 @@
           }
         }
         initTranscriptionLanguages()
-        // Ensure toggles reflect initial defaults/saved state on first load
-        updateTextFormatToggleUI()
-        updateTimestampsToggleUI()
-        updateDiarizationToggleUI()
-        // Force diarization enabled by default visually on first load
+        // Toggle UI initialization removed - toggles only in Viewer tab
+        // Initialize default diarization setting
         if (!displaySettings.diarizationDisplay) {
           displaySettings.diarizationDisplay = 'enabled'
           localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
-          updateDiarizationToggleUI()
         }
         updateTranscriptionDirectionUI()
         // Initialize tab switching
@@ -1680,10 +1676,7 @@
           }
         }
 
-        // Update the toggle button icon/title based on current text format
-        updateTextFormatToggleUI()
-        updateTimestampsToggleUI()
-        updateDiarizationToggleUI()
+        // Toggle UI update removed - toggles only in Viewer tab
 
         // Update settings button appearance if credentials are saved
         updateSettingsButtonIndicator()
@@ -1806,18 +1799,12 @@
         }
         localStorage.removeItem("displaySettings")
 
-        // Reset form controls to defaults (UI buttons will reflect state)
+        // Reset form controls to defaults
         displaySettings.textFormat = "continuous"
         displaySettings.timestampFormat = "none"
         displaySettings.diarizationDisplay = "enabled"
-        updateTextFormatToggleUI()
-        updateTimestampsToggleUI()
-        updateDiarizationToggleUI()
 
-        // Update display if there are results
-        if (transcriptionSegments.length > 0) {
-          updateTranscriptionDisplay()
-        }
+        // Toggle UI and display updates removed - only in Viewer tab
 
         showToast("כל ההגדרות נמחקו בהצלחה", "success")
         settingsModal.style.display = "none"
@@ -2136,7 +2123,6 @@
         const token = getCookie("runpod_token")
         if (token) {
           formData.append("runpod_token", token)
-          transcriptionArea.innerHTML = window.I18N.t('usingRunpod')
         }
 
         // Include selected transcription language for backend
@@ -2148,14 +2134,6 @@
         transcribeBtn.disabled = true
         progressContainer.style.display = "block"
         progressBar.style.width = "0%"
-        if (!token) {
-          transcriptionArea.innerHTML = window.I18N.t('uploading')
-        }
-        updateTranscriptionDirectionUI()
-        copyBtn.disabled = true
-        downloadBtn.disabled = true
-        downloadDocxBtn.disabled = true
-        exportWordsBtn.disabled = true
         transcriptionSegments = []
         currentJobId = null
 
@@ -2166,7 +2144,6 @@
           if (event.lengthComputable) {
             const percentComplete = (event.loaded / event.total) * 100
             progressBar.style.width = percentComplete + "%"
-            transcriptionArea.innerHTML = window.I18N.t('uploadingProgress', { progress: percentComplete.toFixed(1) })
           }
         }
 
@@ -2176,7 +2153,6 @@
             if (response.error) {
               showError(response.error)
             } else {
-              transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('uploadedStarting') : "קובץ הועלה. מתחיל בתמלול...")
               pollJobStatus(response.job_id)
             }
           } else {
@@ -2214,20 +2190,12 @@
         transcribeBtn.disabled = true
         progressContainer.style.display = "block"
         progressBar.style.width = "0%"
-        transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchStarting', { count: selectedFiles.length }) : `מתחיל עיבוד אצווה של ${selectedFiles.length} קבצים...`)
-        updateTranscriptionDirectionUI()
-        copyBtn.disabled = true
-        downloadBtn.disabled = true
-        downloadDocxBtn.disabled = true
-        exportWordsBtn.disabled = true
-        downloadMenuBtn.disabled = true
 
         const token = getCookie("runpod_token")
         const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
 
         for (let i = 0; i < selectedFiles.length; i++) {
           const file = selectedFiles[i]
-          transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchUploading', { index: i + 1, total: selectedFiles.length, filename: file.name }) : `מעלה ${i + 1}/${selectedFiles.length}: ${file.name}`)
 
           const formData = new FormData()
           formData.append("file", file)
@@ -2274,7 +2242,7 @@
         }
 
         resetUploadState()
-        transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchDone') : 'האצווה הושלמה')
+        showToast((window.I18N ? window.I18N.t('batchDone') : 'האצווה הושלמה'), 'success')
       }
 
       function getDocxNameFromOriginal(originalName) {
@@ -2298,11 +2266,9 @@
                 }
                 if (data.queue_position) {
                   progressBar.style.width = "0%"
-                  transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchQueued', { index, total, position: data.queue_position, eta: data.time_ahead, filename }) : `בתור (${index}/${total}) ${filename} · מקום ${data.queue_position} · ETA ${data.time_ahead}`)
                   setTimeout(poll, pollInterval)
                 } else if (data.progress !== undefined) {
                   progressBar.style.width = `${data.progress * 100}%`
-                  transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('batchTranscribing', { index, total, filename, progress: (data.progress * 100).toFixed(1) }) : `מתמלל (${index}/${total}) ${filename} · ${(data.progress * 100).toFixed(1)}%`)
                   if (data.progress < 1.0) {
                     setTimeout(poll, pollInterval)
                   } else {
@@ -2450,23 +2416,23 @@
                   statusMessage += (window.I18N ? ('\n' + window.I18N.t('jobTypePrefix', { jobType: jobTypeText })) : `, סוג עבודה: ${jobTypeText}`)
                 }
                 statusMessage += `\n\n${(window.I18N ? window.I18N.t('waitingMsg') : '')}`
-                transcriptionArea.innerHTML = statusMessage.replace(/\n/g, '<br>')
                 progressBar.style.width = "0%"
                 activeTranscription = true
                 setTimeout(poll, pollInterval)
               } else if (data.progress !== undefined) {
                 progressBar.style.width = `${data.progress * 100}%`
-                transcriptionArea.innerHTML = (window.I18N ? window.I18N.t('transcribing', { progress: (data.progress * 100).toFixed(1) }) : `מתמלל... ${(data.progress * 100).toFixed(1)}%`)
                 activeTranscription = true
 
                 if (data.progress < 1.0) {
                   setTimeout(poll, pollInterval)
                 } else {
-                  // Job is complete, update transcription display
+                  // Job is complete
                   transcriptionSegments = data.results
-                  updateTranscriptionDisplay()
                   resetUploadState()
                   activeTranscription = false
+                  showToast((window.I18N ? window.I18N.t('transcriptionComplete') : 'תמלול הושלם בהצלחה'), 'success')
+                  // Switch to My Files tab to view the result
+                  switchTab('files')
                 }
               }
             })
@@ -2554,13 +2520,8 @@
 
       // Update transcription area direction and alignment based on selected language
       function updateTranscriptionDirectionUI() {
-        const lang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
-        const rtlLangs = ['he', 'yi']
-        const isRTL = rtlLangs.includes(lang)
-        if (transcriptionArea) {
-          transcriptionArea.style.direction = isRTL ? 'rtl' : 'ltr'
-          transcriptionArea.style.textAlign = isRTL ? 'right' : 'left'
-        }
+        // No-op: transcription display removed from new transcript tab
+        // Viewer tab handles its own direction
       }
 
       // Speaker label localization should follow the transcription target language, not UI language
@@ -2687,7 +2648,7 @@
       }
 
       function showError(message) {
-        transcriptionArea.innerHTML = `${window.I18N.t('errorPrefix')}: ${message}`
+        showToast(`${window.I18N.t('errorPrefix')}: ${message}`, 'error')
         resetAllState()
       }
 
@@ -2730,115 +2691,8 @@
         return result.join("")
       }
 
-      function updateTranscriptionDisplay() {
-        let result
-
-        if (displaySettings.timestampFormat === "segments") {
-          result = formatWithTimecodes(transcriptionSegments)
-        } else {
-          const continuousSeparator = displaySettings.textFormat === "continuous" ? " " : "<br>"
-          const segmentSeparator = "<br>"
-          result = joinSegmentsWithSpeakerChanges(transcriptionSegments, continuousSeparator, segmentSeparator, true)
-        }
-
-        result = result + "<br><br>" + (window.I18N ? window.I18N.t('transcriptFooter') : "תומלל באמצעות שירות התמלול של ivrit.ai")
-
-        transcriptionArea.innerHTML = result
-        updateTranscriptionDirectionUI()
-        copyBtn.disabled = false
-        downloadBtn.disabled = false
-        downloadDocxBtn.disabled = false
-        exportWordsBtn.disabled = false
-        downloadMenuBtn.disabled = false
-        menuVttBtn.disabled = false
-        menuSrtBtn.disabled = false
-        menuDocxBtn.disabled = false
-        menuJsonBtn.disabled = false
-      }
-
-      function updateTextFormatToggleUI() {
-        if (!textFormatToggleBtn) return
-        const isSegments = displaySettings.textFormat === "segments"
-        // Update inline SVG to reflect current mode
-        const svg = document.getElementById("text-format-icon")
-        if (svg) {
-          while (svg.firstChild) svg.removeChild(svg.firstChild)
-          if (isSegments) {
-            // Segments mode: bullet list (bullets on the right for RTL)
-            svg.insertAdjacentHTML(
-              "afterbegin",
-              '<circle cx="20" cy="6" r="2" fill="currentColor" stroke="none" />\n' +
-                '<circle cx="20" cy="12" r="2" fill="currentColor" stroke="none" />\n' +
-                '<circle cx="20" cy="18" r="2" fill="currentColor" stroke="none" />\n' +
-                '<path d="M17 6H4" />\n' +
-                '<path d="M17 12H7" />\n' +
-                '<path d="M17 18H4" />'
-            )
-          } else {
-            // Continuous mode: three lines with middle right-aligned
-            svg.insertAdjacentHTML(
-              "afterbegin",
-              '<path d="M4 6h16"/>\n' + '<path d="M10 12h10"/>\n' + '<path d="M4 18h16"/>'
-            )
-          }
-        }
-        textFormatToggleBtn.title = isSegments
-          ? window.I18N.t('textFormatSegmentsTitle')
-          : window.I18N.t('textFormatContinuousTitle')
-        textFormatToggleBtn.setAttribute('aria-pressed', String(isSegments))
-        textFormatToggleBtn.classList.toggle('toggle-active', isSegments)
-        // No lucide refresh needed for inline SVG
-      }
-
-      function updateTimestampsToggleUI() {
-        if (!timestampsToggleBtn) return
-        const enabled = displaySettings.timestampFormat === "segments"
-        timestampsToggleBtn.classList.toggle('toggle-active', enabled)
-        timestampsToggleBtn.title = enabled
-          ? (window.I18N ? window.I18N.t('timestampsSegments') : 'כולל קודי זמן')
-          : (window.I18N ? window.I18N.t('timestampsNone') : 'ללא קודי זמן')
-        timestampsToggleBtn.setAttribute('aria-pressed', String(enabled))
-      }
-
-      function updateDiarizationToggleUI() {
-        if (!diarizationToggleBtn) return
-        const enabled = displaySettings.diarizationDisplay === "enabled"
-        diarizationToggleBtn.classList.toggle('toggle-active', enabled)
-        diarizationToggleBtn.title = enabled
-          ? (window.I18N ? window.I18N.t('diarizationEnabled') : 'הצג דוברים')
-          : (window.I18N ? window.I18N.t('diarizationDisabled') : 'הסתר דוברים')
-        diarizationToggleBtn.setAttribute('aria-pressed', String(enabled))
-      }
-
-      if (textFormatToggleBtn) {
-        textFormatToggleBtn.addEventListener("click", () => {
-          displaySettings.textFormat =
-            displaySettings.textFormat === "segments" ? "continuous" : "segments"
-          localStorage.setItem("displaySettings", JSON.stringify(displaySettings))
-          updateTextFormatToggleUI()
-          if (transcriptionSegments.length > 0) {
-            updateTranscriptionDisplay()
-          }
-        })
-      }
-
-      if (timestampsToggleBtn) {
-        timestampsToggleBtn.addEventListener('click', () => {
-          displaySettings.timestampFormat = displaySettings.timestampFormat === 'segments' ? 'none' : 'segments'
-          localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
-          updateTimestampsToggleUI()
-          if (transcriptionSegments.length > 0) updateTranscriptionDisplay()
-        })
-      }
-
-      if (diarizationToggleBtn) {
-        diarizationToggleBtn.addEventListener('click', () => {
-          displaySettings.diarizationDisplay = displaySettings.diarizationDisplay === 'enabled' ? 'disabled' : 'enabled'
-          localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
-          updateDiarizationToggleUI()
-          if (transcriptionSegments.length > 0) updateTranscriptionDisplay()
-        })
-      }
+      // updateTranscriptionDisplay and toggle UI functions removed
+      // Display and controls only exist in Viewer tab
 
       function resetUploadState() {
         transcribeBtn.disabled = false
@@ -2854,268 +2708,12 @@
         fileName.textContent = ""
         progressContainer.style.display = "none"
         progressBar.style.width = "0%"
-        copyBtn.disabled = true
-        downloadBtn.disabled = true
-        downloadDocxBtn.disabled = true
-        exportWordsBtn.disabled = true
-        downloadMenuBtn.disabled = true
-        menuVttBtn.disabled = true
-        menuSrtBtn.disabled = true
-        menuDocxBtn.disabled = true
-        menuJsonBtn.disabled = true
         currentJobId = null
         transcriptionSegments = []
       }
 
-      copyBtn.addEventListener("click", function () {
-        // Get plain text content for copying
-        const plainText = getPlainTextFromSegments()
-        navigator.clipboard.writeText(plainText).then(() => {
-          showToast((window.I18N ? window.I18N.t('copySuccess') : "הטקסט הועתק ללוח בהצלחה"), "success")
-        }).catch(() => {
-          // Fallback for older browsers
-          const range = document.createRange()
-          range.selectNode(transcriptionArea)
-          window.getSelection().removeAllRanges()
-          window.getSelection().addRange(range)
-          document.execCommand("copy")
-          window.getSelection().removeAllRanges()
-          showToast((window.I18N ? window.I18N.t('copySuccess') : "הטקסט הועתק ללוח בהצלחה"), "success")
-        })
-      })
-
-      downloadBtn.addEventListener("click", function () {
-        if (!transcriptionSegments.length) return
-
-        // Generate VTT content
-        let vttContent = "WEBVTT\n\n"
-
-        transcriptionSegments.forEach((segment, index) => {
-          const startTime = formatTime(segment.start)
-          const endTime = formatTime(segment.end)
-          vttContent += `${index + 1}\n`
-          vttContent += `${startTime} --> ${endTime}\n`
-          vttContent += `${segment.text.trim()}\n\n`
-        })
-
-        // Create and trigger download
-        const blob = new Blob([vttContent], { type: "text/vtt" })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = "subtitles.vtt"
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        URL.revokeObjectURL(url)
-      })
-
-      downloadDocxBtn.addEventListener("click", function () {
-        if (!transcriptionSegments.length) return
-
-        try {
-          if (!window.htmlDocx || typeof window.htmlDocx.asBlob !== "function") {
-            showToast("ספריית יצירת המסמך לא נטענה. בדקו את החיבור ונסו שוב.", "error")
-            return
-          }
-
-          function escapeHtml(text) {
-            return (text || "").replace(/[&<>]/g, function (c) {
-              return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]
-            })
-          }
-
-          function buildDocxHTMLFromSegments() {
-            const speakerColors = {
-              1: "#2196F3",
-              2: "#4CAF50",
-              3: "#FF9800",
-              4: "#E91E63",
-              5: "#9C27B0",
-              6: "#F44336",
-              7: "#00BCD4",
-              8: "#8BC34A",
-              9: "#FFC107",
-              10: "#607D8B",
-            }
-
-            const lines = []
-            lines.push('<!DOCTYPE html>')
-            const docLang = (typeof getTranscriptionLanguage === 'function') ? getTranscriptionLanguage() : 'he'
-            const isRTL = ['he', 'yi'].includes(docLang)
-            const docDir = isRTL ? 'rtl' : 'ltr'
-            const textAlign = isRTL ? 'right' : 'left'
-            lines.push('<html lang="' + docLang + '" dir="' + docDir + '">')
-            lines.push('<head>')
-            lines.push('<meta charset="utf-8" />')
-            lines.push('<style>')
-            lines.push('body { font-family: Arial, "Noto Sans Hebrew", "Rubik", sans-serif; direction: ' + docDir + '; unicode-bidi: embed; }')
-            lines.push('h1 { text-align: ' + textAlign + '; font-size: 24pt; margin: 0 0 18pt; }')
-            lines.push('p { text-align: ' + textAlign + '; line-height: 1.6; margin: 0 0 10pt; }')
-            lines.push('</style>')
-            lines.push('</head>')
-            lines.push('<body>')
-            lines.push('<h1>' + (window.I18N ? window.I18N.t('transcriptHeaderDocx') : 'תמלול') + '</h1>')
-
-            const diarizationEnabled = displaySettings.diarizationDisplay === "enabled"
-            const separateEachSegment = displaySettings.textFormat === "segments"
-
-            if (separateEachSegment) {
-              // One paragraph per segment
-              for (let i = 0; i < transcriptionSegments.length; i++) {
-                const seg = transcriptionSegments[i]
-                const text = escapeHtml((seg.text || '').trim())
-                const rawSpeaker = seg.speakers && seg.speakers.length > 0 ? seg.speakers[0] : null
-
-                if (diarizationEnabled) {
-                  if (rawSpeaker) {
-                    const speakerNumber = parseInt(rawSpeaker.replace('SPEAKER_', '')) || 0
-                    const colorIndex = ((speakerNumber - 1) % 10) + 1
-                    const color = speakerColors[colorIndex] || '#000000'
-                    const label = (typeof translateSpeakerLabelText === 'function' ? translateSpeakerLabelText(docLang, speakerNumber) : ('Speaker ' + speakerNumber)) + ': '
-                    lines.push('<p><span style="color:' + color + '; font-weight:700">' + label + '</span>' + text + '</p>')
-                  } else {
-                    const unknownText = (typeof translateSpeakerUnknownText === 'function' ? translateSpeakerUnknownText(docLang) : 'Unknown speaker')
-                    lines.push('<p><span style="font-weight:700">' + unknownText + ': </span>' + text + '</p>')
-                  }
-                } else {
-                  lines.push('<p>' + text + '</p>')
-                }
-              }
-            } else {
-              // Continuous mode: start a new paragraph only on speaker change
-              let currentSpeaker = undefined
-              let bufferParts = []
-              let currentLabelHTML = ''
-
-              const flushParagraph = () => {
-                if (bufferParts.length === 0) return
-                const content = bufferParts.join(' ').trim()
-                if (currentLabelHTML) {
-                  lines.push('<p>' + currentLabelHTML + content + '</p>')
-                } else {
-                  lines.push('<p>' + content + '</p>')
-                }
-                bufferParts = []
-                currentLabelHTML = ''
-              }
-
-              for (let i = 0; i < transcriptionSegments.length; i++) {
-                const seg = transcriptionSegments[i]
-                const rawSpeaker = seg.speakers && seg.speakers.length > 0 ? seg.speakers[0] : null
-                const segText = escapeHtml((seg.text || '').trim())
-
-                const speakerChanged = i === 0 ? true : rawSpeaker !== currentSpeaker
-                if (speakerChanged) {
-                  // Emit previous paragraph
-                  flushParagraph()
-                  // Prepare new label if diarization is enabled
-                  if (diarizationEnabled) {
-                    if (rawSpeaker) {
-                      const speakerNumber = parseInt(rawSpeaker.replace('SPEAKER_', '')) || 0
-                      const colorIndex = ((speakerNumber - 1) % 10) + 1
-                      const color = speakerColors[colorIndex] || '#000000'
-                      const label = (typeof translateSpeakerLabelText === 'function' ? translateSpeakerLabelText(docLang, speakerNumber) : ('Speaker ' + speakerNumber)) + ': '
-                      currentLabelHTML = '<span style="color:' + color + '; font-weight:700">' + label + '</span>'
-                    } else {
-                      const unknownText = (typeof translateSpeakerUnknownText === 'function' ? translateSpeakerUnknownText(docLang) : 'Unknown speaker')
-                      currentLabelHTML = '<span style="font-weight:700">' + unknownText + ': </span>'
-                    }
-                  } else {
-                    currentLabelHTML = ''
-                  }
-                  currentSpeaker = rawSpeaker
-                }
-
-                if (segText) bufferParts.push(segText)
-              }
-
-              // Flush the last paragraph
-              flushParagraph()
-            }
-
-            lines.push('<p style="color:#666; font-size:10pt; margin-top:16pt">' + (window.I18N ? window.I18N.t('transcriptFooter') : 'תומלל באמצעות שירות התמלול של ivrit.ai') + '</p>')
-            lines.push('</body>')
-            lines.push('</html>')
-            return lines.join('\n')
-          }
-
-          const html = buildDocxHTMLFromSegments()
-          const blob = window.htmlDocx.asBlob(html)
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement("a")
-          a.href = url
-          a.download = "transcription.docx"
-          document.body.appendChild(a)
-          a.click()
-          document.body.removeChild(a)
-          URL.revokeObjectURL(url)
-        } catch (error) {
-          console.error("Error creating DOCX:", error)
-          showToast("שגיאה ביצירת קובץ Word. אנא נסה שוב.", "error")
-        }
-      })
-
-      exportWordsBtn.addEventListener("click", function () {
-        if (!transcriptionSegments.length) return
-
-        try {
-          // Export all segment data
-          const exportData = transcriptionSegments
-
-          const blob = new Blob([JSON.stringify(exportData, null, 2)], {
-            type: "application/json",
-          })
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement("a")
-          a.href = url
-          a.download = "transcription_data.json"
-          document.body.appendChild(a)
-          a.click()
-          document.body.removeChild(a)
-          URL.revokeObjectURL(url)
-        } catch (error) {
-          console.error("Error exporting transcription data:", error)
-          showToast("שגיאה בייצוא נתוני התמלול", "error")
-        }
-      })
-
-      menuVttBtn.addEventListener("click", function () {
-        if (!downloadBtn.disabled) {
-          downloadBtn.click()
-        }
-      })
-      menuSrtBtn.addEventListener("click", function () {
-        if (!transcriptionSegments.length) return
-
-        let srtContent = ""
-        transcriptionSegments.forEach((segment, index) => {
-          const start = formatTime(segment.start).replace(".", ",")
-          const end = formatTime(segment.end).replace(".", ",")
-          srtContent += `${
-            index + 1
-          }\n${start} --> ${end}\n${segment.text.trim()}\n\n`
-        })
-        const blob = new Blob([srtContent], { type: "text/plain" })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = "subtitles.srt"
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        URL.revokeObjectURL(url)
-      })
-      menuDocxBtn.addEventListener("click", function () {
-        if (!downloadDocxBtn.disabled) {
-          downloadDocxBtn.click()
-        }
-      })
-      menuJsonBtn.addEventListener("click", function () {
-        if (!exportWordsBtn.disabled) {
-          exportWordsBtn.click()
-        }
-      })
+      // Event listeners for new transcript tab buttons removed
+      // All viewing and download functionality is now in the Viewer tab
 
       function formatTime(seconds) {
         const hours = Math.floor(seconds / 3600)
@@ -3586,7 +3184,6 @@
       document.getElementById('viewer-text-format-toggle').addEventListener('click', () => {
         displaySettings.textFormat = displaySettings.textFormat === "segments" ? "continuous" : "segments"
         localStorage.setItem("displaySettings", JSON.stringify(displaySettings))
-        updateTextFormatToggleUI()
         updateViewerTextFormatToggleUI()
         updateViewerTranscriptionDisplay()
       })
@@ -3594,7 +3191,6 @@
       document.getElementById('viewer-timestamps-toggle').addEventListener('click', () => {
         displaySettings.timestampFormat = displaySettings.timestampFormat === 'segments' ? 'none' : 'segments'
         localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
-        updateTimestampsToggleUI()
         updateViewerTimestampsToggleUI()
         updateViewerTranscriptionDisplay()
       })
@@ -3602,7 +3198,6 @@
       document.getElementById('viewer-diarization-toggle').addEventListener('click', () => {
         displaySettings.diarizationDisplay = displaySettings.diarizationDisplay === 'enabled' ? 'disabled' : 'enabled'
         localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
-        updateDiarizationToggleUI()
         updateViewerDiarizationToggleUI()
         updateViewerTranscriptionDisplay()
       })
