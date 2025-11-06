@@ -1052,20 +1052,18 @@
         border-radius: 8px;
         padding: 1rem;
         margin-bottom: 0.75rem;
-        cursor: pointer;
         transition: all 0.2s ease;
         display: flex;
         justify-content: space-between;
         align-items: center;
       }
-      .file-item:hover {
-        background: var(--container-bg);
-        border-color: var(--primary-color);
-        transform: translateX(-2px);
-      }
       .file-item-info {
         flex: 1;
         text-align: right;
+        cursor: pointer;
+      }
+      .file-item-info:hover {
+        color: var(--primary-color);
       }
       .file-item-name {
         font-weight: 600;
@@ -1077,13 +1075,63 @@
         color: var(--text-color);
         opacity: 0.6;
       }
-      .file-item-icon {
+      .file-item-actions {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
         margin-left: 1rem;
+      }
+      .file-item-icon {
+        cursor: pointer;
       }
       .file-item-icon svg {
         width: 24px;
         height: 24px;
         color: var(--primary-color);
+      }
+      .file-item-download-menu {
+        position: relative;
+        display: inline-block;
+      }
+      .file-item-download-menu .download-dropdown {
+        display: none;
+        position: absolute;
+        bottom: 100%;
+        right: 0;
+        margin-bottom: 0.25rem;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 0.4rem 0;
+        min-width: 140px;
+        z-index: 200;
+        direction: rtl;
+      }
+      .file-item-download-menu:hover .download-dropdown {
+        display: block;
+      }
+      .file-item-download-btn {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+      }
+      .file-item-download-btn:hover {
+        background: var(--container-bg);
+        border-color: var(--primary-color);
+      }
+      .file-item-download-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
       }
       .files-loading {
         text-align: center;
@@ -1171,6 +1219,7 @@
       <div class="tabs">
         <button class="tab-button active" data-tab="transcribe" data-i18n="tabTranscribe">תמלול חדש</button>
         <button class="tab-button" data-tab="files" data-i18n="tabMyFiles">הקבצים שלי</button>
+        <button class="tab-button" data-tab="viewer" id="viewer-tab-btn" style="display: none;" data-i18n="tabViewer">צפייה</button>
       </div>
 
       <!-- Transcribe Tab Content -->
@@ -1307,6 +1356,55 @@
         </div>
       </div>
       <!-- End My Files Tab -->
+
+      <!-- Viewer Tab Content -->
+      <div id="tab-viewer" class="tab-content">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <button id="back-to-files-btn" class="btn btn-secondary" style="padding: 0.5rem 1rem;">
+            <i data-lucide="arrow-right" style="width: 16px; height: 16px; margin-left: 0.25rem;"></i>
+            <span data-i18n="backToFiles">חזרה לרשימה</span>
+          </button>
+          <h2 id="viewer-file-name" style="margin: 0; font-size: 1.2rem; color: var(--text-color);"></h2>
+        </div>
+
+        <div class="action-buttons">
+          <div class="actions-right">
+            <button id="viewer-text-format-toggle" title="פורמט הטקסט" aria-label="פורמט הטקסט">
+              <svg id="viewer-text-format-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 6h16M10 12h10M4 18h16"/>
+              </svg>
+            </button>
+            <button id="viewer-timestamps-toggle" title="קודי זמן" aria-label="קודי זמן">🕒</button>
+            <button id="viewer-diarization-toggle" title="דוברים" aria-label="דוברים">🗣️</button>
+          </div>
+
+          <div class="actions-left">
+            <button id="viewer-copy-btn" data-i18n-title="copyText">
+              <i data-lucide="copy"></i>
+            </button>
+
+            <div class="download-menu">
+              <button id="viewer-download-menu-btn" data-i18n-title="downloads">
+                <i data-lucide="download"></i>
+              </button>
+              <div class="download-dropdown">
+                <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
+                <button type="button" data-action="vtt" id="viewer-menu-vtt">VTT</button>
+                <button type="button" data-action="srt" id="viewer-menu-srt">SRT</button>
+                <button type="button" data-action="docx" id="viewer-menu-docx">
+                  <span data-i18n="wordDocx">Word DOCX</span>
+                </button>
+                <button type="button" data-action="json" id="viewer-menu-json">JSON</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="viewer-transcription-container">
+          <div id="viewer-transcription" contenteditable="false"></div>
+        </div>
+      </div>
+      <!-- End Viewer Tab -->
 
       <div class="links-container">
         <a href="mailto:info@ivrit.ai" class="contact-link">
@@ -2245,7 +2343,7 @@
                 showToast((window.I18N ? window.I18N.t('docxLibMissing') : 'ספריית יצירת המסמך לא נטענה. בדקו את החיבור ונסו שוב.'), "error")
                 continue
               }
-              const html = buildDocxHTMLFromSegmentsParam(results)
+              const html = buildDocxHTMLFromSegmentsParam(results, selectedLang)
               const blob = window.htmlDocx.asBlob(html)
               const url = URL.createObjectURL(blob)
               const a = document.createElement("a")
@@ -2310,8 +2408,8 @@
         })
       }
 
-      function buildDocxHTMLFromSegmentsParam(segments) {
-        const docLang = getTranscriptionLanguage()
+      function buildDocxHTMLFromSegmentsParam(segments, language) {
+        const docLang = language || getTranscriptionLanguage()
         const diarizationEnabled = displaySettings.diarizationDisplay !== "disabled"
         const speakerColors = {
           1: "#2196F3",
@@ -3277,18 +3375,21 @@
         }
       }
 
+      // Store current viewer data
+      let currentViewerData = null
+      let currentViewerLanguage = 'he'
+
       // Create file item element
       function createFileItem(file) {
         const div = document.createElement('div')
         div.className = 'file-item'
-        div.onclick = () => downloadSavedFile(file.id, file.name, file.sourceFilename)
 
         const info = document.createElement('div')
         info.className = 'file-item-info'
+        info.onclick = () => viewSavedFile(file.id, file.sourceFilename || file.name)
 
         const name = document.createElement('div')
         name.className = 'file-item-name'
-        // Use source filename if available, otherwise use the file name
         name.textContent = file.sourceFilename || file.name
 
         const meta = document.createElement('div')
@@ -3306,21 +3407,82 @@
         info.appendChild(name)
         info.appendChild(meta)
 
-        const icon = document.createElement('div')
-        icon.className = 'file-item-icon'
-        icon.innerHTML = '<i data-lucide="file-text"></i>'
+        const actions = document.createElement('div')
+        actions.className = 'file-item-actions'
+
+        // Download menu
+        const downloadMenu = document.createElement('div')
+        downloadMenu.className = 'file-item-download-menu'
+        
+        const downloadBtn = document.createElement('button')
+        downloadBtn.className = 'file-item-download-btn'
+        downloadBtn.innerHTML = '<i data-lucide="download"></i>'
+        downloadBtn.title = (window.I18N ? window.I18N.t('downloads') : 'הורדות')
+        
+        const downloadDropdown = document.createElement('div')
+        downloadDropdown.className = 'download-dropdown'
+        downloadDropdown.innerHTML = `
+          <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
+          <button type="button" onclick="event.stopPropagation(); downloadFileAs('${file.id}', '${file.sourceFilename || file.name}', 'vtt')">VTT</button>
+          <button type="button" onclick="event.stopPropagation(); downloadFileAs('${file.id}', '${file.sourceFilename || file.name}', 'srt')">SRT</button>
+          <button type="button" onclick="event.stopPropagation(); downloadFileAs('${file.id}', '${file.sourceFilename || file.name}', 'docx')"><span data-i18n="wordDocx">Word DOCX</span></button>
+          <button type="button" onclick="event.stopPropagation(); downloadFileAs('${file.id}', '${file.sourceFilename || file.name}', 'json')">JSON</button>
+        `
+        
+        downloadMenu.appendChild(downloadBtn)
+        downloadMenu.appendChild(downloadDropdown)
+        actions.appendChild(downloadMenu)
 
         div.appendChild(info)
-        div.appendChild(icon)
+        div.appendChild(actions)
 
         return div
       }
 
-      // Download saved file
-      async function downloadSavedFile(fileId, fileName, sourceFilename) {
+      // View saved file in viewer tab
+      async function viewSavedFile(fileId, fileName) {
         try {
-          showToast((window.I18N ? window.I18N.t('filesDownloading') : 'מוריד קובץ...'), 'success')
+          const response = await fetch(`/appdata/download/${fileId}`)
+          const data = await response.json()
 
+          if (!response.ok) {
+            showToast(data.error || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
+            return
+          }
+
+          // Store data for viewer
+          currentViewerData = data
+          currentViewerLanguage = data.language || 'he'
+
+          // Set filename in viewer
+          document.getElementById('viewer-file-name').textContent = fileName
+
+          // Update transcription display
+          updateViewerTranscriptionDisplay()
+
+          // Update viewer toggle UI states
+          updateViewerTextFormatToggleUI()
+          updateViewerTimestampsToggleUI()
+          updateViewerDiarizationToggleUI()
+
+          // Show viewer tab
+          document.getElementById('viewer-tab-btn').style.display = 'block'
+          switchTab('viewer')
+
+          // Refresh Lucide icons
+          if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons()
+          }
+
+        } catch (error) {
+          console.error('Error viewing file:', error)
+          showToast((window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
+        }
+      }
+
+      // Download file in specific format
+      async function downloadFileAs(fileId, fileName, format) {
+        try {
           const response = await fetch(`/appdata/download/${fileId}`)
           const data = await response.json()
 
@@ -3329,36 +3491,349 @@
             return
           }
 
-          // Create download with a meaningful filename
-          let downloadName = fileName
-          if (sourceFilename) {
-            // Replace extension with .json
-            const nameParts = sourceFilename.split('.')
-            if (nameParts.length > 1) {
-              nameParts[nameParts.length - 1] = 'json'
-              downloadName = nameParts.join('.')
-            } else {
-              downloadName = sourceFilename + '.json'
-            }
-          }
-
-          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = downloadName
-          document.body.appendChild(a)
-          a.click()
-          document.body.removeChild(a)
-          URL.revokeObjectURL(url)
-
-          showToast((window.I18N ? window.I18N.t('filesDownloadSuccess') : 'הקובץ הורד בהצלחה'), 'success')
+          const segments = data.results || []
+          downloadInFormat(segments, fileName, format, data.language || 'he')
 
         } catch (error) {
           console.error('Error downloading file:', error)
           showToast((window.I18N ? window.I18N.t('filesDownloadError') : 'שגיאה בהורדת הקובץ'), 'error')
         }
       }
+
+      // Download in specified format
+      function downloadInFormat(segments, originalFileName, format, language) {
+        const baseName = originalFileName.replace(/\.[^/.]+$/, '')
+        
+        if (format === 'json') {
+          const blob = new Blob([JSON.stringify(segments, null, 2)], { type: 'application/json' })
+          triggerDownload(blob, `${baseName}.json`)
+        } else if (format === 'vtt') {
+          let vttContent = "WEBVTT\n\n"
+          segments.forEach((segment, index) => {
+            const startTime = formatTime(segment.start)
+            const endTime = formatTime(segment.end)
+            vttContent += `${index + 1}\n${startTime} --> ${endTime}\n${segment.text.trim()}\n\n`
+          })
+          const blob = new Blob([vttContent], { type: 'text/vtt' })
+          triggerDownload(blob, `${baseName}.vtt`)
+        } else if (format === 'srt') {
+          let srtContent = ""
+          segments.forEach((segment, index) => {
+            const start = formatTime(segment.start).replace(".", ",")
+            const end = formatTime(segment.end).replace(".", ",")
+            srtContent += `${index + 1}\n${start} --> ${end}\n${segment.text.trim()}\n\n`
+          })
+          const blob = new Blob([srtContent], { type: 'text/plain' })
+          triggerDownload(blob, `${baseName}.srt`)
+        } else if (format === 'docx') {
+          if (!window.htmlDocx || typeof window.htmlDocx.asBlob !== "function") {
+            showToast((window.I18N ? window.I18N.t('docxLibMissing') : 'ספריית יצירת המסמך לא נטענה'), 'error')
+            return
+          }
+          const html = buildDocxHTMLFromSegmentsParam(segments, language)
+          const blob = window.htmlDocx.asBlob(html)
+          triggerDownload(blob, `${baseName}.docx`)
+        }
+
+        showToast((window.I18N ? window.I18N.t('filesDownloadSuccess') : 'הקובץ הורד בהצלחה'), 'success')
+      }
+
+      function triggerDownload(blob, filename) {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = filename
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      }
+
+      // Update viewer transcription display
+      function updateViewerTranscriptionDisplay() {
+        if (!currentViewerData || !currentViewerData.results) return
+
+        const viewerTranscription = document.getElementById('viewer-transcription')
+        const segments = currentViewerData.results
+
+        // Use same display logic as main transcription
+        let result
+        if (displaySettings.timestampFormat === "segments") {
+          result = formatWithTimecodesForSegments(segments)
+        } else {
+          const continuousSeparator = displaySettings.textFormat === "continuous" ? " " : "<br>"
+          const segmentSeparator = "<br>"
+          result = joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, true)
+        }
+
+        result = result + "<br><br>" + (window.I18N ? window.I18N.t('transcriptFooter') : "תומלל באמצעות שירות התמלול של ivrit.ai")
+
+        viewerTranscription.innerHTML = result
+        updateViewerTranscriptionDirectionUI()
+      }
+
+      function formatWithTimecodesForSegments(segments) {
+        if (!segments || segments.length === 0) return ""
+
+        const separator = displaySettings.textFormat === "continuous" ? " " : "<br>"
+        const groups = []
+        let currentGroup = []
+        let currentTimeMarker = 30
+
+        for (let i = 0; i < segments.length; i++) {
+          const segment = segments[i]
+          currentGroup.push(segment)
+
+          const shouldEndGroup =
+            (segment.start <= currentTimeMarker && segment.end >= currentTimeMarker) ||
+            i === segments.length - 1 ||
+            (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker)
+
+          if (shouldEndGroup) {
+            const startTime = currentGroup[0].start
+            const endTime = currentGroup[currentGroup.length - 1].end
+
+            const groupText = displaySettings.diarizationDisplay === "enabled"
+              ? joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "<br>", true)
+              : currentGroup.map((seg) => seg.text.trim()).join(separator)
+
+            const formattedStartTime = formatTimeForDisplay(startTime)
+            const formattedEndTime = formatTimeForDisplay(endTime)
+            groups.push("[" + formattedStartTime + "-" + formattedEndTime + "]<br>" + groupText)
+
+            currentGroup = []
+            currentTimeMarker += 30
+
+            while (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker) {
+              currentTimeMarker += 30
+            }
+          }
+        }
+
+        return groups.join("<br><br>")
+      }
+
+      function joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, isHTML = true) {
+        if (!segments || segments.length === 0) return ""
+        
+        const result = []
+        let currentSpeaker = null
+        const diarizationEnabled = displaySettings.diarizationDisplay === "enabled"
+        
+        for (let i = 0; i < segments.length; i++) {
+          const segment = segments[i]
+          const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
+          
+          const showSpeakerLabel = diarizationEnabled && segmentSpeaker !== currentSpeaker
+          
+          const segmentText = showSpeakerLabel 
+            ? (isHTML ? getSpeakerLabelForLanguage(segment, currentViewerLanguage) + segment.text.trim() : getSpeakerLabelPlainForLanguage(segment, currentViewerLanguage) + segment.text.trim())
+            : segment.text.trim()
+          
+          if (i === 0) {
+            result.push(segmentText)
+            currentSpeaker = segmentSpeaker
+          } else if (diarizationEnabled && segmentSpeaker !== currentSpeaker) {
+            result.push('<br><br>' + segmentText)
+            currentSpeaker = segmentSpeaker
+          } else {
+            result.push(continuousSeparator + segmentText)
+            if (diarizationEnabled) {
+              currentSpeaker = segmentSpeaker
+            }
+          }
+        }
+        
+        return result.join("")
+      }
+
+      function getSpeakerLabelForLanguage(segment, lang) {
+        if (segment.speakers && segment.speakers.length > 0) {
+          const speakerNumber = parseInt(segment.speakers[0].replace("SPEAKER_", ""))
+          const speakerLabelText = translateSpeakerLabelText(lang, speakerNumber)
+          return `<span class="speaker speaker-${speakerNumber}">${speakerLabelText}: </span>`
+        }
+        return `<span class="speaker">${translateSpeakerUnknownText(lang)}: </span>`
+      }
+
+      function getSpeakerLabelPlainForLanguage(segment, lang) {
+        if (segment.speakers && segment.speakers.length > 0) {
+          const speakerNumber = parseInt(segment.speakers[0].replace("SPEAKER_", ""))
+          return `${translateSpeakerLabelText(lang, speakerNumber)}: `
+        }
+        return `${translateSpeakerUnknownText(lang)}: `
+      }
+
+      function updateViewerTranscriptionDirectionUI() {
+        const lang = currentViewerLanguage
+        const rtlLangs = ['he', 'yi']
+        const isRTL = rtlLangs.includes(lang)
+        const viewerTranscription = document.getElementById('viewer-transcription')
+        if (viewerTranscription) {
+          viewerTranscription.style.direction = isRTL ? 'rtl' : 'ltr'
+          viewerTranscription.style.textAlign = isRTL ? 'right' : 'left'
+        }
+      }
+
+      // Wire up viewer controls
+      document.getElementById('back-to-files-btn').addEventListener('click', () => {
+        document.getElementById('viewer-tab-btn').style.display = 'none'
+        switchTab('files')
+      })
+
+      document.getElementById('viewer-text-format-toggle').addEventListener('click', () => {
+        displaySettings.textFormat = displaySettings.textFormat === "segments" ? "continuous" : "segments"
+        localStorage.setItem("displaySettings", JSON.stringify(displaySettings))
+        updateTextFormatToggleUI()
+        updateViewerTextFormatToggleUI()
+        updateViewerTranscriptionDisplay()
+      })
+
+      document.getElementById('viewer-timestamps-toggle').addEventListener('click', () => {
+        displaySettings.timestampFormat = displaySettings.timestampFormat === 'segments' ? 'none' : 'segments'
+        localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
+        updateTimestampsToggleUI()
+        updateViewerTimestampsToggleUI()
+        updateViewerTranscriptionDisplay()
+      })
+
+      document.getElementById('viewer-diarization-toggle').addEventListener('click', () => {
+        displaySettings.diarizationDisplay = displaySettings.diarizationDisplay === 'enabled' ? 'disabled' : 'enabled'
+        localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
+        updateDiarizationToggleUI()
+        updateViewerDiarizationToggleUI()
+        updateViewerTranscriptionDisplay()
+      })
+
+      function updateViewerTextFormatToggleUI() {
+        const btn = document.getElementById('viewer-text-format-toggle')
+        const svg = document.getElementById('viewer-text-format-icon')
+        const isSegments = displaySettings.textFormat === "segments"
+        
+        if (svg) {
+          while (svg.firstChild) svg.removeChild(svg.firstChild)
+          if (isSegments) {
+            svg.insertAdjacentHTML("afterbegin",
+              '<circle cx="20" cy="6" r="2" fill="currentColor" stroke="none" />\n' +
+              '<circle cx="20" cy="12" r="2" fill="currentColor" stroke="none" />\n' +
+              '<circle cx="20" cy="18" r="2" fill="currentColor" stroke="none" />\n' +
+              '<path d="M17 6H4" />\n' +
+              '<path d="M17 12H7" />\n' +
+              '<path d="M17 18H4" />'
+            )
+          } else {
+            svg.insertAdjacentHTML("afterbegin",
+              '<path d="M4 6h16"/>\n' + '<path d="M10 12h10"/>\n' + '<path d="M4 18h16"/>'
+            )
+          }
+        }
+        
+        btn.title = isSegments ? (window.I18N ? window.I18N.t('textFormatSegmentsTitle') : 'פורמט הטקסט: פסקאות נפרדות') : (window.I18N ? window.I18N.t('textFormatContinuousTitle') : 'פורמט הטקסט: טקסט רציף')
+        btn.classList.toggle('toggle-active', isSegments)
+      }
+
+      function updateViewerTimestampsToggleUI() {
+        const btn = document.getElementById('viewer-timestamps-toggle')
+        const enabled = displaySettings.timestampFormat === "segments"
+        btn.classList.toggle('toggle-active', enabled)
+        btn.title = enabled ? (window.I18N ? window.I18N.t('timestampsSegments') : 'כולל קודי זמן') : (window.I18N ? window.I18N.t('timestampsNone') : 'ללא קודי זמן')
+      }
+
+      function updateViewerDiarizationToggleUI() {
+        const btn = document.getElementById('viewer-diarization-toggle')
+        const enabled = displaySettings.diarizationDisplay === "enabled"
+        btn.classList.toggle('toggle-active', enabled)
+        btn.title = enabled ? (window.I18N ? window.I18N.t('diarizationEnabled') : 'הצג דוברים') : (window.I18N ? window.I18N.t('diarizationDisabled') : 'הסתר דוברים')
+      }
+
+      // Copy button in viewer
+      document.getElementById('viewer-copy-btn').addEventListener('click', () => {
+        if (!currentViewerData || !currentViewerData.results) return
+        const plainText = getPlainTextFromSegmentsForViewer(currentViewerData.results)
+        navigator.clipboard.writeText(plainText).then(() => {
+          showToast((window.I18N ? window.I18N.t('copySuccess') : "הטקסט הועתק ללוח בהצלחה"), "success")
+        }).catch(() => {
+          showToast((window.I18N ? window.I18N.t('copySuccess') : "הטקסט הועתק ללוח בהצלחה"), "success")
+        })
+      })
+
+      function getPlainTextFromSegmentsForViewer(segments) {
+        let result
+        if (displaySettings.timestampFormat === "segments") {
+          result = formatWithTimecodesPlainForViewer(segments)
+        } else {
+          const continuousSeparator = displaySettings.textFormat === "continuous" ? " " : "\n"
+          const segmentSeparator = "\n"
+          result = joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, false)
+        }
+        return result + "\n\n" + (window.I18N ? window.I18N.t('transcriptFooter') : "תומלל באמצעות שירות התמלול של ivrit.ai")
+      }
+
+      function formatWithTimecodesPlainForViewer(segments) {
+        if (!segments || segments.length === 0) return ""
+
+        const separator = displaySettings.textFormat === "continuous" ? " " : "\n"
+        const groups = []
+        let currentGroup = []
+        let currentTimeMarker = 30
+
+        for (let i = 0; i < segments.length; i++) {
+          const segment = segments[i]
+          currentGroup.push(segment)
+
+          const shouldEndGroup =
+            (segment.start <= currentTimeMarker && segment.end >= currentTimeMarker) ||
+            i === segments.length - 1 ||
+            (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker)
+
+          if (shouldEndGroup) {
+            const startTime = currentGroup[0].start
+            const endTime = currentGroup[currentGroup.length - 1].end
+
+            const groupText = displaySettings.diarizationDisplay === "enabled"
+              ? joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "\n", false)
+              : currentGroup.map((seg) => seg.text.trim()).join(separator)
+
+            const formattedStartTime = formatTimeForDisplay(startTime)
+            const formattedEndTime = formatTimeForDisplay(endTime)
+            groups.push("[" + formattedStartTime + "-" + formattedEndTime + "]\n" + groupText)
+
+            currentGroup = []
+            currentTimeMarker += 30
+
+            while (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker) {
+              currentTimeMarker += 30
+            }
+          }
+        }
+
+        return groups.join("\n\n")
+      }
+
+      // Viewer download menu
+      document.getElementById('viewer-menu-vtt').addEventListener('click', () => {
+        if (!currentViewerData) return
+        const fileName = document.getElementById('viewer-file-name').textContent
+        downloadInFormat(currentViewerData.results, fileName, 'vtt', currentViewerLanguage)
+      })
+
+      document.getElementById('viewer-menu-srt').addEventListener('click', () => {
+        if (!currentViewerData) return
+        const fileName = document.getElementById('viewer-file-name').textContent
+        downloadInFormat(currentViewerData.results, fileName, 'srt', currentViewerLanguage)
+      })
+
+      document.getElementById('viewer-menu-docx').addEventListener('click', () => {
+        if (!currentViewerData) return
+        const fileName = document.getElementById('viewer-file-name').textContent
+        downloadInFormat(currentViewerData.results, fileName, 'docx', currentViewerLanguage)
+      })
+
+      document.getElementById('viewer-menu-json').addEventListener('click', () => {
+        if (!currentViewerData) return
+        const fileName = document.getElementById('viewer-file-name').textContent
+        downloadInFormat(currentViewerData.results, fileName, 'json', currentViewerLanguage)
+      })
     </script>
   </body>
 </html>

@@ -94,12 +94,14 @@
     docxDownloaded: "קובץ DOCX ירד: {filename}",
     tabTranscribe: "תמלול חדש",
     tabMyFiles: "הקבצים שלי",
+    tabViewer: "צפייה",
     filesLoading: "טוען קבצים...",
     filesEmpty: "עדיין לא שמרת תמלולים",
     filesLoadError: "שגיאה בטעינת הקבצים",
     filesDownloading: "מוריד קובץ...",
     filesDownloadSuccess: "הקובץ הורד בהצלחה",
     filesDownloadError: "שגיאה בהורדת הקובץ",
+    backToFiles: "חזרה לרשימה",
   }
 
   const yi = {
@@ -197,12 +199,14 @@
     docxDownloaded: "DOCX אַראָפּלאָדן: {filename}",
     tabTranscribe: "נײַע טראַנסקריפּציע",
     tabMyFiles: "מײַנע טעקעס",
+    tabViewer: "באַקוקן",
     filesLoading: "לאָדט טעקעס...",
     filesEmpty: "איר האָט נאָך נישט אויפֿגעהיט טראַנסקריפּציעס",
     filesLoadError: "טעות בײַם לאָדן טעקעס",
     filesDownloading: "אַראָפּלאָדט טעקע...",
     filesDownloadSuccess: "טעקע אַראָפּלאָדן געראָטן",
     filesDownloadError: "טעות בײַם אַראָפּלאָדן טעקע",
+    backToFiles: "צוריק צו רשימה",
   }
 
   const en = {
@@ -300,12 +304,14 @@
     docxDownloaded: "DOCX downloaded: {filename}",
     tabTranscribe: "New Transcription",
     tabMyFiles: "My Files",
+    tabViewer: "Viewer",
     filesLoading: "Loading files...",
     filesEmpty: "You haven't saved any transcriptions yet",
     filesLoadError: "Error loading files",
     filesDownloading: "Downloading file...",
     filesDownloadSuccess: "File downloaded successfully",
     filesDownloadError: "Error downloading file",
+    backToFiles: "Back to list",
   }
 
   const resources = { he, yi, en }
