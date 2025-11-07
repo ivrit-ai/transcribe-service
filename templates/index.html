@@ -1056,6 +1056,27 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        gap: 0.75rem;
+      }
+      .file-item-status {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .status-queued {
+        background-color: #9e9e9e;
+      }
+      .status-being-processed {
+        background-color: #2196f3;
+        animation: pulse 2s ease-in-out infinite;
+      }
+      .status-ready {
+        background-color: #4caf50;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
       }
       .file-item-info {
         flex: 1;
@@ -2685,6 +2706,12 @@
         // Load files when switching to files tab
         if (tabName === 'files') {
           loadSavedFiles()
+        } else {
+          // Cancel auto-refresh when leaving files tab
+          if (filesRefreshTimeout) {
+            clearTimeout(filesRefreshTimeout)
+            filesRefreshTimeout = null
+          }
         }
 
         // Refresh Lucide icons after tab switch
@@ -2726,10 +2753,19 @@
             return
           }
 
-          // Sort entries by completion time (newest first)
+          // Sort entries: active jobs first (Queued, Being processed), then by time
           entries.sort((a, b) => {
-            const dateA = new Date(a.completed_at)
-            const dateB = new Date(b.completed_at)
+            const statusOrder = { 'Queued': 0, 'Being processed': 1, 'Ready': 2 }
+            const statusA = statusOrder[a.status] !== undefined ? statusOrder[a.status] : 3
+            const statusB = statusOrder[b.status] !== undefined ? statusOrder[b.status] : 3
+            
+            if (statusA !== statusB) {
+              return statusA - statusB
+            }
+            
+            // Within same status, sort by time (newest first)
+            const dateA = new Date(a.completed_at || a.submitted_at)
+            const dateB = new Date(b.completed_at || b.submitted_at)
             return dateB - dateA
           })
 
@@ -2744,12 +2780,54 @@
             window.lucide.createIcons()
           }
 
+          // Check if there are active jobs and set up auto-refresh
+          const hasActiveJobs = entries.some(e => e.status === 'Queued' || e.status === 'Being processed')
+          if (hasActiveJobs) {
+            scheduleFilesRefresh()
+          }
+
         } catch (error) {
           console.error('Error loading files:', error)
           filesLoading.style.display = 'none'
           filesError.style.display = 'block'
           filesErrorMessage.textContent = (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקבצים')
         }
+      }
+
+      // Auto-refresh for active jobs
+      let filesRefreshTimeout = null
+      function scheduleFilesRefresh() {
+        // Clear any existing timeout
+        if (filesRefreshTimeout) {
+          clearTimeout(filesRefreshTimeout)
+        }
+        
+        // Refresh after 5 seconds if still on files tab
+        filesRefreshTimeout = setTimeout(() => {
+          const filesTab = document.getElementById('tab-files')
+          if (filesTab && filesTab.classList.contains('active')) {
+            loadSavedFiles()
+          }
+        }, 5000)
+      }
+
+      // Get localized status text
+      function getStatusText(status) {
+        const statusTexts = {
+          'he': {
+            'Queued': 'ממתין בתור',
+            'Being processed': 'בתהליך תמלול',
+            'Ready': 'מוכן'
+          },
+          'en': {
+            'Queued': 'Queued',
+            'Being processed': 'Being processed',
+            'Ready': 'Ready'
+          }
+        }
+        const lang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
+        const langTexts = statusTexts[lang] || statusTexts['en']
+        return langTexts[status] || status
       }
 
       // Store current viewer data
@@ -2762,9 +2840,24 @@
         const div = document.createElement('div')
         div.className = 'file-item'
 
+        // Status indicator
+        const statusDot = document.createElement('div')
+        statusDot.className = 'file-item-status'
+        const status = entry.status || 'Ready'
+        const statusClass = status.toLowerCase().replace(/\s+/g, '-')
+        statusDot.classList.add(`status-${statusClass}`)
+        statusDot.title = status
+
         const info = document.createElement('div')
         info.className = 'file-item-info'
-        info.onclick = () => viewSavedFileFromTOC(entry)
+        
+        // Only allow clicking for ready items
+        const isReady = status === 'Ready' && entry.results_id
+        if (isReady) {
+          info.onclick = () => viewSavedFileFromTOC(entry)
+        } else {
+          info.style.cursor = 'default'
+        }
 
         const name = document.createElement('div')
         name.className = 'file-item-name'
@@ -2772,15 +2865,36 @@
 
         const meta = document.createElement('div')
         meta.className = 'file-item-meta'
-        const date = new Date(entry.completed_at)
-        const dateStr = date.toLocaleDateString('he-IL', { 
-          year: 'numeric', 
-          month: 'long', 
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
-        })
-        meta.textContent = dateStr
+        
+        // Show appropriate date and status text
+        let dateStr = ''
+        if (entry.completed_at) {
+          const date = new Date(entry.completed_at)
+          dateStr = date.toLocaleDateString('he-IL', { 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        } else if (entry.submitted_at) {
+          const date = new Date(entry.submitted_at)
+          dateStr = date.toLocaleDateString('he-IL', { 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        }
+        
+        // Add status text in parentheses for non-ready items
+        if (status !== 'Ready') {
+          const statusText = getStatusText(status)
+          meta.textContent = `${dateStr} (${statusText})`
+        } else {
+          meta.textContent = dateStr
+        }
 
         info.appendChild(name)
         info.appendChild(meta)
@@ -2788,33 +2902,33 @@
         const actions = document.createElement('div')
         actions.className = 'file-item-actions'
 
-        // Download menu
-        const downloadMenu = document.createElement('div')
-        downloadMenu.className = 'file-item-download-menu'
-        
-        const downloadBtn = document.createElement('button')
-        downloadBtn.className = 'file-item-download-btn'
-        downloadBtn.innerHTML = '<i data-lucide="download"></i>'
-        downloadBtn.title = (window.I18N ? window.I18N.t('downloads') : 'הורדות')
-        
-        const downloadDropdown = document.createElement('div')
-        downloadDropdown.className = 'download-dropdown'
-        
-        // Store entry as JSON string in data attribute, properly escaped
-        const entryJson = JSON.stringify(entry).replace(/'/g, '&apos;').replace(/"/g, '&quot;')
-        
-        downloadDropdown.innerHTML = `
-          <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
-          <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'vtt')">VTT</button>
-          <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'srt')">SRT</button>
-          <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'docx')"><span data-i18n="wordDocx">Word DOCX</span></button>
-          <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'json')">JSON</button>
-        `
-        
-        downloadMenu.appendChild(downloadBtn)
-        downloadMenu.appendChild(downloadDropdown)
-        actions.appendChild(downloadMenu)
+        // Only show download menu for ready items
+        if (isReady) {
+          const downloadMenu = document.createElement('div')
+          downloadMenu.className = 'file-item-download-menu'
+          
+          const downloadBtn = document.createElement('button')
+          downloadBtn.className = 'file-item-download-btn'
+          downloadBtn.innerHTML = '<i data-lucide="download"></i>'
+          downloadBtn.title = (window.I18N ? window.I18N.t('downloads') : 'הורדות')
+          
+          const downloadDropdown = document.createElement('div')
+          downloadDropdown.className = 'download-dropdown'
+          
+          downloadDropdown.innerHTML = `
+            <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
+            <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'vtt')">VTT</button>
+            <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'srt')">SRT</button>
+            <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'docx')"><span data-i18n="wordDocx">Word DOCX</span></button>
+            <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'json')">JSON</button>
+          `
+          
+          downloadMenu.appendChild(downloadBtn)
+          downloadMenu.appendChild(downloadDropdown)
+          actions.appendChild(downloadMenu)
+        }
 
+        div.appendChild(statusDot)
         div.appendChild(info)
         div.appendChild(actions)
 

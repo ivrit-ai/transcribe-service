@@ -581,6 +581,7 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     return str(timedelta(seconds=int(time_ahead)))
 
 
+
 async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he", refresh_token: Optional[str] = None):
     # Try to add the job to the queue
     log_message(f"{user_email}: Queuing job {job_id}...")
@@ -700,17 +701,59 @@ async def list_languages():
 
 @app.get("/appdata/toc")
 async def get_toc(request: Request):
-    """Get TOC (table of contents) with all transcription metadata."""
+    """Get TOC (table of contents) with all transcription metadata, augmented with in-memory job states."""
     session_id = get_session_id(request)
     refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_email = get_user_email(request)
     
     if not refresh_token:
         return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
     
+    # Load persistent TOC (only contains completed jobs)
     toc_data = await download_toc(refresh_token)
     
     if toc_data is None:
         return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
+    
+    # Get TOC version from environment
+    toc_version = os.environ.get("TOC_VER", "1.0")
+    
+    # Augment with in-memory jobs for this user
+    if user_email:
+        in_memory_entries = []
+        
+        # Check all queues for jobs from this user
+        for queue_type in [SHORT, LONG, PRIVATE]:
+            # Check queued jobs
+            for job_desc in list(queues[queue_type].queue):
+                if job_desc.user_email == user_email:
+                    in_memory_entries.append({
+                        "job_id": job_desc.id,
+                        "source_filename": job_desc.filename,
+                        "language": job_desc.language,
+                        "duration_seconds": job_desc.duration,
+                        "submitted_at": datetime.fromtimestamp(job_desc.qtime).isoformat(),
+                        "status": "Queued",
+                        "toc_version": toc_version,
+                    })
+            
+            # Check running jobs
+            for job_id, job_desc in running_jobs[queue_type].items():
+                if job_desc.user_email == user_email:
+                    in_memory_entries.append({
+                        "job_id": job_desc.id,
+                        "source_filename": job_desc.filename,
+                        "language": job_desc.language,
+                        "duration_seconds": job_desc.duration,
+                        "submitted_at": datetime.fromtimestamp(job_desc.qtime).isoformat(),
+                        "status": "Being processed",
+                        "toc_version": toc_version,
+                    })
+        
+        # Prepend in-memory entries (they should appear first)
+        if "entries" not in toc_data:
+            toc_data["entries"] = []
+        toc_data["entries"] = in_memory_entries + toc_data["entries"]
     
     return JSONResponse(toc_data)
 
@@ -1525,20 +1568,6 @@ async def transcribe_job(job_desc):
             completed_at_iso = job_results[job_id]["completion_time"].isoformat()
             results_id = str(uuid.uuid4())
             
-            # Get TOC version from environment
-            toc_version = os.environ.get("TOC_VER", "1.0")
-            
-            # Create TOC entry (metadata only)
-            toc_entry = {
-                "results_id": results_id,
-                "job_id": job_id,
-                "source_filename": job_desc.filename,
-                "language": job_desc.language,
-                "duration_seconds": duration,
-                "completed_at": completed_at_iso,
-                "toc_version": toc_version,
-            }
-            
             # Create full payload with both metadata AND results
             # This allows TOC to be rebuilt from individual files if needed
             full_payload = {
@@ -1565,6 +1594,21 @@ async def transcribe_job(job_desc):
             if not upload_success:
                 logger.error(f"Failed to upload results file for {job_id}, skipping TOC update")
                 return
+            
+            # Get TOC version from environment
+            toc_version = os.environ.get("TOC_VER", "1.0")
+            
+            # Create TOC entry for completed job
+            toc_entry = {
+                "results_id": results_id,
+                "job_id": job_id,
+                "source_filename": job_desc.filename,
+                "language": job_desc.language,
+                "duration_seconds": duration,
+                "completed_at": completed_at_iso,
+                "status": "Ready",
+                "toc_version": toc_version,
+            }
             
             # Acquire per-user lock for TOC updates
             toc_lock = get_toc_lock(job_desc.user_email)
