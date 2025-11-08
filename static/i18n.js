@@ -148,6 +148,7 @@
     fileSelected: "דערקליבענע טעקע",
     fileSize: "טעקע־גרייס",
     removeFile: "אויסמעקן טעקע",
+    saveAudioInDrive: "היט אַודיאָ צו Google Drive",
     fileRemovedSuccess: "טעקע איז געלאָשן געוואָרן מיט הצלחה",
     fileSelectedSuccess: "טעקע איז געראָטן אויסגעקליבן",
     fileTooLarge: "די טעקע איז צו גרויַס. מעגלעכער העכסטער איז {size}",
