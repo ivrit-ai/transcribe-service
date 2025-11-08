@@ -2705,7 +2705,8 @@
 
         // Load files when switching to files tab
         if (tabName === 'files') {
-          loadSavedFiles()
+          lastKnownEntries = null  // Reset cache for fresh load
+          loadSavedFiles(true)  // Show loading on tab switch
         } else {
           // Cancel auto-refresh when leaving files tab
           if (filesRefreshTimeout) {
@@ -2720,36 +2721,62 @@
         }
       }
 
+      // Store last known entries for comparison
+      let lastKnownEntries = null
+
       // Load saved files from Google Drive TOC
-      async function loadSavedFiles() {
+      async function loadSavedFiles(showLoading = true) {
         const filesLoading = document.getElementById('files-loading')
         const filesError = document.getElementById('files-error')
         const filesEmpty = document.getElementById('files-empty')
         const filesList = document.getElementById('files-list')
         const filesErrorMessage = document.getElementById('files-error-message')
 
-        // Show loading state
-        filesLoading.style.display = 'block'
-        filesError.style.display = 'none'
-        filesEmpty.style.display = 'none'
-        filesList.innerHTML = ''
+        // Show loading state only on initial load
+        if (showLoading) {
+          filesLoading.style.display = 'block'
+          filesError.style.display = 'none'
+          filesEmpty.style.display = 'none'
+          filesList.innerHTML = ''
+        }
 
         try {
           const response = await fetch('/appdata/toc')
           const data = await response.json()
 
-          filesLoading.style.display = 'none'
+          if (showLoading) {
+            filesLoading.style.display = 'none'
+          }
 
           if (!response.ok) {
-            filesError.style.display = 'block'
-            filesErrorMessage.textContent = data.error || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקבצים')
+            if (showLoading) {
+              filesError.style.display = 'block'
+              filesErrorMessage.textContent = data.error || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקבצים')
+            }
+            // Silent failure for background refresh
             return
           }
 
           const entries = data.entries || []
 
+          // Check if data actually changed
+          const entriesChanged = !lastKnownEntries || 
+            JSON.stringify(entries) !== JSON.stringify(lastKnownEntries)
+          
+          if (!entriesChanged && !showLoading) {
+            // No changes, just schedule next refresh
+            scheduleFilesRefresh(entries)
+            return
+          }
+
+          // Update last known entries
+          lastKnownEntries = entries
+
           if (entries.length === 0) {
-            filesEmpty.style.display = 'block'
+            if (showLoading) {
+              filesEmpty.style.display = 'block'
+            }
+            scheduleFilesRefresh(entries)
             return
           }
 
@@ -2769,44 +2796,58 @@
             return dateB - dateA
           })
 
-          // Render files from TOC entries
-          entries.forEach(entry => {
-            const fileItem = createFileItemFromTOC(entry)
-            filesList.appendChild(fileItem)
-          })
+          // Only re-render if data changed or it's initial load
+          if (entriesChanged || showLoading) {
+            filesList.innerHTML = ''
+            entries.forEach(entry => {
+              const fileItem = createFileItemFromTOC(entry)
+              filesList.appendChild(fileItem)
+            })
 
-          // Refresh Lucide icons
-          if (window.lucide && typeof window.lucide.createIcons === 'function') {
-            window.lucide.createIcons()
+            // Refresh Lucide icons
+            if (window.lucide && typeof window.lucide.createIcons === 'function') {
+              window.lucide.createIcons()
+            }
           }
 
-          // Check if there are active jobs and set up auto-refresh
-          const hasActiveJobs = entries.some(e => e.status === 'Queued' || e.status === 'Being processed')
-          if (hasActiveJobs) {
-            scheduleFilesRefresh()
-          }
+          // Schedule next refresh based on job status
+          scheduleFilesRefresh(entries)
 
         } catch (error) {
           console.error('Error loading files:', error)
-          filesLoading.style.display = 'none'
-          filesError.style.display = 'block'
-          filesErrorMessage.textContent = (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקבצים')
+          if (showLoading) {
+            filesLoading.style.display = 'none'
+            filesError.style.display = 'block'
+            filesErrorMessage.textContent = (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקבצים')
+          }
+          // Silent failure for background refresh - still schedule next attempt
+          scheduleFilesRefresh([])
         }
       }
 
-      // Auto-refresh for active jobs
+      // Auto-refresh with adaptive polling frequency
       let filesRefreshTimeout = null
-      function scheduleFilesRefresh() {
+      function scheduleFilesRefresh(entries = []) {
         // Clear any existing timeout
         if (filesRefreshTimeout) {
           clearTimeout(filesRefreshTimeout)
+          filesRefreshTimeout = null
         }
         
-        // Refresh after 5 seconds if still on files tab
+        // Check if there are active jobs
+        const hasActiveJobs = entries.some(e => e.status === 'Queued' || e.status === 'Being processed')
+        
+        // Only poll if there are active jobs - stop polling when all done
+        if (!hasActiveJobs) {
+          return
+        }
+        
+        // Poll every 5 seconds when jobs are in flight
         filesRefreshTimeout = setTimeout(() => {
           const filesTab = document.getElementById('tab-files')
           if (filesTab && filesTab.classList.contains('active')) {
-            loadSavedFiles()
+            // Silent refresh (no loading indicator)
+            loadSavedFiles(false)
           }
         }, 5000)
       }
@@ -2935,17 +2976,47 @@
         return div
       }
 
+      // Helper function to decompress gzipped data
+      async function decompressGzip(arrayBuffer) {
+        const stream = new DecompressionStream('gzip')
+        const writer = stream.writable.getWriter()
+        writer.write(new Uint8Array(arrayBuffer))
+        writer.close()
+        
+        const reader = stream.readable.getReader()
+        const chunks = []
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          chunks.push(value)
+        }
+        
+        const decompressed = new Uint8Array(chunks.reduce((acc, chunk) => acc + chunk.length, 0))
+        let offset = 0
+        for (const chunk of chunks) {
+          decompressed.set(chunk, offset)
+          offset += chunk.length
+        }
+        
+        return new TextDecoder().decode(decompressed)
+      }
+
       // View saved file from TOC entry
       async function viewSavedFileFromTOC(entry) {
         try {
-          // Fetch results
+          // Fetch results (gzipped)
           const response = await fetch(`/appdata/results/${entry.results_id}`)
-          const data = await response.json()
-
+          
           if (!response.ok) {
-            showToast(data.error || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
+            const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+            showToast(errorData.error || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
             return
           }
+          
+          // Decompress gzipped data
+          const arrayBuffer = await response.arrayBuffer()
+          const decompressed = await decompressGzip(arrayBuffer)
+          const data = JSON.parse(decompressed)
 
           // Store data for viewer (results file now contains full payload)
           currentViewerData = { results: data.results || [] }
@@ -2982,12 +3053,17 @@
       async function downloadFileFromTOC(resultsId, fileName, language, format) {
         try {
           const response = await fetch(`/appdata/results/${resultsId}`)
-          const data = await response.json()
-
+          
           if (!response.ok) {
-            showToast(data.error || (window.I18N ? window.I18N.t('filesDownloadError') : 'שגיאה בהורדת הקובץ'), 'error')
+            const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+            showToast(errorData.error || (window.I18N ? window.I18N.t('filesDownloadError') : 'שגיאה בהורדת הקובץ'), 'error')
             return
           }
+          
+          // Decompress gzipped data
+          const arrayBuffer = await response.arrayBuffer()
+          const decompressed = await decompressGzip(arrayBuffer)
+          const data = JSON.parse(decompressed)
 
           // Results file now contains full payload with metadata + results
           const segments = data.results || []
