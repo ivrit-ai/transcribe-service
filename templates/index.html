@@ -1057,7 +1057,6 @@
         justify-content: space-between;
         align-items: center;
         gap: 0.75rem;
-        overflow: visible;
       }
       .file-item-status {
         width: 12px;
@@ -1102,7 +1101,6 @@
         gap: 0.5rem;
         align-items: center;
         margin-left: 1rem;
-        overflow: visible;
       }
       .file-item-icon {
         cursor: pointer;
@@ -1115,7 +1113,6 @@
       .file-item-download-menu {
         position: relative;
         display: inline-block;
-        overflow: visible;
       }
       .file-item-download-menu .download-dropdown {
         display: none;
@@ -1131,9 +1128,8 @@
         min-width: 140px;
         z-index: 200;
         direction: rtl;
-        pointer-events: auto;
       }
-      .file-item-download-menu:hover .download-dropdown {
+      .file-item-download-menu.open .download-dropdown {
         display: block;
       }
       .file-item-download-btn {
@@ -1971,6 +1967,18 @@
         if (e.target === settingsModal) {
           settingsModal.style.display = "none"
           settingsModal.classList.remove("show")
+        }
+      })
+      
+      // Close download menus when clicking outside
+      document.addEventListener("click", (e) => {
+        // Check if click is outside any download menu
+        const downloadMenu = e.target.closest('.file-item-download-menu')
+        if (!downloadMenu) {
+          // Close all open download menus
+          document.querySelectorAll('.file-item-download-menu.open').forEach(menu => {
+            menu.classList.remove('open')
+          })
         }
       })
       ;["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
@@ -3026,6 +3034,26 @@
             <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'docx')"><span data-i18n="wordDocx">Word DOCX</span></button>
             <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'json')">JSON</button>
           `
+          
+          // Handle click on download button to toggle menu
+          downloadBtn.addEventListener('click', (e) => {
+            e.stopPropagation()
+            // Close all other download menus
+            document.querySelectorAll('.file-item-download-menu.open').forEach(menu => {
+              if (menu !== downloadMenu) {
+                menu.classList.remove('open')
+              }
+            })
+            // Toggle this menu
+            downloadMenu.classList.toggle('open')
+          })
+          
+          // Close menu when clicking on dropdown items (after download)
+          downloadDropdown.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('click', () => {
+              downloadMenu.classList.remove('open')
+            })
+          })
           
           downloadMenu.appendChild(downloadBtn)
           downloadMenu.appendChild(downloadDropdown)
