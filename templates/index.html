@@ -1267,6 +1267,12 @@
       </div>
 
       <div id="file-name"></div>
+      <div class="transcribe-options" style="margin-bottom: 1rem; text-align: right;">
+        <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-color);">
+          <input type="checkbox" id="save-audio-checkbox" checked style="width: 18px; height: 18px; accent-color: var(--primary-color); cursor: pointer;">
+          <span data-i18n="saveAudioInDrive">שמור אודיו ב-Google Drive</span>
+        </label>
+      </div>
       <div class="transcribe-controls">
         <button id="transcribe-btn" disabled data-i18n="transcribe">תמלל</button>
         <select id="language-select" title="שפת תמלול" aria-label="שפת תמלול"></select>
@@ -2156,6 +2162,12 @@
           const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
           formData.append('language', selectedLang)
         } catch {}
+        
+        // Include save_audio checkbox value
+        const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
+        if (saveAudioCheckbox) {
+          formData.append('save_audio', saveAudioCheckbox.checked ? 'true' : 'false')
+        }
 
         transcribeBtn.disabled = true
         progressContainer.style.display = "block"
@@ -2233,6 +2245,12 @@
           formData.append("file", file)
           formData.append('language', selectedLang)
           if (token) formData.append("runpod_token", token)
+          
+          // Include save_audio checkbox value
+          const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
+          if (saveAudioCheckbox) {
+            formData.append('save_audio', saveAudioCheckbox.checked ? 'true' : 'false')
+          }
 
           try {
             const resp = await fetch("/upload", { method: "POST", body: formData })

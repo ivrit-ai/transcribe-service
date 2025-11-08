@@ -510,7 +510,7 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
 
 
 
-async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he", refresh_token: Optional[str] = None):
+async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he", refresh_token: Optional[str] = None, save_audio: bool = False):
     # Try to add the job to the queue
     log_message(f"{user_email}: Queuing job {job_id}...")
 
@@ -548,6 +548,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
         job_desc.uses_custom_runpod = bool(runpod_token)
         job_desc.language = language
         job_desc.refresh_token = refresh_token
+        job_desc.save_audio = save_audio
 
         # Determine queue type based on job characteristics
         if job_desc.uses_custom_runpod:
@@ -1311,6 +1312,7 @@ async def upload_file(
     file: UploadFile = File(...),
     runpod_token: Optional[str] = Form(None),
     language: Optional[str] = Form(None),
+    save_audio: Optional[str] = Form(None),
 ):
     job_id = str(uuid.uuid4())
     user_email = get_user_email(request)
@@ -1437,6 +1439,11 @@ async def upload_file(
     session_id = get_session_id(request)
     refresh_token = sessions.get(session_id, {}).get("refresh_token")
     
+    # Parse save_audio parameter (require explicit parameter - no default)
+    if save_audio is None:
+        return JSONResponse({"error": "Missing save_audio parameter"}, status_code=400)
+    save_audio_bool = save_audio.lower() == 'true'
+    
     # Create transcoding job descriptor
     transcoding_job = box.Box()
     transcoding_job.id = job_id
@@ -1448,6 +1455,7 @@ async def upload_file(
     transcoding_job.refresh_token = refresh_token
     transcoding_job.input_path = temp_file_path
     transcoding_job.qtime = time.time()
+    transcoding_job.save_audio = save_audio_bool
     
     # Add to transcoding jobs
     transcoding_jobs[job_id] = transcoding_job
@@ -1525,7 +1533,8 @@ async def handle_transcoding(job_id: str):
             transcoding_job.duration,
             transcoding_job.runpod_token,
             transcoding_job.language,
-            transcoding_job.refresh_token
+            transcoding_job.refresh_token,
+            transcoding_job.save_audio
         )
         
         if not queued:
@@ -1722,6 +1731,35 @@ async def transcribe_job(job_desc):
             if not upload_success:
                 logger.error(f"Failed to upload results file for {job_id}, skipping TOC update")
                 return
+            
+            # Upload opus file if save_audio is True
+            if job_desc.save_audio:
+                try:
+                    opus_file_path = temp_files.get(job_id)
+                    if opus_file_path and os.path.exists(opus_file_path):
+                        # Read the opus file
+                        with open(opus_file_path, 'rb') as f:
+                            opus_data = f.read()
+                        
+                        # Upload as uuid4.opus
+                        opus_filename = f"{results_id}.opus"
+                        opus_mime_type = "audio/opus"
+                        opus_upload_success = await upload_to_google_appdata(
+                            job_desc.refresh_token,
+                            opus_filename,
+                            opus_data,
+                            opus_mime_type,
+                            job_desc.user_email
+                        )
+                        
+                        if opus_upload_success:
+                            log_message(f"{job_desc.user_email}: Uploaded opus file for {job_id} as {opus_filename}")
+                        else:
+                            logger.warning(f"Failed to upload opus file for {job_id}, but continuing")
+                    else:
+                        logger.warning(f"Opus file not found for {job_id} at {opus_file_path}, skipping audio upload")
+                except Exception as e:
+                    logger.error(f"Error uploading opus file for {job_id}: {e}")
                         
             # Create TOC entry for completed job
             toc_entry = {
