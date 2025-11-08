@@ -1071,6 +1071,10 @@
         background-color: #2196f3;
         animation: pulse 2s ease-in-out infinite;
       }
+      .status-transcoding--- {
+        background-color: #2196f3;
+        animation: pulse 2s ease-in-out infinite;
+      }
       .status-ready {
         background-color: #4caf50;
       }
@@ -2806,9 +2810,9 @@
             return
           }
 
-          // Sort entries: active jobs first (Queued, Being processed), then by time
+          // Sort entries: active jobs first (Transcoding..., Queued, Being processed), then by time
           entries.sort((a, b) => {
-            const statusOrder = { 'Queued': 0, 'Being processed': 1, 'Ready': 2 }
+            const statusOrder = { 'Transcoding...': 0, 'Queued': 1, 'Being processed': 2, 'Ready': 3 }
             const statusA = statusOrder[a.status] !== undefined ? statusOrder[a.status] : 3
             const statusB = statusOrder[b.status] !== undefined ? statusOrder[b.status] : 3
             
@@ -2861,7 +2865,7 @@
         }
         
         // Check if there are active jobs
-        const hasActiveJobs = entries.some(e => e.status === 'Queued' || e.status === 'Being processed')
+        const hasActiveJobs = entries.some(e => e.status === 'Queued' || e.status === 'Being processed' || e.status === 'Transcoding...')
         
         // Only poll if there are active jobs - stop polling when all done
         if (!hasActiveJobs) {
@@ -2884,11 +2888,13 @@
           'he': {
             'Queued': 'ממתין בתור',
             'Being processed': 'בתהליך תמלול',
+            'Transcoding...': 'בתהליך המרה',
             'Ready': 'מוכן'
           },
           'en': {
             'Queued': 'Queued',
             'Being processed': 'Being processed',
+            'Transcoding...': 'Transcoding...',
             'Ready': 'Ready'
           }
         }
@@ -2944,7 +2950,7 @@
         const statusDot = document.createElement('div')
         statusDot.className = 'file-item-status'
         const status = entry.status || 'Ready'
-        const statusClass = status.toLowerCase().replace(/\s+/g, '-')
+        const statusClass = status.toLowerCase().replace(/\s+/g, '-').replace(/\./g, '-')
         statusDot.classList.add(`status-${statusClass}`)
         statusDot.title = status
 

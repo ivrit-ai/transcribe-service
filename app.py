@@ -262,6 +262,7 @@ MAX_QUEUED_PRIVATE_JOBS = 5000
 SHORT_JOB_THRESHOLD = 20 * 60
 
 SPEEDUP_FACTOR = 15
+TRANSCODING_SPEEDUP = 100  # Transcoding speedup factor for ETA calculation
 SUBMISSION_DELAY = 15  # Additional delay in seconds added to ETA calculations
 MAX_AUDIO_DURATION_IN_HOURS = 20
 EXECUTION_TIMEOUT_MS = int(MAX_AUDIO_DURATION_IN_HOURS * 3600 * 1000 / SPEEDUP_FACTOR)
@@ -487,8 +488,8 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
         # Calculate remaining time based on elapsed time since transcription started
         if hasattr(running_job, 'transcribe_start_time') and running_job.transcribe_start_time:
             elapsed_time = time.time() - running_job.transcribe_start_time
-            elapsed_time_scaled = elapsed_time / SPEEDUP_FACTOR
-            remaining_duration = max(0, running_job.duration - elapsed_time_scaled)
+            # Remaining time = duration - (elapsed_time * SPEEDUP_FACTOR)
+            remaining_duration = max(0, running_job.duration - elapsed_time * SPEEDUP_FACTOR)
             time_ahead += remaining_duration
         else:
             # If no start time info yet, add full duration
@@ -658,6 +659,8 @@ async def get_toc(request: Request):
     # Check transcoding jobs for this user
     for job_id, transcoding_job in list(transcoding_jobs.items()):
         if transcoding_job.user_email == user_email:
+            # Calculate ETA for transcoding
+            transcoding_eta_seconds = transcoding_job.duration / TRANSCODING_SPEEDUP
             entry = {
                 "job_id": transcoding_job.id,
                 "source_filename": transcoding_job.filename,
@@ -666,6 +669,7 @@ async def get_toc(request: Request):
                 "submitted_at": datetime.fromtimestamp(transcoding_job.qtime).isoformat(),
                 "status": "Transcoding...",
                 "toc_version": toc_version,
+                "eta_seconds": int(transcoding_eta_seconds),
             }
             in_memory_entries.append(entry)
     
@@ -690,18 +694,18 @@ async def get_toc(request: Request):
                         jobs_ahead = queue_list[:job_position]
                         time_ahead = sum(job.duration for job in jobs_ahead)
                         
-                    # Add remaining time from running jobs
-                    for running_job_id, running_job in running_jobs_to_use.items():
-                        # Calculate remaining time based on elapsed time since transcription started
-                        if hasattr(running_job, 'transcribe_start_time') and running_job.transcribe_start_time:
-                            elapsed_time = time.time() - running_job.transcribe_start_time
-                            elapsed_time_scaled = elapsed_time / SPEEDUP_FACTOR
-                            remaining_duration = max(0, running_job.duration - elapsed_time_scaled)
-                            time_ahead += remaining_duration
-                        else:
-                            time_ahead += running_job.duration
+                        # Add remaining time from running jobs
+                        for running_job_id, running_job in running_jobs_to_use.items():
+                            # Calculate remaining time based on elapsed time since transcription started
+                            if hasattr(running_job, 'transcribe_start_time') and running_job.transcribe_start_time:
+                                elapsed_time = time.time() - running_job.transcribe_start_time
+                                # Remaining time = duration - (elapsed_time * SPEEDUP_FACTOR)
+                                remaining_duration = max(0, running_job.duration - elapsed_time * SPEEDUP_FACTOR)
+                                time_ahead += remaining_duration
+                            else:
+                                time_ahead += running_job.duration
                         
-                        # Apply speedup factor
+                        # Apply speedup factor to total time ahead
                         eta_seconds = time_ahead / SPEEDUP_FACTOR
                         # Add submission delay
                         eta_seconds += SUBMISSION_DELAY
@@ -728,8 +732,8 @@ async def get_toc(request: Request):
                         # Calculate remaining time for this job based on elapsed time
                         if hasattr(job_desc, 'transcribe_start_time') and job_desc.transcribe_start_time:
                             elapsed_time = time.time() - job_desc.transcribe_start_time
-                            elapsed_time_scaled = elapsed_time / SPEEDUP_FACTOR
-                            remaining_duration = max(0, job_desc.duration - elapsed_time_scaled)
+                            # Remaining time = duration - (elapsed_time * SPEEDUP_FACTOR)
+                            remaining_duration = max(0, job_desc.duration - elapsed_time * SPEEDUP_FACTOR)
                         else:
                             remaining_duration = job_desc.duration
                         
@@ -738,8 +742,9 @@ async def get_toc(request: Request):
                         other_running_jobs = {k: v for k, v in running_jobs_to_use.items() if k != job_id}
                         queue_time = await calculate_queue_time(queue_to_use, other_running_jobs, exclude_last=False)
                         
-                        # ETA = queue time + remaining time for this job + submission delay
-                        eta_seconds = queue_time + remaining_duration + SUBMISSION_DELAY
+                        # ETA = queue time + (remaining time for this job / SPEEDUP_FACTOR) + submission delay
+                        # Note: queue_time already has SPEEDUP_FACTOR applied, so we need to divide remaining_duration
+                        eta_seconds = queue_time + (remaining_duration / SPEEDUP_FACTOR) + SUBMISSION_DELAY
                     
                     entry = {
                         "job_id": job_desc.id,
