@@ -260,7 +260,7 @@ MAX_QUEUED_JOBS = 20
 MAX_QUEUED_PRIVATE_JOBS = 5000
 SHORT_JOB_THRESHOLD = 20 * 60
 
-SPEEDUP_FACTOR = 20
+SPEEDUP_FACTOR = 15
 MAX_AUDIO_DURATION_IN_HOURS = 20
 EXECUTION_TIMEOUT_MS = int(MAX_AUDIO_DURATION_IN_HOURS * 3600 * 1000 / SPEEDUP_FACTOR)
 
@@ -441,14 +441,14 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
 
     # Add remaining time of currently running jobs
     for running_job_id, running_job in running_jobs.items():
-        if running_job_id in job_results:
-            # Get progress of the running job
-            progress = job_results[running_job_id]["progress"]
-            # Add only the remaining duration
-            remaining_duration = running_job.duration * (1 - progress)
+        # Calculate remaining time based on elapsed time since transcription started
+        if hasattr(running_job, 'transcribe_start_time') and running_job.transcribe_start_time:
+            elapsed_time = time.time() - running_job.transcribe_start_time
+            elapsed_time_scaled = elapsed_time / SPEEDUP_FACTOR
+            remaining_duration = max(0, running_job.duration - elapsed_time_scaled)
             time_ahead += remaining_duration
         else:
-            # If no progress info yet, add full duration
+            # If no start time info yet, add full duration
             time_ahead += running_job.duration
 
     # Add duration of queued jobs
@@ -633,13 +633,16 @@ async def get_toc(request: Request):
                         jobs_ahead = queue_list[:job_position]
                         time_ahead = sum(job.duration for job in jobs_ahead)
                         
-                        # Add remaining time from running jobs
-                        for running_job_id, running_job in running_jobs_to_use.items():
-                            if running_job_id in job_results:
-                                progress = job_results[running_job_id]["progress"]
-                                time_ahead += running_job.duration * (1 - progress)
-                            else:
-                                time_ahead += running_job.duration
+                    # Add remaining time from running jobs
+                    for running_job_id, running_job in running_jobs_to_use.items():
+                        # Calculate remaining time based on elapsed time since transcription started
+                        if hasattr(running_job, 'transcribe_start_time') and running_job.transcribe_start_time:
+                            elapsed_time = time.time() - running_job.transcribe_start_time
+                            elapsed_time_scaled = elapsed_time / SPEEDUP_FACTOR
+                            remaining_duration = max(0, running_job.duration - elapsed_time_scaled)
+                            time_ahead += remaining_duration
+                        else:
+                            time_ahead += running_job.duration
                         
                         # Apply speedup factor
                         eta_seconds = time_ahead / SPEEDUP_FACTOR
@@ -663,28 +666,21 @@ async def get_toc(request: Request):
                     # Calculate ETA for running jobs (only for non-private queues)
                     eta_seconds = None
                     if queue_type != PRIVATE:
-                        # Calculate remaining time for this job
-                        if job_id in job_results:
-                            progress = job_results[job_id]["progress"]
-                            remaining_duration = job_desc.duration * (1 - progress)
+                        # Calculate remaining time for this job based on elapsed time
+                        if hasattr(job_desc, 'transcribe_start_time') and job_desc.transcribe_start_time:
+                            elapsed_time = time.time() - job_desc.transcribe_start_time
+                            elapsed_time_scaled = elapsed_time / SPEEDUP_FACTOR
+                            remaining_duration = max(0, job_desc.duration - elapsed_time_scaled)
                         else:
                             remaining_duration = job_desc.duration
-                        # Add time for queued jobs
-                        queue_list = list(queue_to_use.queue)
-                        queued_time = sum(job.duration for job in queue_list)
-                        # Add remaining time from other running jobs
-                        other_running_time = 0
-                        for other_job_id, other_job in running_jobs_to_use.items():
-                            if other_job_id != job_id:
-                                if other_job_id in job_results:
-                                    other_progress = job_results[other_job_id]["progress"]
-                                    other_running_time += other_job.duration * (1 - other_progress)
-                                else:
-                                    other_running_time += other_job.duration
-                        # Total time ahead
-                        time_ahead = remaining_duration + queued_time + other_running_time
-                        # Apply speedup factor
-                        eta_seconds = time_ahead / SPEEDUP_FACTOR
+                        
+                        # Calculate queue time for jobs ahead (queued jobs + other running jobs)
+                        # Create a dict of other running jobs (excluding this one)
+                        other_running_jobs = {k: v for k, v in running_jobs_to_use.items() if k != job_id}
+                        queue_time = await calculate_queue_time(queue_to_use, other_running_jobs, exclude_last=False)
+                        
+                        # ETA = queue time + remaining time for this job
+                        eta_seconds = queue_time + remaining_duration
                     
                     entry = {
                         "job_id": job_desc.id,
@@ -1370,7 +1366,7 @@ async def upload_file(
     # Use the background event loop to call the async function
     queued, res = await queue_job(job_id, user_email, filename, duration, runpod_token, requested_lang, refresh_token)
     if queued:
-        job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
+        job_results[job_id] = {"results": [], "completion_time": None}
     else:
         cleanup_temp_file(job_id)
 
@@ -1449,7 +1445,7 @@ async def transcribe_job(job_desc):
             log_message(f"{job_desc.user_email}: using custom RunPod credentials, skipping quota consumption")
 
         transcribe_start_time = time.time()
-        # Store the start time in the job description for progress calculation
+        # Store the start time in the job description for ETA calculation
         job_desc.transcribe_start_time = transcribe_start_time
         capture_event(
             job_id,
@@ -1515,11 +1511,13 @@ async def transcribe_job(job_desc):
             },
         )
 
-        job_results[job_id]["progress"] = 1.0
         job_results[job_id]["completion_time"] = datetime.now()
 
         # After completion, store results separately and update TOC
         try:
+            # Get TOC version from environment
+            toc_version = os.environ.get("TOC_VER", "1.0")
+
             completed_at_iso = job_results[job_id]["completion_time"].isoformat()
             results_id = str(uuid.uuid4())
             
@@ -1554,10 +1552,7 @@ async def transcribe_job(job_desc):
             if not upload_success:
                 logger.error(f"Failed to upload results file for {job_id}, skipping TOC update")
                 return
-            
-            # Get TOC version from environment
-            toc_version = os.environ.get("TOC_VER", "1.0")
-            
+                        
             # Create TOC entry for completed job
             toc_entry = {
                 "results_id": results_id,
