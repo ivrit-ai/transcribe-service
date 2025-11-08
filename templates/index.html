@@ -2602,9 +2602,23 @@
       // Display and controls only exist in Viewer tab
 
       function resetUploadState() {
-        transcribeBtn.disabled = false
+        transcribeBtn.disabled = true
         selectedFile = null
+        selectedFiles = []
+        batchMode = false
         fileName.textContent = ""
+        const filePreview = document.getElementById("file-preview")
+        if (filePreview) {
+          filePreview.classList.remove("show")
+        }
+        const fileInput = document.getElementById("file-input")
+        if (fileInput) {
+          fileInput.value = ""
+        }
+        const fileNameElement = document.getElementById("file-name")
+        if (fileNameElement) {
+          fileNameElement.style.display = "block"
+        }
         progressContainer.style.display = "none"
         progressBar.style.width = "0%"
       }

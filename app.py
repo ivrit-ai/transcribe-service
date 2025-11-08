@@ -261,6 +261,7 @@ MAX_QUEUED_PRIVATE_JOBS = 5000
 SHORT_JOB_THRESHOLD = 20 * 60
 
 SPEEDUP_FACTOR = 15
+SUBMISSION_DELAY = 15  # Additional delay in seconds added to ETA calculations
 MAX_AUDIO_DURATION_IN_HOURS = 20
 EXECUTION_TIMEOUT_MS = int(MAX_AUDIO_DURATION_IN_HOURS * 3600 * 1000 / SPEEDUP_FACTOR)
 
@@ -646,6 +647,8 @@ async def get_toc(request: Request):
                         
                         # Apply speedup factor
                         eta_seconds = time_ahead / SPEEDUP_FACTOR
+                        # Add submission delay
+                        eta_seconds += SUBMISSION_DELAY
                     
                     entry = {
                         "job_id": job_desc.id,
@@ -679,8 +682,8 @@ async def get_toc(request: Request):
                         other_running_jobs = {k: v for k, v in running_jobs_to_use.items() if k != job_id}
                         queue_time = await calculate_queue_time(queue_to_use, other_running_jobs, exclude_last=False)
                         
-                        # ETA = queue time + remaining time for this job
-                        eta_seconds = queue_time + remaining_duration
+                        # ETA = queue time + remaining time for this job + submission delay
+                        eta_seconds = queue_time + remaining_duration + SUBMISSION_DELAY
                     
                     entry = {
                         "job_id": job_desc.id,
