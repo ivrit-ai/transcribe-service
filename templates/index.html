@@ -2871,6 +2871,39 @@
         return langTexts[status] || status
       }
 
+      // Format ETA seconds into human-readable string
+      function formatETA(seconds) {
+        if (seconds === null || seconds === undefined || seconds < 0) {
+          return ''
+        }
+        
+        const hours = Math.floor(seconds / 3600)
+        const minutes = Math.floor((seconds % 3600) / 60)
+        const secs = Math.floor(seconds % 60)
+        
+        const lang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
+        
+        if (hours > 0) {
+          if (lang === 'he' || lang === 'yi') {
+            return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+          } else {
+            return `${hours}h ${minutes}m`
+          }
+        } else if (minutes > 0) {
+          if (lang === 'he' || lang === 'yi') {
+            return `${minutes}:${String(secs).padStart(2, '0')}`
+          } else {
+            return `${minutes}m ${secs}s`
+          }
+        } else {
+          if (lang === 'he' || lang === 'yi') {
+            return `${secs} שניות`
+          } else {
+            return `${secs}s`
+          }
+        }
+      }
+
       // Store current viewer data
       let currentViewerData = null
       let currentViewerLanguage = 'he'
@@ -2929,10 +2962,22 @@
           })
         }
         
-        // Add status text in parentheses for non-ready items
+        // Add status text and ETA for non-ready items
         if (status !== 'Ready') {
           const statusText = getStatusText(status)
-          meta.textContent = `${dateStr} (${statusText})`
+          let metaText = `${dateStr} (${statusText})`
+          
+          // Add ETA if available
+          if (entry.eta_seconds !== undefined && entry.eta_seconds !== null) {
+            const etaFormatted = formatETA(entry.eta_seconds)
+            if (etaFormatted) {
+              const lang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
+              const etaLabel = lang === 'he' || lang === 'yi' ? 'ETA: ' : 'ETA: '
+              metaText += ` • ${etaLabel}${etaFormatted}`
+            }
+          }
+          
+          meta.textContent = metaText
         } else {
           meta.textContent = dateStr
         }

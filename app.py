@@ -421,11 +421,11 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
         exclude_last: Whether to exclude the last job in queue from calculation
 
     Returns:
-        time_ahead_str: Formatted string of estimated time (HH:MM:SS)
+        time_ahead_seconds: Estimated time in seconds (float)
     """
     # Skip queue time calculations for private queue
     if queue_to_use == queues[PRIVATE]:
-        return "00:00:00"
+        return 0.0
     
     # Determine which lock to use based on the queue
     queue_type = None
@@ -435,7 +435,7 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
             break
     
     if queue_type is None:
-        return "00:00:00"
+        return 0.0
     time_ahead = 0
     
 
@@ -461,8 +461,8 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     # Apply speedup factor
     time_ahead /= SPEEDUP_FACTOR
 
-    # Convert time_ahead to HH:MM:SS format
-    return str(timedelta(seconds=int(time_ahead)))
+    # Return time in seconds
+    return time_ahead
 
 
 
@@ -528,7 +528,8 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
             queue_to_use.put_nowait(job_desc)
 
             # Calculate time ahead only for the relevant queue
-            time_ahead_str = await calculate_queue_time(queue_to_use, running_jobs_to_update, exclude_last=True)
+            time_ahead_seconds = await calculate_queue_time(queue_to_use, running_jobs_to_update, exclude_last=True)
+            time_ahead_str = str(timedelta(seconds=int(time_ahead_seconds)))
 
             # Add job to user's active jobs
             user_jobs[user_email] = job_id
@@ -613,31 +614,90 @@ async def get_toc(request: Request):
     
     # Check all queues for jobs from this user
     for queue_type in [SHORT, LONG, PRIVATE]:
-        # Check queued jobs
-        for job_desc in list(queues[queue_type].queue):
-            if job_desc.user_email == user_email:
-                in_memory_entries.append({
-                    "job_id": job_desc.id,
-                    "source_filename": job_desc.filename,
-                    "language": job_desc.language,
-                    "duration_seconds": job_desc.duration,
-                    "submitted_at": datetime.fromtimestamp(job_desc.qtime).isoformat(),
-                    "status": "Queued",
-                    "toc_version": toc_version,
-                })
+        queue_to_use = queues[queue_type]
+        running_jobs_to_use = running_jobs[queue_type]
         
-        # Check running jobs
-        for job_id, job_desc in running_jobs[queue_type].items():
-            if job_desc.user_email == user_email:
-                in_memory_entries.append({
-                    "job_id": job_desc.id,
-                    "source_filename": job_desc.filename,
-                    "language": job_desc.language,
-                    "duration_seconds": job_desc.duration,
-                    "submitted_at": datetime.fromtimestamp(job_desc.qtime).isoformat(),
-                    "status": "Being processed",
-                    "toc_version": toc_version,
-                })
+        # Use lock for thread-safe queue access
+        async with queue_locks[queue_type]:
+            # Check queued jobs
+            for job_desc in list(queues[queue_type].queue):
+                if job_desc.user_email == user_email:
+                    # Calculate ETA for queued jobs (only for non-private queues)
+                    eta_seconds = None
+                    if queue_type != PRIVATE:
+                        # Find position of this job in queue
+                        queue_list = list(queue_to_use.queue)
+                        job_position = queue_list.index(job_desc)
+                        
+                        # Calculate time for jobs ahead of this one
+                        jobs_ahead = queue_list[:job_position]
+                        time_ahead = sum(job.duration for job in jobs_ahead)
+                        
+                        # Add remaining time from running jobs
+                        for running_job_id, running_job in running_jobs_to_use.items():
+                            if running_job_id in job_results:
+                                progress = job_results[running_job_id]["progress"]
+                                time_ahead += running_job.duration * (1 - progress)
+                            else:
+                                time_ahead += running_job.duration
+                        
+                        # Apply speedup factor
+                        eta_seconds = time_ahead / SPEEDUP_FACTOR
+                    
+                    entry = {
+                        "job_id": job_desc.id,
+                        "source_filename": job_desc.filename,
+                        "language": job_desc.language,
+                        "duration_seconds": job_desc.duration,
+                        "submitted_at": datetime.fromtimestamp(job_desc.qtime).isoformat(),
+                        "status": "Queued",
+                        "toc_version": toc_version,
+                    }
+                    if eta_seconds is not None:
+                        entry["eta_seconds"] = int(eta_seconds)
+                    in_memory_entries.append(entry)
+            
+            # Check running jobs
+            for job_id, job_desc in running_jobs[queue_type].items():
+                if job_desc.user_email == user_email:
+                    # Calculate ETA for running jobs (only for non-private queues)
+                    eta_seconds = None
+                    if queue_type != PRIVATE:
+                        # Calculate remaining time for this job
+                        if job_id in job_results:
+                            progress = job_results[job_id]["progress"]
+                            remaining_duration = job_desc.duration * (1 - progress)
+                        else:
+                            remaining_duration = job_desc.duration
+                        # Add time for queued jobs
+                        queue_list = list(queue_to_use.queue)
+                        queued_time = sum(job.duration for job in queue_list)
+                        # Add remaining time from other running jobs
+                        other_running_time = 0
+                        for other_job_id, other_job in running_jobs_to_use.items():
+                            if other_job_id != job_id:
+                                if other_job_id in job_results:
+                                    other_progress = job_results[other_job_id]["progress"]
+                                    other_running_time += other_job.duration * (1 - other_progress)
+                                else:
+                                    other_running_time += other_job.duration
+                        # Total time ahead
+                        time_ahead = remaining_duration + queued_time + other_running_time
+                        # Apply speedup factor
+                        eta_seconds = time_ahead / SPEEDUP_FACTOR
+                    
+                    entry = {
+                        "job_id": job_desc.id,
+                        "source_filename": job_desc.filename,
+                        "language": job_desc.language,
+                        "duration_seconds": job_desc.duration,
+                        "submitted_at": datetime.fromtimestamp(job_desc.qtime).isoformat(),
+                        "status": "Being processed",
+                        "toc_version": toc_version,
+                    }
+                    if eta_seconds is not None:
+                        entry["eta_seconds"] = int(eta_seconds)
+                    in_memory_entries.append(entry)
     
     # Prepend in-memory entries (they should appear first)
     if "entries" not in toc_data:
