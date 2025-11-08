@@ -1974,17 +1974,6 @@
         }
       })
       
-      // Close download menus when clicking outside
-      document.addEventListener("click", (e) => {
-        // Check if click is outside any download menu
-        const downloadMenu = e.target.closest('.file-item-download-menu')
-        if (!downloadMenu) {
-          // Close all open download menus
-          document.querySelectorAll('.file-item-download-menu.open').forEach(menu => {
-            menu.classList.remove('open')
-          })
-        }
-      })
       ;["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
         dropArea.addEventListener(eventName, preventDefaults, false)
       })
@@ -3020,52 +3009,6 @@
         const actions = document.createElement('div')
         actions.className = 'file-item-actions'
 
-        // Only show download menu for ready items
-        if (isReady) {
-          const downloadMenu = document.createElement('div')
-          downloadMenu.className = 'file-item-download-menu'
-          
-          const downloadBtn = document.createElement('button')
-          downloadBtn.className = 'file-item-download-btn'
-          downloadBtn.innerHTML = '<i data-lucide="download"></i>'
-          downloadBtn.title = (window.I18N ? window.I18N.t('downloads') : 'הורדות')
-          
-          const downloadDropdown = document.createElement('div')
-          downloadDropdown.className = 'download-dropdown'
-          
-          downloadDropdown.innerHTML = `
-            <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
-            <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'vtt')">VTT</button>
-            <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'srt')">SRT</button>
-            <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'docx')"><span data-i18n="wordDocx">Word DOCX</span></button>
-            <button type="button" onclick="event.stopPropagation(); downloadFileFromTOC('${entry.results_id}', '${entry.source_filename}', '${entry.language}', 'json')">JSON</button>
-          `
-          
-          // Handle click on download button to toggle menu
-          downloadBtn.addEventListener('click', (e) => {
-            e.stopPropagation()
-            // Close all other download menus
-            document.querySelectorAll('.file-item-download-menu.open').forEach(menu => {
-              if (menu !== downloadMenu) {
-                menu.classList.remove('open')
-              }
-            })
-            // Toggle this menu
-            downloadMenu.classList.toggle('open')
-          })
-          
-          // Close menu when clicking on dropdown items (after download)
-          downloadDropdown.querySelectorAll('button').forEach(btn => {
-            btn.addEventListener('click', () => {
-              downloadMenu.classList.remove('open')
-            })
-          })
-          
-          downloadMenu.appendChild(downloadBtn)
-          downloadMenu.appendChild(downloadDropdown)
-          actions.appendChild(downloadMenu)
-        }
-
         div.appendChild(statusDot)
         div.appendChild(info)
         div.appendChild(actions)
@@ -3143,33 +3086,6 @@
         } catch (error) {
           console.error('Error viewing file:', error)
           showToast((window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
-        }
-      }
-
-      // Download file from TOC in specific format
-      async function downloadFileFromTOC(resultsId, fileName, language, format) {
-        try {
-          const response = await fetch(`/appdata/results/${resultsId}`)
-          
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
-            showToast(errorData.error || (window.I18N ? window.I18N.t('filesDownloadError') : 'שגיאה בהורדת הקובץ'), 'error')
-            return
-          }
-          
-          // Decompress gzipped data
-          const arrayBuffer = await response.arrayBuffer()
-          const decompressed = await decompressGzip(arrayBuffer)
-          const data = JSON.parse(decompressed)
-
-          // Results file now contains full payload with metadata + results
-          const segments = data.results || []
-          const lang = data.language || language || 'he'
-          downloadInFormat(segments, fileName, format, lang)
-
-        } catch (error) {
-          console.error('Error downloading file:', error)
-          showToast((window.I18N ? window.I18N.t('filesDownloadError') : 'שגיאה בהורדת הקובץ'), 'error')
         }
       }
 
