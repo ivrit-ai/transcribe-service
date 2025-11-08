@@ -799,6 +799,37 @@ async def get_transcription_results(results_id: str, request: Request):
     )
 
 
+@app.get("/appdata/audio/{results_id}")
+async def get_audio_file(results_id: str, request: Request):
+    """Download opus audio file by results_id UUID."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    # Find the opus file
+    filename = f"{results_id}.opus"
+    file_id = await find_google_appdata_file_by_name(refresh_token, filename)
+    
+    if not file_id:
+        return JSONResponse({"error": "Audio file not found"}, status_code=404)
+    
+    # Download opus file as bytes
+    file_content = await download_google_appdata_file_bytes(refresh_token, file_id)
+    
+    if file_content is None:
+        return JSONResponse({"error": "Failed to download audio"}, status_code=500)
+    
+    # Return opus audio file
+    from fastapi.responses import Response
+    return Response(
+        content=file_content,
+        media_type="audio/opus",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )
+
+
 @app.get("/login")
 async def login(request: Request):
     return templates.TemplateResponse("login.html", {"request": request, "google_analytics_tag": os.environ["GOOGLE_ANALYTICS_TAG"]})
