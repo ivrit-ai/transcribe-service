@@ -28,6 +28,7 @@ import random
 import tempfile
 import asyncio
 import queue
+import subprocess
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
@@ -268,6 +269,9 @@ EXECUTION_TIMEOUT_MS = int(MAX_AUDIO_DURATION_IN_HOURS * 3600 * 1000 / SPEEDUP_F
 # Dictionary to store temporary file paths
 temp_files = {}
 
+# Dictionary to track transcoding jobs (job_id -> job_desc)
+transcoding_jobs = {}
+
 # Programmatic queue management
 queues = {
     SHORT: queue.Queue(maxsize=MAX_QUEUED_JOBS),
@@ -403,6 +407,44 @@ def get_media_duration(file_path):
     except ffmpeg.Error as e:
         print(f"Error: {e.stderr}")
         return None
+
+
+def transcode_to_opus(input_path: str, output_path: str) -> bool:
+    """
+    Transcode audio file to Opus format with specific parameters:
+    - 2 channels
+    - 48kHz sampling rate
+    - CBR (Constant Bitrate)
+    - 64k bitrate
+    - application = audio
+    - Single thread
+    """
+    try:
+        # Run ffmpeg command matching the exact specification
+        result = subprocess.run(
+            [
+                'ffmpeg',
+                '-i', input_path,
+                '-ac', '2',
+                '-ar', '48000',
+                '-c:a', 'libopus',
+                '-b:a', '64k',
+                '-vbr', 'off',
+                '-application', 'audio',
+                '-threads', '1',
+                output_path
+            ],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        log_message(f"Transcoding error: {e.stderr}")
+        return False
+    except Exception as e:
+        log_message(f"Unexpected transcoding error: {str(e)}")
+        return False
 
 
 def get_user_quota(user_email):
@@ -612,6 +654,20 @@ async def get_toc(request: Request):
     
     # Augment with in-memory jobs for this user
     in_memory_entries = []
+    
+    # Check transcoding jobs for this user
+    for job_id, transcoding_job in list(transcoding_jobs.items()):
+        if transcoding_job.user_email == user_email:
+            entry = {
+                "job_id": transcoding_job.id,
+                "source_filename": transcoding_job.filename,
+                "language": transcoding_job.language,
+                "duration_seconds": transcoding_job.duration,
+                "submitted_at": datetime.fromtimestamp(transcoding_job.qtime).isoformat(),
+                "status": "Transcoding...",
+                "toc_version": toc_version,
+            }
+            in_memory_entries.append(entry)
     
     # Check all queues for jobs from this user
     for queue_type in [SHORT, LONG, PRIVATE]:
@@ -1258,6 +1314,15 @@ async def upload_file(
         capture_event(job_id, "file-upload-hiatus-rejected", {"user": user_email})
         return JSONResponse({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}, status_code=503)
 
+    # Check if user already has a job transcoding, queued, or running
+    if user_email in user_jobs:
+        return JSONResponse({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+    
+    # Check if user has a transcoding job in progress
+    for existing_job_id, existing_job in transcoding_jobs.items():
+        if existing_job.user_email == user_email:
+            return JSONResponse({"error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+
     capture_event(job_id, "file-upload", {"user": user_email})
 
     if not file:
@@ -1363,19 +1428,116 @@ async def upload_file(
                 message = "ה-endpoint שלך עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
             return JSONResponse({"error": message}, status_code=400)
 
-    # Retrieve Google refresh token from session and enqueue job with it
+    # Retrieve Google refresh token from session
     session_id = get_session_id(request)
     refresh_token = sessions.get(session_id, {}).get("refresh_token")
-    # Use the background event loop to call the async function
-    queued, res = await queue_job(job_id, user_email, filename, duration, runpod_token, requested_lang, refresh_token)
-    if queued:
-        job_results[job_id] = {"results": [], "completion_time": None}
-    else:
+    
+    # Create transcoding job descriptor
+    transcoding_job = box.Box()
+    transcoding_job.id = job_id
+    transcoding_job.filename = filename
+    transcoding_job.user_email = user_email
+    transcoding_job.duration = duration
+    transcoding_job.runpod_token = runpod_token
+    transcoding_job.language = requested_lang
+    transcoding_job.refresh_token = refresh_token
+    transcoding_job.input_path = temp_file_path
+    transcoding_job.qtime = time.time()
+    
+    # Add to transcoding jobs
+    transcoding_jobs[job_id] = transcoding_job
+    
+    # Start transcoding task in background
+    asyncio.create_task(handle_transcoding(job_id))
+    
+    # Initialize job results
+    job_results[job_id] = {"results": [], "completion_time": None}
+    
+    # Return success response
+    return JSONResponse({"job_id": job_id, "status": "transcoding"})
+
+
+
+
+async def handle_transcoding(job_id: str):
+    """
+    Handle transcoding of an uploaded file to Opus format.
+    After transcoding completes, queues the job for transcription.
+    """
+    if job_id not in transcoding_jobs:
+        log_message(f"Transcoding job {job_id} not found")
+        return
+    
+    transcoding_job = transcoding_jobs[job_id]
+    input_path = transcoding_job.input_path
+    
+    # Create output path for transcoded file
+    output_path = input_path + ".opus"
+    
+    try:
+        # Run transcoding in thread pool (blocking operation)
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(None, transcode_to_opus, input_path, output_path)
+        
+        if not success:
+            log_message(f"Transcoding failed for job {job_id}")
+            # Clean up
+            if job_id in transcoding_jobs:
+                del transcoding_jobs[job_id]
+            cleanup_temp_file(job_id)
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            return
+        
+        # Replace original file with transcoded file
+        try:
+            # Remove original file
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+            # Rename transcoded file to original path
+            os.rename(output_path, input_path)
+            # Update temp_files to point to the transcoded file
+            temp_files[job_id] = input_path
+        except Exception as e:
+            log_message(f"Error replacing file after transcoding for job {job_id}: {str(e)}")
+            # Clean up
+            if job_id in transcoding_jobs:
+                del transcoding_jobs[job_id]
+            cleanup_temp_file(job_id)
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            return
+        
+        # Remove from transcoding jobs
+        if job_id in transcoding_jobs:
+            del transcoding_jobs[job_id]
+        
+        # Queue the job for transcription
+        queued, res = await queue_job(
+            job_id,
+            transcoding_job.user_email,
+            transcoding_job.filename,
+            transcoding_job.duration,
+            transcoding_job.runpod_token,
+            transcoding_job.language,
+            transcoding_job.refresh_token
+        )
+        
+        if not queued:
+            log_message(f"Failed to queue job {job_id} after transcoding")
+            cleanup_temp_file(job_id)
+        
+    except Exception as e:
+        log_message(f"Error in transcoding task for job {job_id}: {str(e)}")
+        # Clean up
+        if job_id in transcoding_jobs:
+            del transcoding_jobs[job_id]
         cleanup_temp_file(job_id)
-
-    return res
-
-
+        if os.path.exists(output_path):
+            try:
+                os.unlink(output_path)
+            except:
+                pass
 
 
 def cleanup_temp_file(job_id):
