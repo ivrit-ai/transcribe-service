@@ -161,11 +161,10 @@ def set_user_email(request: Request, email: str) -> str:
 from gdrive_utils import (
     refresh_google_access_token,
     get_access_token_from_refresh,
-    upload_to_google_appdata,
-    update_google_appdata_file,
-    download_google_appdata_file_bytes,
-    list_google_appdata_files,
-    find_google_appdata_file_by_name,
+    upload_to_drive_folder,
+    update_drive_file,
+    download_drive_file_bytes,
+    find_drive_file_by_name,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REDIRECT_URI,
@@ -185,13 +184,13 @@ async def download_toc(refresh_token: Optional[str]) -> dict:
             return copy.deepcopy(cached_toc)
     
     # Not in cache, download from Google Drive
-    file_id = await find_google_appdata_file_by_name(refresh_token, "toc.json.gz")
+    file_id = await find_drive_file_by_name(refresh_token, "toc.json.gz")
     
     if not file_id:
         toc_data = {"entries": []}
     else:
         # Download raw bytes and decompress
-        file_bytes = await download_google_appdata_file_bytes(refresh_token, file_id)
+        file_bytes = await download_drive_file_bytes(refresh_token, file_id)
         if not file_bytes:
             toc_data = {"entries": []}
         else:
@@ -207,7 +206,7 @@ async def download_toc(refresh_token: Optional[str]) -> dict:
 async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: Optional[str] = None) -> bool:
     """Upload TOC file (gzipped), updating existing one atomically or creating new one."""
     # Find existing toc.json.gz
-    existing_id = await find_google_appdata_file_by_name(refresh_token, "toc.json.gz")
+    existing_id = await find_drive_file_by_name(refresh_token, "toc.json.gz")
     
     # Prepare data: compress JSON
     json_data = json.dumps(toc_data).encode('utf-8')
@@ -217,10 +216,10 @@ async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: O
     success = False
     if existing_id:
         # Update existing file atomically
-        success = await update_google_appdata_file(refresh_token, existing_id, file_data, mime_type, user_email)
+        success = await update_drive_file(refresh_token, existing_id, file_data, mime_type, user_email)
     else:
         # Create new file (gzipped)
-        success = await upload_to_google_appdata(refresh_token, "toc.json.gz", file_data, mime_type, user_email)
+        success = await upload_to_drive_folder(refresh_token, "toc.json.gz", file_data, mime_type, user_email)
     
     # Invalidate cache for this refresh_token if upload was successful
     if success:
@@ -779,13 +778,13 @@ async def get_transcription_results(results_id: str, request: Request):
     
     # Find the results file (gzipped)
     filename = f"{results_id}.json.gz"
-    file_id = await find_google_appdata_file_by_name(refresh_token, filename)
+    file_id = await find_drive_file_by_name(refresh_token, filename)
     
     if not file_id:
         return JSONResponse({"error": "Results file not found"}, status_code=404)
     
     # Download gzipped file as bytes
-    file_content = await download_google_appdata_file_bytes(refresh_token, file_id)
+    file_content = await download_drive_file_bytes(refresh_token, file_id)
     
     if file_content is None:
         return JSONResponse({"error": "Failed to download results"}, status_code=500)
@@ -810,13 +809,13 @@ async def get_audio_file(results_id: str, request: Request):
     
     # Find the opus file
     filename = f"{results_id}.opus"
-    file_id = await find_google_appdata_file_by_name(refresh_token, filename)
+    file_id = await find_drive_file_by_name(refresh_token, filename)
     
     if not file_id:
         return JSONResponse({"error": "Audio file not found"}, status_code=404)
     
     # Download opus file as bytes
-    file_content = await download_google_appdata_file_bytes(refresh_token, file_id)
+    file_content = await download_drive_file_bytes(refresh_token, file_id)
     
     if file_content is None:
         return JSONResponse({"error": "Failed to download audio"}, status_code=500)
@@ -851,7 +850,7 @@ async def authorize(request: Request):
         "response_type": "code",
         "redirect_uri": GOOGLE_REDIRECT_URI,
         # Request identity scopes + Drive AppData for storing results
-        "scope": "openid email profile https://www.googleapis.com/auth/drive.appdata",
+        "scope": "openid email profile https://www.googleapis.com/auth/drive.file",
         "access_type": "offline",
         "prompt": "consent",
         "state": state
@@ -1751,7 +1750,7 @@ async def transcribe_job(job_desc):
             json_data = json.dumps(full_payload).encode('utf-8')
             file_data = gzip.compress(json_data)
             mime_type = "application/gzip"
-            upload_success = await upload_to_google_appdata(
+            upload_success = await upload_to_drive_folder(
                 job_desc.refresh_token,
                 results_filename,
                 file_data,
@@ -1775,7 +1774,7 @@ async def transcribe_job(job_desc):
                         # Upload as uuid4.opus
                         opus_filename = f"{results_id}.opus"
                         opus_mime_type = "audio/opus"
-                        opus_upload_success = await upload_to_google_appdata(
+                        opus_upload_success = await upload_to_drive_folder(
                             job_desc.refresh_token,
                             opus_filename,
                             opus_data,
