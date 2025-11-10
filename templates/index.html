@@ -1292,8 +1292,51 @@
       .info-link-btn:hover {
         opacity: 0.8;
       }
-      .info-text {
+      .info-tooltip {
+        position: fixed;
+        z-index: 2500;
+        background-color: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+        max-width: 400px;
+        min-width: 300px;
+        direction: rtl;
+        text-align: right;
+      }
+      .tooltip-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--border-color);
+        font-weight: 600;
+        font-size: 1rem;
         color: var(--text-color);
+      }
+      .tooltip-close {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 0;
+        color: var(--text-color);
+        line-height: 1;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: color 0.2s;
+      }
+      .tooltip-close:hover {
+        color: var(--primary-color);
+      }
+      .tooltip-content {
+        padding: 1rem 1.25rem;
+        color: var(--text-color);
+        font-size: 0.9rem;
+        line-height: 1.6;
         white-space: pre-line;
       }
       .files-loading {
@@ -1349,6 +1392,15 @@
     <div class="spinner-overlay" id="spinner-overlay">
       <div class="spinner"></div>
       <div class="spinner-message" id="spinner-message"></div>
+    </div>
+    <div class="info-tooltip" id="save-audio-tooltip" style="display: none;">
+      <div class="tooltip-header">
+        <span data-i18n="whatDoesThisMean">מה זה אומר?</span>
+        <button type="button" class="tooltip-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="tooltip-content">
+        <span data-i18n="saveAudioInfoText"></span>
+      </div>
     </div>
 
     <div class="container">
@@ -1414,11 +1466,8 @@
           <input type="checkbox" id="save-audio-checkbox" checked style="width: 18px; height: 18px; accent-color: var(--primary-color); cursor: pointer;">
           <span data-i18n="saveAudioInDrive">שמור אודיו ל-Google Drive</span>
         </label>
-        <div style="margin-top: 0.5rem; margin-right: 1.75rem;">
+        <div style="margin-top: 0.5rem; margin-right: 1.75rem; position: relative;">
           <button type="button" id="save-audio-info-btn" class="info-link-btn" data-i18n="whatDoesThisMean">מה זה אומר?</button>
-          <div id="save-audio-info" class="info-text" style="display: none; margin-top: 0.5rem; padding: 0.75rem; background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.9rem; line-height: 1.5;">
-            <span data-i18n="saveAudioInfoText"></span>
-          </div>
         </div>
       </div>
       <div class="transcribe-controls">
@@ -1612,16 +1661,90 @@
         updateTranscriptionDirectionUI()
         // Initialize tab switching
         initTabs()
-        // Initialize save audio info toggle
+        // Initialize save audio info tooltip
+        initSaveAudioTooltip()
+      })
+
+      // Initialize save audio tooltip
+      function initSaveAudioTooltip() {
         const saveAudioInfoBtn = document.getElementById('save-audio-info-btn')
-        const saveAudioInfo = document.getElementById('save-audio-info')
-        if (saveAudioInfoBtn && saveAudioInfo) {
-          saveAudioInfoBtn.addEventListener('click', () => {
-            const isVisible = saveAudioInfo.style.display !== 'none'
-            saveAudioInfo.style.display = isVisible ? 'none' : 'block'
+        const tooltip = document.getElementById('save-audio-tooltip')
+        const tooltipClose = tooltip?.querySelector('.tooltip-close')
+        
+        if (!saveAudioInfoBtn || !tooltip) return
+        
+        // Show tooltip when clicking the button
+        saveAudioInfoBtn.addEventListener('click', (e) => {
+          e.stopPropagation()
+          const isVisible = tooltip.style.display !== 'none'
+          
+          if (isVisible) {
+            hideTooltip()
+          } else {
+            showTooltip(saveAudioInfoBtn, tooltip)
+          }
+        })
+        
+        // Close tooltip when clicking close button
+        if (tooltipClose) {
+          tooltipClose.addEventListener('click', () => {
+            hideTooltip()
           })
         }
-      })
+        
+        // Close tooltip when clicking outside
+        document.addEventListener('click', (e) => {
+          if (tooltip.style.display !== 'none' && 
+              !tooltip.contains(e.target) && 
+              !saveAudioInfoBtn.contains(e.target)) {
+            hideTooltip()
+          }
+        })
+      }
+      
+      // Show tooltip positioned near the button
+      function showTooltip(button, tooltip) {
+        // First make it visible (but off-screen) to measure it
+        tooltip.style.display = 'block'
+        tooltip.style.visibility = 'hidden'
+        tooltip.style.top = '0'
+        tooltip.style.left = '0'
+        
+        const rect = button.getBoundingClientRect()
+        const tooltipRect = tooltip.getBoundingClientRect()
+        const viewportWidth = window.innerWidth
+        const viewportHeight = window.innerHeight
+        
+        // Position tooltip below the button, centered horizontally
+        let top = rect.bottom + 10
+        let left = rect.left + (rect.width / 2) - (tooltipRect.width / 2)
+        
+        // Adjust if tooltip goes off screen
+        if (left < 10) {
+          left = 10
+        } else if (left + tooltipRect.width > viewportWidth - 10) {
+          left = viewportWidth - tooltipRect.width - 10
+        }
+        
+        // If tooltip would go below viewport, show it above instead
+        if (top + tooltipRect.height > viewportHeight - 10) {
+          top = rect.top - tooltipRect.height - 10
+        }
+        
+        // Now position it correctly and make it visible
+        tooltip.style.top = `${top}px`
+        tooltip.style.left = `${left}px`
+        tooltip.style.visibility = 'visible'
+      }
+      
+      // Hide tooltip
+      function hideTooltip() {
+        const tooltip = document.getElementById('save-audio-tooltip')
+        if (tooltip) {
+          tooltip.style.display = 'none'
+          tooltip.style.visibility = ''
+        }
+      }
       const dropArea = document.getElementById("drop-area")
       const fileInput = document.getElementById("file-input")
       const fileName = document.getElementById("file-name")
