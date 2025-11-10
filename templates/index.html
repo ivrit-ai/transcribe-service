@@ -952,7 +952,7 @@
         white-space: normal;
       }
 
-ב      .spinner-overlay {
+      .spinner-overlay {
         display: none;
         position: fixed;
         top: 0;
@@ -3308,7 +3308,10 @@
         const messageEl = document.getElementById('spinner-message')
         if (overlay && messageEl) {
           messageEl.textContent = message || (window.I18N ? window.I18N.t('deleting') : 'מוחק...')
+          overlay.style.display = 'flex'
           overlay.classList.add('show')
+          // Force a reflow to ensure the spinner is visible
+          void overlay.offsetHeight
         }
       }
 
@@ -3317,6 +3320,7 @@
         const overlay = document.getElementById('spinner-overlay')
         if (overlay) {
           overlay.classList.remove('show')
+          overlay.style.display = 'none'
         }
       }
 
@@ -3324,6 +3328,9 @@
       async function deleteFile(resultsId, filename) {
         // Show spinner to block access
         showSpinner()
+        
+        // Force a reflow to ensure spinner is visible
+        void document.getElementById('spinner-overlay')?.offsetHeight
         
         try {
           const response = await fetch('/appdata/delete', {
@@ -3382,6 +3389,9 @@
         // Show spinner to block access while loading
         showSpinner(window.I18N ? window.I18N.t('loadingFile') : 'טוען קובץ...')
         
+        // Force a reflow to ensure spinner is visible
+        void document.getElementById('spinner-overlay')?.offsetHeight
+        
         try {
           // Fetch results (gzipped)
           const response = await fetch(`/appdata/results/${entry.results_id}`)
@@ -3389,6 +3399,7 @@
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
             showToast(errorData.error || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
+            hideSpinner()
             return
           }
           
