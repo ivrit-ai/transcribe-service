@@ -313,3 +313,31 @@ async def find_drive_file_by_name(refresh_token: Optional[str], filename: str) -
         logger.error(f"Exception finding Drive file by name {filename}: {e}")
         return None
 
+
+async def delete_drive_file(refresh_token: Optional[str], file_id: str, user_email: Optional[str] = None) -> bool:
+    """Delete a file from Google Drive by its file ID."""
+    access_token = await get_access_token_from_refresh(refresh_token)
+    if not access_token:
+        logger.warning(f"No Google access token available for deleting Drive file for {user_email or 'unknown user'}")
+        return False
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}",
+                headers=headers,
+            ) as resp:
+                if resp.status == 204:
+                    logger.info(f"Deleted Drive file {file_id} for {user_email or 'unknown user'}")
+                    return True
+                err = await resp.text()
+                logger.warning(f"Failed to delete Drive file {file_id} for {user_email}: {resp.status} {err}")
+                return False
+    except Exception as e:
+        logger.error(f"Exception deleting Drive file {file_id} for {user_email}: {e}")
+        return False
+

@@ -109,6 +109,10 @@
     saving: "שומר...",
     transcriptionQueued: "הקובץ נשלח לתמלול בהצלחה. התוצאות יופיעו ב\"הקבצים שלי\" כשיסתיימו.",
     batchFailed: "כל הקבצים נכשלו",
+    deleteFile: "מחק קובץ",
+    deleteConfirm: 'האם אתה בטוח שברצונך למחוק את "{filename}"?\n\nפעולה זו אינה הפיכה.',
+    fileDeletedSuccess: "הקובץ נמחק בהצלחה",
+    deleteError: "שגיאה במחיקת הקובץ",
   }
 
   const yi = {
@@ -221,6 +225,10 @@
     saving: "היט אַוועק...",
     transcriptionQueued: "די טעקע איז געשיקט געוואָרן צו טראַנסקריבירן. רעזולטאַטן וועלן זיך באַווײַזן אין 'מײַנע טעקעס' ווען פֿאַרענדיקט.",
     batchFailed: "אַלע טעקעס האָבן דורכגעפֿאַלן",
+    deleteFile: "אויסמעקן טעקע",
+    deleteConfirm: 'ביסטו זיכער אַז דו ווילסט אויסמעקן "{filename}"?\n\nדאָס איז ניט צוריקצודרייען.',
+    fileDeletedSuccess: "טעקע איז אויסגעמעקט געוואָרן",
+    deleteError: "טעות בײַם אויסמעקן טעקע",
   }
 
   const en = {
@@ -333,6 +341,10 @@
     saving: "Saving...",
     transcriptionQueued: "File sent for transcription successfully. Results will appear in 'My Files' when complete.",
     batchFailed: "All files failed",
+    deleteFile: "Delete file",
+    deleteConfirm: 'Are you sure you want to delete "{filename}"?\n\nThis action cannot be undone.',
+    fileDeletedSuccess: "File deleted successfully",
+    deleteError: "Error deleting file",
   }
 
   const resources = { he, yi, en }

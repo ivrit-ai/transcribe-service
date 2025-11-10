@@ -1191,6 +1191,42 @@
         height: 20px;
         color: var(--text-color);
       }
+      .file-item-delete-btn {
+        background: #ffebee;
+        border: 1px solid #ef9a9a;
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+      }
+      .file-item-delete-btn:hover {
+        background: #f44336;
+        border-color: #d32f2f;
+      }
+      .file-item-delete-btn svg {
+        width: 20px;
+        height: 20px;
+        color: #c62828;
+      }
+      .file-item-delete-btn:hover svg {
+        color: #ffffff;
+      }
+      [data-theme="dark"] .file-item-delete-btn {
+        background: #5d1f1f;
+        border-color: #8b3030;
+      }
+      [data-theme="dark"] .file-item-delete-btn:hover {
+        background: #c62828;
+        border-color: #d32f2f;
+      }
+      [data-theme="dark"] .file-item-delete-btn svg {
+        color: #ef9a9a;
+      }
       .file-item-name-input {
         width: 100%;
         padding: 0.25rem 0.5rem;
@@ -3078,7 +3114,7 @@
         const actions = document.createElement('div')
         actions.className = 'file-item-actions'
 
-        // Add edit button for ready items
+        // Add edit and delete buttons for ready items
         if (isReady) {
           const editBtn = document.createElement('button')
           editBtn.className = 'file-item-edit-btn'
@@ -3089,6 +3125,16 @@
             enableRenameMode(name, entry.results_id)
           }
           actions.appendChild(editBtn)
+          
+          const deleteBtn = document.createElement('button')
+          deleteBtn.className = 'file-item-delete-btn'
+          deleteBtn.title = (window.I18N ? window.I18N.t('deleteFile') : 'מחק קובץ')
+          deleteBtn.innerHTML = '<i data-lucide="x"></i>'
+          deleteBtn.onclick = (e) => {
+            e.stopPropagation()
+            confirmDeleteFile(entry.results_id, entry.source_filename)
+          }
+          actions.appendChild(deleteBtn)
         }
 
         div.appendChild(statusDot)
@@ -3170,6 +3216,45 @@
         
         // Save on blur
         input.addEventListener('blur', saveRename)
+      }
+
+      // Confirm and delete file
+      function confirmDeleteFile(resultsId, filename) {
+        const confirmMessage = window.I18N 
+          ? window.I18N.t('deleteConfirm', { filename: filename })
+          : `האם אתה בטוח שברצונך למחוק את "${filename}"?\n\nפעולה זו אינה הפיכה.`
+        
+        if (!confirm(confirmMessage)) {
+          return
+        }
+        
+        deleteFile(resultsId, filename)
+      }
+
+      // Delete file from TOC and Drive
+      async function deleteFile(resultsId, filename) {
+        try {
+          const response = await fetch('/appdata/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              results_id: resultsId
+            })
+          })
+          
+          const data = await response.json()
+          
+          if (response.ok) {
+            showToast((window.I18N ? window.I18N.t('fileDeletedSuccess') : 'הקובץ נמחק בהצלחה'), 'success')
+            // Refresh the files list
+            loadSavedFiles(false)
+          } else {
+            showToast(data.error || (window.I18N ? window.I18N.t('deleteError') : 'שגיאה במחיקת הקובץ'), 'error')
+          }
+        } catch (error) {
+          console.error('Delete error:', error)
+          showToast((window.I18N ? window.I18N.t('deleteError') : 'שגיאה במחיקת הקובץ'), 'error')
+        }
       }
 
       // Helper function to decompress gzipped data

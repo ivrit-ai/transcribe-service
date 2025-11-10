@@ -165,6 +165,7 @@ from gdrive_utils import (
     update_drive_file,
     download_drive_file_bytes,
     find_drive_file_by_name,
+    delete_drive_file,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REDIRECT_URI,
@@ -886,6 +887,76 @@ async def rename_file(request: Request):
         
     except Exception as e:
         logging.error(f"Error renaming file: {e}")
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
+
+
+@app.post("/appdata/delete")
+async def delete_file(request: Request):
+    """Delete a file by removing it from TOC and deleting associated files (opus, json.gz)."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_email = get_user_email(request)
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    if not user_email:
+        return JSONResponse({"error": "User email not found"}, status_code=401)
+    
+    try:
+        body = await request.json()
+        results_id = body.get("results_id")
+        
+        if not results_id:
+            return JSONResponse({"error": "Missing results_id"}, status_code=400)
+        
+        # Acquire per-user lock for TOC updates
+        toc_lock = get_toc_lock(user_email)
+        async with toc_lock:
+            # Download current TOC
+            toc_data = await download_toc(refresh_token)
+            
+            if not toc_data or "entries" not in toc_data:
+                return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
+            
+            # Find and remove the entry with matching results_id
+            entry_found = False
+            original_entries_count = len(toc_data["entries"])
+            toc_data["entries"] = [
+                entry for entry in toc_data["entries"]
+                if entry.get("results_id") != results_id
+            ]
+            
+            if len(toc_data["entries"]) < original_entries_count:
+                entry_found = True
+            
+            if not entry_found:
+                return JSONResponse({"error": "File not found in TOC"}, status_code=404)
+            
+            # Upload updated TOC atomically (removing from TOC first)
+            success = await upload_toc(refresh_token, toc_data, user_email)
+            
+            if not success:
+                return JSONResponse({"error": "Failed to update TOC"}, status_code=500)
+        
+        # After TOC update, delete associated files
+        # Delete opus file if it exists
+        opus_filename = f"{results_id}.opus"
+        opus_file_id = await find_drive_file_by_name(refresh_token, opus_filename)
+        if opus_file_id:
+            await delete_drive_file(refresh_token, opus_file_id, user_email)
+        
+        # Delete json.gz results file
+        json_filename = f"{results_id}.json.gz"
+        json_file_id = await find_drive_file_by_name(refresh_token, json_filename)
+        if json_file_id:
+            await delete_drive_file(refresh_token, json_file_id, user_email)
+        
+        logging.info(f"{user_email}: Deleted file {results_id} from TOC and associated files")
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logging.error(f"Error deleting file: {e}")
         return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
