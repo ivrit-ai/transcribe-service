@@ -1,4 +1,5 @@
 """Google Drive utilities for managing Drive folder storage."""
+
 import os
 import json
 import hashlib
@@ -17,7 +18,7 @@ GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://transcribe.ivrit.ai/login/authorized")
 
-DRIVE_FOLDER_NAME = "transcribe.ivrit.ai"
+DRIVE_FOLDER_NAME = os.environ.get("GOOGLE_DRIVE_FOLDER_NAME", "transcribe.ivrit.ai")
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 
 # Cache folder IDs per refresh token to avoid repeated Drive lookups within a process lifetime

@@ -63,6 +63,8 @@ parser.add_argument('--hiatus', action='store_true', help='Enable hiatus mode')
 parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
 parser.add_argument('--dev', action='store_true', help='Enable development mode')
 parser.add_argument('--dev-user-email', help='User email for development mode')
+parser.add_argument('--dev-https', action='store_true', help='Enable HTTPS in development mode with self-signed certificates')
+parser.add_argument('--dev-cert-folder', help='Path to folder containing self-signed certificate files (cert.pem and key.pem)')
 parser.add_argument('--config', dest='config_path', required=True, help='Path to configuration JSON defining languages and models')
 args, unknown = parser.parse_known_args()
 
@@ -795,7 +797,9 @@ async def get_transcription_results(results_id: str, request: Request):
     return Response(
         content=file_content,
         media_type="application/gzip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        headers={
+            "Cache-Control": "max-age=864000",
+        },
     )
 
 
@@ -825,8 +829,10 @@ async def get_audio_file(results_id: str, request: Request):
     from fastapi.responses import Response
     return Response(
         content=file_content,
-        media_type="audio/opus",
-        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+        media_type="audio/ogg",
+        headers={
+            "Cache-Control": "max-age=864000",
+        },
     )
 
 
@@ -2022,4 +2028,21 @@ queue_locks = {
 
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500
-    uvicorn.run(app, host="0.0.0.0", port=port)
+
+    # Configure SSL if dev-https is enabled
+    ssl_kwargs = {}
+    if args.dev_https:
+        if not args.dev_cert_folder:
+            raise RuntimeError("--dev-cert-folder is required when --dev-https is enabled")
+
+        cert_file = os.path.join(args.dev_cert_folder, "cert.pem")
+        key_file = os.path.join(args.dev_cert_folder, "key.pem")
+
+        if not os.path.exists(cert_file):
+            raise RuntimeError(f"Certificate file not found: {cert_file}")
+        if not os.path.exists(key_file):
+            raise RuntimeError(f"Key file not found: {key_file}")
+
+        ssl_kwargs = {"ssl_certfile": cert_file, "ssl_keyfile": key_file}
+
+    uvicorn.run(app, host="0.0.0.0", port=port, **ssl_kwargs)
