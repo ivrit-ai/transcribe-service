@@ -1322,10 +1322,6 @@
           <h2 id="viewer-file-name" style="margin: 0; font-size: 1.2rem; color: var(--text-color);"></h2>
         </div>
 
-        <div id="viewer-audio-player-container" style="display: none; margin-bottom: 1rem; padding: 1rem; background: var(--bg-secondary, #f5f5f5); border-radius: 8px;">
-          <audio id="viewer-audio-player" controls style="width: 100%; max-width: 600px;"></audio>
-        </div>
-
         <div class="action-buttons">
           <div class="actions-right">
             <button id="viewer-text-format-toggle" title="פורמט הטקסט" aria-label="פורמט הטקסט">
@@ -3099,32 +3095,6 @@
           // Set filename in viewer
           document.getElementById('viewer-file-name').textContent = entry.source_filename
 
-          // Try to fetch opus audio file
-          const audioPlayerContainer = document.getElementById('viewer-audio-player-container')
-          const audioPlayer = document.getElementById('viewer-audio-player')
-          
-          try {
-            const audioResponse = await fetch(`/appdata/audio/${entry.results_id}`)
-            if (audioResponse.ok) {
-              // Audio file exists, set it as source and show player
-              const audioUrl = URL.createObjectURL(await audioResponse.blob())
-              audioPlayer.src = audioUrl
-              audioPlayerContainer.style.display = 'block'
-              
-              // Setup audio sync with text highlighting
-              setupAudioTextSync()
-            } else {
-              // Audio file doesn't exist, hide player
-              audioPlayerContainer.style.display = 'none'
-              audioPlayer.src = ''
-            }
-          } catch (audioError) {
-            // Audio file doesn't exist or error fetching, hide player
-            console.log('Audio file not available:', audioError)
-            audioPlayerContainer.style.display = 'none'
-            audioPlayer.src = ''
-          }
-
           // Update transcription display
           updateViewerTranscriptionDisplay()
 
@@ -3201,20 +3171,17 @@
       function updateViewerTranscriptionDisplay() {
         if (!currentViewerData || !currentViewerData.results) return
 
-        // Clear any existing highlights before updating
-        clearHighlight()
-
         const viewerTranscription = document.getElementById('viewer-transcription')
         const segments = currentViewerData.results
 
-        // Use same display logic as main transcription, but with segment identifiers for highlighting
+        // Use same display logic as main transcription
         let result
         if (displaySettings.timestampFormat === "segments") {
-          result = formatWithTimecodesForSegmentsWithIds(segments)
+          result = formatWithTimecodesForSegments(segments)
         } else {
           const continuousSeparator = displaySettings.textFormat === "continuous" ? " " : "<br>"
           const segmentSeparator = "<br>"
-          result = joinSegmentsWithSpeakerChangesForSegmentsWithIds(segments, continuousSeparator, segmentSeparator, true)
+          result = joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, true)
         }
 
         result = result + "<br><br>" + (window.I18N ? window.I18N.t('transcriptFooter') : "תומלל באמצעות שירות התמלול של ivrit.ai")
@@ -3264,52 +3231,6 @@
         return groups.join("<br><br>")
       }
 
-      // Version with segment IDs for highlighting
-      function formatWithTimecodesForSegmentsWithIds(segments) {
-        if (!segments || segments.length === 0) return ""
-
-        const separator = displaySettings.textFormat === "continuous" ? " " : "<br>"
-        const groups = []
-        let currentGroup = []
-        let currentTimeMarker = 30
-        let segmentIndexOffset = 0
-
-        for (let i = 0; i < segments.length; i++) {
-          const segment = segments[i]
-          currentGroup.push(segment)
-
-          const shouldEndGroup =
-            (segment.start <= currentTimeMarker && segment.end >= currentTimeMarker) ||
-            i === segments.length - 1 ||
-            (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker)
-
-          if (shouldEndGroup) {
-            const startTime = currentGroup[0].start
-            const endTime = currentGroup[currentGroup.length - 1].end
-
-            const groupText = displaySettings.diarizationDisplay === "enabled"
-              ? joinSegmentsWithSpeakerChangesForSegmentsWithIds(currentGroup, separator, "<br>", true, segmentIndexOffset)
-              : currentGroup.map((seg, idx) => {
-                  const segText = seg.text.trim()
-                  return `<span class="transcript-segment" data-segment-start="${seg.start}" data-segment-end="${seg.end}" data-segment-index="${segmentIndexOffset + idx}">${segText}</span>`
-                }).join(separator)
-
-            const formattedStartTime = formatTimeForDisplay(startTime)
-            const formattedEndTime = formatTimeForDisplay(endTime)
-            groups.push("[" + formattedStartTime + "-" + formattedEndTime + "]<br>" + groupText)
-
-            segmentIndexOffset += currentGroup.length
-            currentGroup = []
-            currentTimeMarker += 30
-
-            while (i < segments.length - 1 && segments[i + 1].start > currentTimeMarker) {
-              currentTimeMarker += 30
-            }
-          }
-        }
-
-        return groups.join("<br><br>")
-      }
 
       function joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, isHTML = true) {
         if (!segments || segments.length === 0) return ""
@@ -3345,43 +3266,6 @@
         return result.join("")
       }
 
-      // Version with segment IDs for highlighting
-      function joinSegmentsWithSpeakerChangesForSegmentsWithIds(segments, continuousSeparator, segmentSeparator, isHTML = true, indexOffset = 0) {
-        if (!segments || segments.length === 0) return ""
-        
-        const result = []
-        let currentSpeaker = null
-        const diarizationEnabled = displaySettings.diarizationDisplay === "enabled"
-        
-        for (let i = 0; i < segments.length; i++) {
-          const segment = segments[i]
-          const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
-          
-          const showSpeakerLabel = diarizationEnabled && segmentSpeaker !== currentSpeaker
-          
-          const segmentTextContent = segment.text.trim()
-          const wrappedText = `<span class="transcript-segment" data-segment-start="${segment.start}" data-segment-end="${segment.end}" data-segment-index="${indexOffset + i}">${segmentTextContent}</span>`
-          
-          const segmentText = showSpeakerLabel 
-            ? (isHTML ? getSpeakerLabelForLanguage(segment, currentViewerLanguage) + wrappedText : getSpeakerLabelPlainForLanguage(segment, currentViewerLanguage) + segmentTextContent)
-            : wrappedText
-          
-          if (i === 0) {
-            result.push(segmentText)
-            currentSpeaker = segmentSpeaker
-          } else if (diarizationEnabled && segmentSpeaker !== currentSpeaker) {
-            result.push('<br><br>' + segmentText)
-            currentSpeaker = segmentSpeaker
-          } else {
-            result.push(continuousSeparator + segmentText)
-            if (diarizationEnabled) {
-              currentSpeaker = segmentSpeaker
-            }
-          }
-        }
-        
-        return result.join("")
-      }
 
       function getSpeakerLabelForLanguage(segment, lang) {
         if (segment.speakers && segment.speakers.length > 0) {
@@ -3411,109 +3295,8 @@
         }
       }
 
-      // Setup audio playback sync with text highlighting
-      let currentHighlightedSegment = null
-      let audioSyncInterval = null
-
-      function setupAudioTextSync() {
-        const audioPlayer = document.getElementById('viewer-audio-player')
-        if (!audioPlayer) return
-
-        // Remove existing listeners if any
-        audioPlayer.removeEventListener('timeupdate', handleAudioTimeUpdate)
-        audioPlayer.removeEventListener('play', handleAudioPlay)
-        audioPlayer.removeEventListener('pause', handleAudioPause)
-        audioPlayer.removeEventListener('ended', handleAudioEnded)
-
-        // Add event listeners
-        audioPlayer.addEventListener('timeupdate', handleAudioTimeUpdate)
-        audioPlayer.addEventListener('play', handleAudioPlay)
-        audioPlayer.addEventListener('pause', handleAudioPause)
-        audioPlayer.addEventListener('ended', handleAudioEnded)
-      }
-
-      function handleAudioTimeUpdate() {
-        const audioPlayer = document.getElementById('viewer-audio-player')
-        if (!audioPlayer || !currentViewerData || !currentViewerData.results) return
-
-        const currentTime = audioPlayer.currentTime
-        const segments = currentViewerData.results
-
-        // Find the segment that contains the current playback time
-        let activeSegment = null
-        for (let i = 0; i < segments.length; i++) {
-          const segment = segments[i]
-          if (currentTime >= segment.start && currentTime <= segment.end) {
-            activeSegment = segment
-            break
-          }
-        }
-
-        // Update highlighting
-        if (activeSegment) {
-          highlightSegment(activeSegment)
-        } else {
-          clearHighlight()
-        }
-      }
-
-      function highlightSegment(segment) {
-        // Remove previous highlight
-        if (currentHighlightedSegment) {
-          const prevElement = document.querySelector(
-            `.transcript-segment[data-segment-start="${currentHighlightedSegment.start}"][data-segment-end="${currentHighlightedSegment.end}"]`
-          )
-          if (prevElement) {
-            prevElement.classList.remove('playing')
-          }
-        }
-
-        // Add highlight to current segment
-        const element = document.querySelector(
-          `.transcript-segment[data-segment-start="${segment.start}"][data-segment-end="${segment.end}"]`
-        )
-        if (element) {
-          element.classList.add('playing')
-          currentHighlightedSegment = segment
-
-          // Scroll into view if needed
-          element.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        }
-      }
-
-      function clearHighlight() {
-        if (currentHighlightedSegment) {
-          const element = document.querySelector(
-            `.transcript-segment[data-segment-start="${currentHighlightedSegment.start}"][data-segment-end="${currentHighlightedSegment.end}"]`
-          )
-          if (element) {
-            element.classList.remove('playing')
-          }
-          currentHighlightedSegment = null
-        }
-      }
-
-      function handleAudioPlay() {
-        // Audio started playing
-      }
-
-      function handleAudioPause() {
-        // Audio paused - keep current highlight
-      }
-
-      function handleAudioEnded() {
-        clearHighlight()
-      }
-
       // Wire up viewer controls
       document.getElementById('back-to-files-btn').addEventListener('click', () => {
-        // Clear highlights and stop audio when leaving viewer
-        clearHighlight()
-        const audioPlayer = document.getElementById('viewer-audio-player')
-        if (audioPlayer) {
-          audioPlayer.pause()
-          audioPlayer.src = ''
-        }
         document.getElementById('viewer-tab-btn').style.display = 'none'
         switchTab('files')
       })
@@ -3644,29 +3427,22 @@
         return groups.join("\n\n")
       }
 
-      // Viewer download menu
-      document.getElementById('viewer-menu-vtt').addEventListener('click', () => {
-        if (!currentViewerData) return
-        const fileName = document.getElementById('viewer-file-name').textContent
-        downloadInFormat(currentViewerData.results, fileName, 'vtt', currentViewerLanguage)
-      })
-
-      document.getElementById('viewer-menu-srt').addEventListener('click', () => {
-        if (!currentViewerData) return
-        const fileName = document.getElementById('viewer-file-name').textContent
-        downloadInFormat(currentViewerData.results, fileName, 'srt', currentViewerLanguage)
-      })
-
-      document.getElementById('viewer-menu-docx').addEventListener('click', () => {
-        if (!currentViewerData) return
-        const fileName = document.getElementById('viewer-file-name').textContent
-        downloadInFormat(currentViewerData.results, fileName, 'docx', currentViewerLanguage)
-      })
-
+      // Viewer download menu - only JSON is enabled
       document.getElementById('viewer-menu-json').addEventListener('click', () => {
         if (!currentViewerData) return
         const fileName = document.getElementById('viewer-file-name').textContent
         downloadInFormat(currentViewerData.results, fileName, 'json', currentViewerLanguage)
+      })
+      
+      // Hide non-JSON download options
+      const viewerMenuVttButton = document.getElementById('viewer-menu-vtt')
+      const viewerMenuSrtButton = document.getElementById('viewer-menu-srt')
+      const viewerMenuDocxButton = document.getElementById('viewer-menu-docx')
+      ;[viewerMenuVttButton, viewerMenuSrtButton, viewerMenuDocxButton].forEach((btn) => {
+        if (btn) {
+          btn.disabled = true
+          btn.style.display = 'none'
+        }
       })
     </script>
   </body>
