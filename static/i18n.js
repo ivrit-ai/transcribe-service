@@ -99,6 +99,7 @@
     filesLoading: "טוען קבצים...",
     filesEmpty: "עדיין לא שמרת תמלולים",
     filesLoadError: "שגיאה בטעינת הקבצים",
+    loadingFile: "טוען קובץ...",
     filesDownloading: "מוריד קובץ...",
     filesDownloadSuccess: "הקובץ הורד בהצלחה",
     filesDownloadError: "שגיאה בהורדת הקובץ",
@@ -113,6 +114,7 @@
     deleteConfirm: 'האם אתה בטוח שברצונך למחוק את "{filename}"?\n\nפעולה זו אינה הפיכה.',
     fileDeletedSuccess: "הקובץ נמחק בהצלחה",
     deleteError: "שגיאה במחיקת הקובץ",
+    deleting: "מוחק...",
   }
 
   const yi = {
@@ -215,6 +217,7 @@
     filesLoading: "לאָדט טעקעס...",
     filesEmpty: "איר האָט נאָך נישט אויפֿגעהיט טראַנסקריפּציעס",
     filesLoadError: "טעות בײַם לאָדן טעקעס",
+    loadingFile: "לאָדט טעקע...",
     filesDownloading: "אַראָפּלאָדט טעקע...",
     filesDownloadSuccess: "טעקע אַראָפּלאָדן געראָטן",
     filesDownloadError: "טעות בײַם אַראָפּלאָדן טעקע",
@@ -229,6 +232,7 @@
     deleteConfirm: 'ביסטו זיכער אַז דו ווילסט אויסמעקן "{filename}"?\n\nדאָס איז ניט צוריקצודרייען.',
     fileDeletedSuccess: "טעקע איז אויסגעמעקט געוואָרן",
     deleteError: "טעות בײַם אויסמעקן טעקע",
+    deleting: "אויסמעקט...",
   }
 
   const en = {
@@ -331,6 +335,7 @@
     filesLoading: "Loading files...",
     filesEmpty: "You haven't saved any transcriptions yet",
     filesLoadError: "Error loading files",
+    loadingFile: "Loading file...",
     filesDownloading: "Downloading file...",
     filesDownloadSuccess: "File downloaded successfully",
     filesDownloadError: "Error downloading file",
@@ -345,6 +350,7 @@
     deleteConfirm: 'Are you sure you want to delete "{filename}"?\n\nThis action cannot be undone.',
     fileDeletedSuccess: "File deleted successfully",
     deleteError: "Error deleting file",
+    deleting: "Deleting...",
   }
 
   const resources = { he, yi, en }

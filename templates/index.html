@@ -952,6 +952,41 @@
         white-space: normal;
       }
 
+      .spinner-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 3000;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+        gap: 1rem;
+      }
+      .spinner-overlay.show {
+        display: flex;
+      }
+      .spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid rgba(255, 255, 255, 0.3);
+        border-top-color: #ffffff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      .spinner-message {
+        color: #ffffff;
+        font-size: 1.1rem;
+        font-weight: 500;
+        text-align: center;
+      }
+
       .file-preview {
         display: none;
         background-color: var(--secondary-color);
@@ -1294,6 +1329,10 @@
   </head>
   <body>
     <div class="toast-container" id="toast-container"></div>
+    <div class="spinner-overlay" id="spinner-overlay">
+      <div class="spinner"></div>
+      <div class="spinner-message" id="spinner-message"></div>
+    </div>
 
     <div class="container">
       <button
@@ -3231,8 +3270,29 @@
         deleteFile(resultsId, filename)
       }
 
+      // Show spinner overlay
+      function showSpinner(message) {
+        const overlay = document.getElementById('spinner-overlay')
+        const messageEl = document.getElementById('spinner-message')
+        if (overlay && messageEl) {
+          messageEl.textContent = message || (window.I18N ? window.I18N.t('deleting') : 'מוחק...')
+          overlay.classList.add('show')
+        }
+      }
+
+      // Hide spinner overlay
+      function hideSpinner() {
+        const overlay = document.getElementById('spinner-overlay')
+        if (overlay) {
+          overlay.classList.remove('show')
+        }
+      }
+
       // Delete file from TOC and Drive
       async function deleteFile(resultsId, filename) {
+        // Show spinner to block access
+        showSpinner()
+        
         try {
           const response = await fetch('/appdata/delete', {
             method: 'POST',
@@ -3254,6 +3314,9 @@
         } catch (error) {
           console.error('Delete error:', error)
           showToast((window.I18N ? window.I18N.t('deleteError') : 'שגיאה במחיקת הקובץ'), 'error')
+        } finally {
+          // Always hide spinner when done
+          hideSpinner()
         }
       }
 
@@ -3284,6 +3347,9 @@
 
       // View saved file from TOC entry
       async function viewSavedFileFromTOC(entry) {
+        // Show spinner to block access while loading
+        showSpinner(window.I18N ? window.I18N.t('loadingFile') : 'טוען קובץ...')
+        
         try {
           // Fetch results (gzipped)
           const response = await fetch(`/appdata/results/${entry.results_id}`)
@@ -3327,6 +3393,9 @@
         } catch (error) {
           console.error('Error viewing file:', error)
           showToast((window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
+        } finally {
+          // Always hide spinner when done
+          hideSpinner()
         }
       }
 
