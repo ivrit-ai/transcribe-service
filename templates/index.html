@@ -952,7 +952,7 @@
         white-space: normal;
       }
 
-      .spinner-overlay {
+ב      .spinner-overlay {
         display: none;
         position: fixed;
         top: 0;
@@ -1279,6 +1279,23 @@
         border-color: var(--primary-color);
         box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
       }
+      .info-link-btn {
+        background: none;
+        border: none;
+        color: var(--primary-color);
+        cursor: pointer;
+        font-size: 0.85rem;
+        text-decoration: underline;
+        padding: 0;
+        transition: opacity 0.2s;
+      }
+      .info-link-btn:hover {
+        opacity: 0.8;
+      }
+      .info-text {
+        color: var(--text-color);
+        white-space: pre-line;
+      }
       .files-loading {
         text-align: center;
         padding: 2rem;
@@ -1397,6 +1414,12 @@
           <input type="checkbox" id="save-audio-checkbox" checked style="width: 18px; height: 18px; accent-color: var(--primary-color); cursor: pointer;">
           <span data-i18n="saveAudioInDrive">שמור אודיו ל-Google Drive</span>
         </label>
+        <div style="margin-top: 0.5rem; margin-right: 1.75rem;">
+          <button type="button" id="save-audio-info-btn" class="info-link-btn" data-i18n="whatDoesThisMean">מה זה אומר?</button>
+          <div id="save-audio-info" class="info-text" style="display: none; margin-top: 0.5rem; padding: 0.75rem; background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.9rem; line-height: 1.5;">
+            <span data-i18n="saveAudioInfoText"></span>
+          </div>
+        </div>
       </div>
       <div class="transcribe-controls">
         <button id="transcribe-btn" disabled data-i18n="transcribe">תמלל</button>
@@ -1589,6 +1612,15 @@
         updateTranscriptionDirectionUI()
         // Initialize tab switching
         initTabs()
+        // Initialize save audio info toggle
+        const saveAudioInfoBtn = document.getElementById('save-audio-info-btn')
+        const saveAudioInfo = document.getElementById('save-audio-info')
+        if (saveAudioInfoBtn && saveAudioInfo) {
+          saveAudioInfoBtn.addEventListener('click', () => {
+            const isVisible = saveAudioInfo.style.display !== 'none'
+            saveAudioInfo.style.display = isVisible ? 'none' : 'block'
+          })
+        }
       })
       const dropArea = document.getElementById("drop-area")
       const fileInput = document.getElementById("file-input")
