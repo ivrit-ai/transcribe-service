@@ -1169,6 +1169,45 @@
         height: 20px;
         color: var(--text-color);
       }
+      .file-item-edit-btn {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+      }
+      .file-item-edit-btn:hover {
+        background: var(--container-bg);
+        border-color: var(--primary-color);
+      }
+      .file-item-edit-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+      .file-item-name-input {
+        width: 100%;
+        padding: 0.25rem 0.5rem;
+        border: 2px solid var(--primary-color);
+        border-radius: 4px;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--text-color);
+        background-color: var(--input-bg);
+        box-sizing: border-box;
+        font-family: inherit;
+      }
+      .file-item-name-input:focus {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
+      }
       .files-loading {
         text-align: center;
         padding: 2rem;
@@ -2986,6 +3025,7 @@
         const name = document.createElement('div')
         name.className = 'file-item-name'
         name.textContent = entry.source_filename || 'Untitled'
+        name.dataset.originalName = entry.source_filename || 'Untitled'
 
         const meta = document.createElement('div')
         meta.className = 'file-item-meta'
@@ -3038,11 +3078,98 @@
         const actions = document.createElement('div')
         actions.className = 'file-item-actions'
 
+        // Add edit button for ready items
+        if (isReady) {
+          const editBtn = document.createElement('button')
+          editBtn.className = 'file-item-edit-btn'
+          editBtn.title = (window.I18N ? window.I18N.t('renameFile') : 'שנה שם')
+          editBtn.innerHTML = '<i data-lucide="pencil"></i>'
+          editBtn.onclick = (e) => {
+            e.stopPropagation()
+            enableRenameMode(name, entry.results_id)
+          }
+          actions.appendChild(editBtn)
+        }
+
         div.appendChild(statusDot)
         div.appendChild(info)
         div.appendChild(actions)
 
         return div
+      }
+
+      // Enable rename mode for a file item
+      function enableRenameMode(nameElement, resultsId) {
+        const originalName = nameElement.textContent
+        const input = document.createElement('input')
+        input.type = 'text'
+        input.value = originalName
+        input.className = 'file-item-name-input'
+        
+        // Replace text with input
+        nameElement.textContent = ''
+        nameElement.appendChild(input)
+        input.focus()
+        input.select()
+        
+        const saveRename = async () => {
+          const newName = input.value.trim()
+          
+          // If name unchanged or empty, cancel
+          if (!newName || newName === originalName) {
+            nameElement.textContent = originalName
+            return
+          }
+          
+          // Show loading state
+          nameElement.textContent = (window.I18N ? window.I18N.t('saving') : 'שומר...')
+          
+          try {
+            const response = await fetch('/appdata/rename', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                results_id: resultsId,
+                new_filename: newName
+              })
+            })
+            
+            const data = await response.json()
+            
+            if (response.ok) {
+              nameElement.textContent = newName
+              nameElement.dataset.originalName = newName
+              showToast((window.I18N ? window.I18N.t('fileRenamedSuccess') : 'השם שונה בהצלחה'), 'success')
+              // Refresh the files list to show updated name
+              loadSavedFiles(false)
+            } else {
+              nameElement.textContent = originalName
+              showToast(data.error || (window.I18N ? window.I18N.t('renameError') : 'שגיאה בשינוי השם'), 'error')
+            }
+          } catch (error) {
+            console.error('Rename error:', error)
+            nameElement.textContent = originalName
+            showToast((window.I18N ? window.I18N.t('renameError') : 'שגיאה בשינוי השם'), 'error')
+          }
+        }
+        
+        const cancelRename = () => {
+          nameElement.textContent = originalName
+        }
+        
+        // Save on Enter
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            saveRename()
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            cancelRename()
+          }
+        })
+        
+        // Save on blur
+        input.addEventListener('blur', saveRename)
       }
 
       // Helper function to decompress gzipped data

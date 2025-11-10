@@ -103,6 +103,12 @@
     filesDownloadSuccess: "הקובץ הורד בהצלחה",
     filesDownloadError: "שגיאה בהורדת הקובץ",
     backToFiles: "חזרה לרשימה",
+    renameFile: "שנה שם",
+    fileRenamedSuccess: "השם שונה בהצלחה",
+    renameError: "שגיאה בשינוי השם",
+    saving: "שומר...",
+    transcriptionQueued: "הקובץ נשלח לתמלול בהצלחה. התוצאות יופיעו ב\"הקבצים שלי\" כשיסתיימו.",
+    batchFailed: "כל הקבצים נכשלו",
   }
 
   const yi = {
@@ -209,6 +215,12 @@
     filesDownloadSuccess: "טעקע אַראָפּלאָדן געראָטן",
     filesDownloadError: "טעות בײַם אַראָפּלאָדן טעקע",
     backToFiles: "צוריק צו רשימה",
+    renameFile: "בײַטן נאָמען",
+    fileRenamedSuccess: "נאָמען געענדערט געראָטן",
+    renameError: "טעות בײַם ענדערן נאָמען",
+    saving: "היט אַוועק...",
+    transcriptionQueued: "די טעקע איז געשיקט געוואָרן צו טראַנסקריבירן. רעזולטאַטן וועלן זיך באַווײַזן אין 'מײַנע טעקעס' ווען פֿאַרענדיקט.",
+    batchFailed: "אַלע טעקעס האָבן דורכגעפֿאַלן",
   }
 
   const en = {
@@ -315,6 +327,12 @@
     filesDownloadSuccess: "File downloaded successfully",
     filesDownloadError: "Error downloading file",
     backToFiles: "Back to list",
+    renameFile: "Rename",
+    fileRenamedSuccess: "File renamed successfully",
+    renameError: "Error renaming file",
+    saving: "Saving...",
+    transcriptionQueued: "File sent for transcription successfully. Results will appear in 'My Files' when complete.",
+    batchFailed: "All files failed",
   }
 
   const resources = { he, yi, en }

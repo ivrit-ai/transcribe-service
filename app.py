@@ -829,6 +829,66 @@ async def get_audio_file(results_id: str, request: Request):
     )
 
 
+@app.post("/appdata/rename")
+async def rename_file(request: Request):
+    """Rename a file in the TOC by updating its source_filename."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_email = get_user_email(request)
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    if not user_email:
+        return JSONResponse({"error": "User email not found"}, status_code=401)
+    
+    try:
+        body = await request.json()
+        results_id = body.get("results_id")
+        new_filename = body.get("new_filename")
+        
+        if not results_id or not new_filename:
+            return JSONResponse({"error": "Missing results_id or new_filename"}, status_code=400)
+        
+        # Sanitize new filename
+        new_filename = new_filename.strip()
+        if not new_filename:
+            return JSONResponse({"error": "Filename cannot be empty"}, status_code=400)
+        
+        # Acquire per-user lock for TOC updates
+        toc_lock = get_toc_lock(user_email)
+        async with toc_lock:
+            # Download current TOC
+            toc_data = await download_toc(refresh_token)
+            
+            if not toc_data or "entries" not in toc_data:
+                return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
+            
+            # Find the entry with matching results_id
+            entry_found = False
+            for entry in toc_data["entries"]:
+                if entry.get("results_id") == results_id:
+                    entry["source_filename"] = new_filename
+                    entry_found = True
+                    break
+            
+            if not entry_found:
+                return JSONResponse({"error": "File not found in TOC"}, status_code=404)
+            
+            # Upload updated TOC atomically
+            success = await upload_toc(refresh_token, toc_data, user_email)
+            
+            if not success:
+                return JSONResponse({"error": "Failed to update TOC"}, status_code=500)
+        
+        logging.info(f"{user_email}: Renamed file {results_id} to {new_filename}")
+        return JSONResponse({"success": True, "new_filename": new_filename})
+        
+    except Exception as e:
+        logging.error(f"Error renaming file: {e}")
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
+
+
 @app.get("/login")
 async def login(request: Request):
     return templates.TemplateResponse("login.html", {"request": request, "google_analytics_tag": os.environ["GOOGLE_ANALYTICS_TAG"]})
