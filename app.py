@@ -28,6 +28,7 @@ import random
 import tempfile
 import asyncio
 import queue
+import subprocess
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
@@ -38,6 +39,10 @@ from contextlib import asynccontextmanager
 import dataclasses
 
 import traceback
+import copy
+import hashlib
+import gzip
+import io
 
 import posthog
 import ffmpeg
@@ -46,6 +51,7 @@ import argparse
 import re
 import ivrit
 import json as _json
+from cachetools import LRUCache
 
 dotenv.load_dotenv()
 
@@ -57,6 +63,8 @@ parser.add_argument('--hiatus', action='store_true', help='Enable hiatus mode')
 parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
 parser.add_argument('--dev', action='store_true', help='Enable development mode')
 parser.add_argument('--dev-user-email', help='User email for development mode')
+parser.add_argument('--dev-https', action='store_true', help='Enable HTTPS in development mode with self-signed certificates')
+parser.add_argument('--dev-cert-folder', help='Path to folder containing self-signed certificate files (cert.pem and key.pem)')
 parser.add_argument('--config', dest='config_path', required=True, help='Path to configuration JSON defining languages and models')
 args, unknown = parser.parse_known_args()
 
@@ -92,13 +100,14 @@ for lang_key, lang_cfg in LANG_CONFIG["languages"].items():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown"""
-    global queue_locks
+    global queue_locks, transcoding_lock
     
     # Startup
     # Initialize locks
     queue_locks[SHORT] = asyncio.Lock()
     queue_locks[LONG] = asyncio.Lock()
     queue_locks[PRIVATE] = asyncio.Lock()
+    transcoding_lock = asyncio.Lock()
     
     # Start background event loop
     asyncio.create_task(event_loop())
@@ -152,15 +161,83 @@ def set_user_email(request: Request, email: str) -> str:
     sessions[session_id]["user_email"] = email
     return session_id
 
-# Google OAuth configuration
-GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
-GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://transcribe.ivrit.ai/login/authorized")
-
-
+from gdrive_utils import (
+    refresh_google_access_token,
+    get_access_token_from_refresh,
+    upload_to_drive_folder,
+    update_drive_file,
+    download_drive_file_bytes,
+    find_drive_file_by_name,
+    delete_drive_file,
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI,
+)
 
 def log_message(message):
     logger.info(f"{message}")
+
+async def download_toc(refresh_token: Optional[str]) -> dict:
+    """Download TOC file from Google Drive (gzipped), using cache if available."""
+    cache_key = get_toc_cache_key(refresh_token)
+    
+    # Try to get from cache first
+    if cache_key:
+        cached_toc = toc_cache.get(cache_key)
+        if cached_toc is not None:
+            return copy.deepcopy(cached_toc)
+    
+    # Not in cache, download from Google Drive
+    file_id = await find_drive_file_by_name(refresh_token, "toc.json.gz")
+    
+    if not file_id:
+        toc_data = {"entries": []}
+    else:
+        # Download raw bytes and decompress
+        file_bytes = await download_drive_file_bytes(refresh_token, file_id)
+        if not file_bytes:
+            toc_data = {"entries": []}
+        else:
+            file_bytes = gzip.decompress(file_bytes)
+            toc_data = json.loads(file_bytes)
+    
+    # Store in cache (only persistent TOC from Google Drive)
+    if cache_key:
+        toc_cache[cache_key] = copy.deepcopy(toc_data)
+    
+    return toc_data
+
+async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: Optional[str] = None) -> bool:
+    """Upload TOC file (gzipped), updating existing one atomically or creating new one."""
+    # Find existing toc.json.gz
+    existing_id = await find_drive_file_by_name(refresh_token, "toc.json.gz")
+    
+    # Prepare data: compress JSON
+    json_data = json.dumps(toc_data).encode('utf-8')
+    file_data = gzip.compress(json_data)
+    mime_type = "application/gzip"
+    
+    success = False
+    if existing_id:
+        # Update existing file atomically
+        success = await update_drive_file(refresh_token, existing_id, file_data, mime_type, user_email)
+    else:
+        # Create new file (gzipped)
+        success = await upload_to_drive_folder(refresh_token, "toc.json.gz", file_data, mime_type, user_email)
+    
+    # Invalidate cache for this refresh_token if upload was successful
+    if success:
+        cache_key = get_toc_cache_key(refresh_token)
+        if cache_key:
+            toc_cache.pop(cache_key, None)
+    
+    return success
+
+def get_toc_lock(user_email: str) -> asyncio.Lock:
+    """Get or create a lock for a specific user's TOC updates."""
+    if user_email not in toc_locks:
+        toc_locks[user_email] = asyncio.Lock()
+    return toc_locks[user_email]
 
 # PostHog configuration
 ph = None
@@ -183,17 +260,26 @@ PRIVATE = "private"
 MAX_PARALLEL_SHORT_JOBS = 1
 MAX_PARALLEL_LONG_JOBS = 1
 MAX_PARALLEL_PRIVATE_JOBS = 1000
+MAX_PARALLEL_TRANSCODES = 4
 MAX_QUEUED_JOBS = 20
 MAX_QUEUED_PRIVATE_JOBS = 5000
 SHORT_JOB_THRESHOLD = 20 * 60
-JOB_TIMEOUT = 1 * 60
 
-SPEEDUP_FACTOR = 20
+SPEEDUP_FACTOR = 15
+TRANSCODING_SPEEDUP = 100  # Transcoding speedup factor for ETA calculation
+SUBMISSION_DELAY = 15  # Additional delay in seconds added to ETA calculations
 MAX_AUDIO_DURATION_IN_HOURS = 20
 EXECUTION_TIMEOUT_MS = int(MAX_AUDIO_DURATION_IN_HOURS * 3600 * 1000 / SPEEDUP_FACTOR)
 
 # Dictionary to store temporary file paths
 temp_files = {}
+
+# Transcoding queue and running jobs
+transcoding_queue = queue.Queue(maxsize=MAX_QUEUED_JOBS)
+transcoding_running_jobs = {}
+
+# Transcoding queue lock
+transcoding_lock = None
 
 # Programmatic queue management
 queues = {
@@ -229,11 +315,21 @@ queue_locks = {
 # Dictionary to keep track of user's active jobs
 user_jobs = {}
 
-# Dictionary to keep track of last access time for each job
-job_last_accessed = {}
-
 # Dictionary to store user rate limiting buckets
 user_buckets = {}
+
+# Per-user locks for TOC updates
+toc_locks = {}
+
+# LRU cache for persistent TOC data (keyed by refresh_token hash)
+TOC_CACHE_MAX_SIZE = int(os.environ.get("TOC_CACHE_MAX_SIZE", "100"))
+toc_cache = LRUCache(maxsize=TOC_CACHE_MAX_SIZE)
+
+def get_toc_cache_key(refresh_token: Optional[str]) -> Optional[str]:
+    """Generate cache key from refresh_token."""
+    if not refresh_token:
+        return None
+    return hashlib.sha256(refresh_token.encode()).hexdigest()
 
 
 
@@ -322,6 +418,44 @@ def get_media_duration(file_path):
         return None
 
 
+def transcode_to_opus(input_path: str, output_path: str) -> bool:
+    """
+    Transcode audio file to Opus format with specific parameters:
+    - 2 channels
+    - 48kHz sampling rate
+    - CBR (Constant Bitrate)
+    - 64k bitrate
+    - application = audio
+    - Single thread
+    """
+    try:
+        # Run ffmpeg command matching the exact specification
+        result = subprocess.run(
+            [
+                'ffmpeg',
+                '-i', input_path,
+                '-ac', '2',
+                '-ar', '48000',
+                '-c:a', 'libopus',
+                '-b:a', '64k',
+                '-vbr', 'off',
+                '-application', 'audio',
+                '-threads', '1',
+                output_path
+            ],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        log_message(f"Transcoding error: {e.stderr}")
+        return False
+    except Exception as e:
+        log_message(f"Unexpected transcoding error: {str(e)}")
+        return False
+
+
 def get_user_quota(user_email):
     """Get or create a rate limiting bucket for a user."""
     if user_email not in user_buckets:
@@ -339,11 +473,11 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
         exclude_last: Whether to exclude the last job in queue from calculation
 
     Returns:
-        time_ahead_str: Formatted string of estimated time (HH:MM:SS)
+        time_ahead_seconds: Estimated time in seconds (float)
     """
     # Skip queue time calculations for private queue
     if queue_to_use == queues[PRIVATE]:
-        return "00:00:00"
+        return 0.0
     
     # Determine which lock to use based on the queue
     queue_type = None
@@ -353,20 +487,20 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
             break
     
     if queue_type is None:
-        return "00:00:00"
+        return 0.0
     time_ahead = 0
     
 
     # Add remaining time of currently running jobs
     for running_job_id, running_job in running_jobs.items():
-        if running_job_id in job_results:
-            # Get progress of the running job
-            progress = job_results[running_job_id]["progress"]
-            # Add only the remaining duration
-            remaining_duration = running_job.duration * (1 - progress)
+        # Calculate remaining time based on elapsed time since transcription started
+        if hasattr(running_job, 'transcribe_start_time') and running_job.transcribe_start_time:
+            elapsed_time = time.time() - running_job.transcribe_start_time
+            # Remaining time = duration - (elapsed_time * SPEEDUP_FACTOR)
+            remaining_duration = max(0, running_job.duration - elapsed_time * SPEEDUP_FACTOR)
             time_ahead += remaining_duration
         else:
-            # If no progress info yet, add full duration
+            # If no start time info yet, add full duration
             time_ahead += running_job.duration
 
     # Add duration of queued jobs
@@ -379,11 +513,12 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
     # Apply speedup factor
     time_ahead /= SPEEDUP_FACTOR
 
-    # Convert time_ahead to HH:MM:SS format
-    return str(timedelta(seconds=int(time_ahead)))
+    # Return time in seconds
+    return time_ahead
 
 
-async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he"):
+
+async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he", refresh_token: Optional[str] = None, save_audio: bool = False):
     # Try to add the job to the queue
     log_message(f"{user_email}: Queuing job {job_id}...")
 
@@ -420,6 +555,8 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
         job_desc.runpod_token = runpod_token
         job_desc.uses_custom_runpod = bool(runpod_token)
         job_desc.language = language
+        job_desc.refresh_token = refresh_token
+        job_desc.save_audio = save_audio
 
         # Determine queue type based on job characteristics
         if job_desc.uses_custom_runpod:
@@ -444,13 +581,11 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
             queue_to_use.put_nowait(job_desc)
 
             # Calculate time ahead only for the relevant queue
-            time_ahead_str = await calculate_queue_time(queue_to_use, running_jobs_to_update, exclude_last=True)
+            time_ahead_seconds = await calculate_queue_time(queue_to_use, running_jobs_to_update, exclude_last=True)
+            time_ahead_str = str(timedelta(seconds=int(time_ahead_seconds)))
 
             # Add job to user's active jobs
             user_jobs[user_email] = job_id
-
-            # Set initial access time
-            job_last_accessed[job_id] = time.time()
 
             capture_event(job_id, "job-queued", {"user": user_email, "queue-depth": queue_depth, "job-type": job_type, "custom-runpod": job_desc.uses_custom_runpod})
 
@@ -502,6 +637,382 @@ async def list_languages():
     return JSONResponse({"languages": langs})
 
 
+@app.get("/appdata/toc")
+async def get_toc(request: Request):
+    """Get TOC (table of contents) with all transcription metadata, augmented with in-memory job states."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_email = get_user_email(request)
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    if not user_email:
+        return JSONResponse({"error": "User email not found"}, status_code=401)
+    
+    # Load persistent TOC (cached in download_toc, only contains completed jobs)
+    toc_data = await download_toc(refresh_token)
+    
+    if toc_data is None:
+        return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
+    
+    # Make a copy to avoid modifying cached data
+    toc_data = copy.deepcopy(toc_data)
+    
+    # Get TOC version from environment
+    toc_version = os.environ.get("TOC_VER", "1.0")
+    
+    # Augment with in-memory jobs for this user
+    in_memory_entries = []
+    
+    # Check transcoding queue and running jobs for this user
+    async with transcoding_lock:
+        # Check queued transcoding jobs
+        for transcoding_job in list(transcoding_queue.queue):
+            if transcoding_job.user_email == user_email:
+                # Calculate ETA for queued transcoding jobs
+                # Find position of this job in queue
+                queue_list = list(transcoding_queue.queue)
+                job_position = queue_list.index(transcoding_job)
+                
+                # Calculate time for jobs ahead of this one
+                jobs_ahead = queue_list[:job_position]
+                time_ahead = sum(job.duration for job in jobs_ahead)
+                
+                # Add remaining time from running transcoding jobs
+                for running_job_id, running_job in transcoding_running_jobs.items():
+                    # Calculate remaining time based on elapsed time since transcoding started
+                    if hasattr(running_job, 'transcode_start_time') and running_job.transcode_start_time:
+                        elapsed_time = time.time() - running_job.transcode_start_time
+                        # Remaining time = duration - (elapsed_time * TRANSCODING_SPEEDUP)
+                        remaining_duration = max(0, running_job.duration - elapsed_time * TRANSCODING_SPEEDUP)
+                        time_ahead += remaining_duration
+                
+                # Apply transcoding speedup factor to total time ahead
+                eta_seconds = time_ahead / TRANSCODING_SPEEDUP
+                # Add this job's own transcoding time
+                eta_seconds += transcoding_job.duration / TRANSCODING_SPEEDUP
+                
+                entry = {
+                    "job_id": transcoding_job.id,
+                    "source_filename": transcoding_job.filename,
+                    "language": transcoding_job.language,
+                    "duration_seconds": transcoding_job.duration,
+                    "submitted_at": datetime.fromtimestamp(transcoding_job.qtime).isoformat(),
+                    "status": "Transcoding queued",
+                    "toc_version": toc_version,
+                    "eta_seconds": int(eta_seconds),
+                }
+                in_memory_entries.append(entry)
+        
+        # Check running transcoding jobs
+        for job_id, transcoding_job in transcoding_running_jobs.items():
+            if transcoding_job.user_email == user_email:
+                # Calculate ETA for running transcoding jobs
+                # Calculate remaining time based on elapsed time since transcoding started
+                if hasattr(transcoding_job, 'transcode_start_time') and transcoding_job.transcode_start_time:
+                    elapsed_time = time.time() - transcoding_job.transcode_start_time
+                    # Remaining time = duration - (elapsed_time * TRANSCODING_SPEEDUP)
+                    remaining_duration = max(0, transcoding_job.duration - elapsed_time * TRANSCODING_SPEEDUP)
+                    eta_seconds = remaining_duration / TRANSCODING_SPEEDUP
+                    
+                    entry = {
+                        "job_id": transcoding_job.id,
+                        "source_filename": transcoding_job.filename,
+                        "language": transcoding_job.language,
+                        "duration_seconds": transcoding_job.duration,
+                        "submitted_at": datetime.fromtimestamp(transcoding_job.qtime).isoformat(),
+                        "status": "Transcoding...",
+                        "toc_version": toc_version,
+                        "eta_seconds": int(eta_seconds),
+                    }
+                    in_memory_entries.append(entry)
+    
+    # Check all queues for jobs from this user
+    for queue_type in [SHORT, LONG, PRIVATE]:
+        queue_to_use = queues[queue_type]
+        running_jobs_to_use = running_jobs[queue_type]
+        
+        # Use lock for thread-safe queue access
+        async with queue_locks[queue_type]:
+            # Check queued jobs
+            for job_desc in list(queues[queue_type].queue):
+                if job_desc.user_email == user_email:
+                    # Calculate ETA for queued jobs (only for non-private queues)
+                    eta_seconds = None
+                    if queue_type != PRIVATE:
+                        # Find position of this job in queue
+                        queue_list = list(queue_to_use.queue)
+                        job_position = queue_list.index(job_desc)
+                        
+                        # Calculate time for jobs ahead of this one
+                        jobs_ahead = queue_list[:job_position]
+                        time_ahead = sum(job.duration for job in jobs_ahead)
+                        
+                        # Add remaining time from running jobs
+                        for running_job_id, running_job in running_jobs_to_use.items():
+                            # Calculate remaining time based on elapsed time since transcription started
+                            if hasattr(running_job, 'transcribe_start_time') and running_job.transcribe_start_time:
+                                elapsed_time = time.time() - running_job.transcribe_start_time
+                                # Remaining time = duration - (elapsed_time * SPEEDUP_FACTOR)
+                                remaining_duration = max(0, running_job.duration - elapsed_time * SPEEDUP_FACTOR)
+                                time_ahead += remaining_duration
+                            else:
+                                time_ahead += running_job.duration
+                        
+                        # Apply speedup factor to total time ahead
+                        eta_seconds = time_ahead / SPEEDUP_FACTOR
+                        # Add submission delay
+                        eta_seconds += SUBMISSION_DELAY
+                    
+                    entry = {
+                        "job_id": job_desc.id,
+                        "source_filename": job_desc.filename,
+                        "language": job_desc.language,
+                        "duration_seconds": job_desc.duration,
+                        "submitted_at": datetime.fromtimestamp(job_desc.qtime).isoformat(),
+                        "status": "Queued",
+                        "toc_version": toc_version,
+                    }
+                    if eta_seconds is not None:
+                        entry["eta_seconds"] = int(eta_seconds)
+                    in_memory_entries.append(entry)
+            
+            # Check running jobs
+            for job_id, job_desc in running_jobs[queue_type].items():
+                if job_desc.user_email == user_email:
+                    # Calculate ETA for running jobs (only for non-private queues)
+                    eta_seconds = None
+                    if queue_type != PRIVATE:
+                        # Calculate remaining time for this job based on elapsed time
+                        if hasattr(job_desc, 'transcribe_start_time') and job_desc.transcribe_start_time:
+                            elapsed_time = time.time() - job_desc.transcribe_start_time
+                            # Remaining time = duration - (elapsed_time * SPEEDUP_FACTOR)
+                            remaining_duration = max(0, job_desc.duration - elapsed_time * SPEEDUP_FACTOR)
+                        else:
+                            remaining_duration = job_desc.duration
+                        
+                        # ETA is based on the remaining time for this job plus submission delay.
+                        # Other jobs in the queue do not delay the completion of this already running task.
+                        eta_seconds = (remaining_duration / SPEEDUP_FACTOR) + SUBMISSION_DELAY
+                    
+                    entry = {
+                        "job_id": job_desc.id,
+                        "source_filename": job_desc.filename,
+                        "language": job_desc.language,
+                        "duration_seconds": job_desc.duration,
+                        "submitted_at": datetime.fromtimestamp(job_desc.qtime).isoformat(),
+                        "status": "Being processed",
+                        "toc_version": toc_version,
+                    }
+                    if eta_seconds is not None:
+                        entry["eta_seconds"] = int(eta_seconds)
+                    in_memory_entries.append(entry)
+    
+    # Prepend in-memory entries (they should appear first)
+    if "entries" not in toc_data:
+        toc_data["entries"] = []
+    toc_data["entries"] = in_memory_entries + toc_data["entries"]
+    
+    return JSONResponse(toc_data)
+
+
+@app.get("/appdata/results/{results_id}")
+async def get_transcription_results(results_id: str, request: Request):
+    """Download transcription results by UUID (returns gzipped JSON for client-side decompression)."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    # Find the results file (gzipped)
+    filename = f"{results_id}.json.gz"
+    file_id = await find_drive_file_by_name(refresh_token, filename)
+    
+    if not file_id:
+        return JSONResponse({"error": "Results file not found"}, status_code=404)
+    
+    # Download gzipped file as bytes
+    file_content = await download_drive_file_bytes(refresh_token, file_id)
+    
+    if file_content is None:
+        return JSONResponse({"error": "Failed to download results"}, status_code=500)
+    
+    # Return gzipped data for client-side decompression
+    from fastapi.responses import Response
+    return Response(
+        content=file_content,
+        media_type="application/gzip",
+        headers={
+            "Cache-Control": "max-age=864000",
+        },
+    )
+
+
+@app.get("/appdata/audio/{results_id}")
+async def get_audio_file(results_id: str, request: Request):
+    """Download opus audio file by results_id UUID."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    # Find the opus file
+    filename = f"{results_id}.opus"
+    file_id = await find_drive_file_by_name(refresh_token, filename)
+    
+    if not file_id:
+        return JSONResponse({"error": "Audio file not found"}, status_code=404)
+    
+    # Download opus file as bytes
+    file_content = await download_drive_file_bytes(refresh_token, file_id)
+    
+    if file_content is None:
+        return JSONResponse({"error": "Failed to download audio"}, status_code=500)
+    
+    # Return opus audio file
+    from fastapi.responses import Response
+    return Response(
+        content=file_content,
+        media_type="audio/ogg",
+        headers={
+            "Cache-Control": "max-age=864000",
+        },
+    )
+
+
+@app.post("/appdata/rename")
+async def rename_file(request: Request):
+    """Rename a file in the TOC by updating its source_filename."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_email = get_user_email(request)
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    if not user_email:
+        return JSONResponse({"error": "User email not found"}, status_code=401)
+    
+    try:
+        body = await request.json()
+        results_id = body.get("results_id")
+        new_filename = body.get("new_filename")
+        
+        if not results_id or not new_filename:
+            return JSONResponse({"error": "Missing results_id or new_filename"}, status_code=400)
+        
+        # Sanitize new filename
+        new_filename = new_filename.strip()
+        if not new_filename:
+            return JSONResponse({"error": "Filename cannot be empty"}, status_code=400)
+        
+        # Acquire per-user lock for TOC updates
+        toc_lock = get_toc_lock(user_email)
+        async with toc_lock:
+            # Download current TOC
+            toc_data = await download_toc(refresh_token)
+            
+            if not toc_data or "entries" not in toc_data:
+                return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
+            
+            # Find the entry with matching results_id
+            entry_found = False
+            for entry in toc_data["entries"]:
+                if entry.get("results_id") == results_id:
+                    entry["source_filename"] = new_filename
+                    entry_found = True
+                    break
+            
+            if not entry_found:
+                return JSONResponse({"error": "File not found in TOC"}, status_code=404)
+            
+            # Upload updated TOC atomically
+            success = await upload_toc(refresh_token, toc_data, user_email)
+            
+            if not success:
+                return JSONResponse({"error": "Failed to update TOC"}, status_code=500)
+        
+        logging.info(f"{user_email}: Renamed file {results_id} to {new_filename}")
+        return JSONResponse({"success": True, "new_filename": new_filename})
+        
+    except Exception as e:
+        logging.error(f"Error renaming file: {e}")
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
+
+
+@app.post("/appdata/delete")
+async def delete_file(request: Request):
+    """Delete a file by removing it from TOC and deleting associated files (opus, json.gz)."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_email = get_user_email(request)
+    
+    if not refresh_token:
+        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+    
+    if not user_email:
+        return JSONResponse({"error": "User email not found"}, status_code=401)
+    
+    try:
+        body = await request.json()
+        results_id = body.get("results_id")
+        
+        if not results_id:
+            return JSONResponse({"error": "Missing results_id"}, status_code=400)
+        
+        # Acquire per-user lock for TOC updates
+        toc_lock = get_toc_lock(user_email)
+        async with toc_lock:
+            # Download current TOC
+            toc_data = await download_toc(refresh_token)
+            
+            if not toc_data or "entries" not in toc_data:
+                return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
+            
+            # Find and remove the entry with matching results_id
+            entry_found = False
+            original_entries_count = len(toc_data["entries"])
+            toc_data["entries"] = [
+                entry for entry in toc_data["entries"]
+                if entry.get("results_id") != results_id
+            ]
+            
+            if len(toc_data["entries"]) < original_entries_count:
+                entry_found = True
+            
+            if not entry_found:
+                return JSONResponse({"error": "File not found in TOC"}, status_code=404)
+            
+            # Upload updated TOC atomically (removing from TOC first)
+            success = await upload_toc(refresh_token, toc_data, user_email)
+            
+            if not success:
+                return JSONResponse({"error": "Failed to update TOC"}, status_code=500)
+        
+        # After TOC update, delete associated files
+        # Delete opus file if it exists
+        opus_filename = f"{results_id}.opus"
+        opus_file_id = await find_drive_file_by_name(refresh_token, opus_filename)
+        if opus_file_id:
+            await delete_drive_file(refresh_token, opus_file_id, user_email)
+        
+        # Delete json.gz results file
+        json_filename = f"{results_id}.json.gz"
+        json_file_id = await find_drive_file_by_name(refresh_token, json_filename)
+        if json_file_id:
+            await delete_drive_file(refresh_token, json_file_id, user_email)
+        
+        logging.info(f"{user_email}: Deleted file {results_id} from TOC and associated files")
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logging.error(f"Error deleting file: {e}")
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
+
+
 @app.get("/login")
 async def login(request: Request):
     return templates.TemplateResponse("login.html", {"request": request, "google_analytics_tag": os.environ["GOOGLE_ANALYTICS_TAG"]})
@@ -522,7 +1033,8 @@ async def authorize(request: Request):
         "client_id": GOOGLE_CLIENT_ID,
         "response_type": "code",
         "redirect_uri": GOOGLE_REDIRECT_URI,
-        "scope": "openid email profile",
+        # Request identity scopes + Drive AppData for storing results
+        "scope": "openid email profile https://www.googleapis.com/auth/drive.file",
         "access_type": "offline",
         "prompt": "consent",
         "state": state
@@ -986,7 +1498,14 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
                     user_data = await user_response.json()
                     
                     # Store user email in session
-                    set_user_email(request, user_data["email"])
+                    user_email = user_data["email"]
+                    set_user_email(request, user_email)
+                    # Persist refresh token in the session for later Drive uploads
+                    existing_refresh = sessions.get(session_id, {}).get("refresh_token")
+                    refresh_token = token_data.get("refresh_token", existing_refresh)
+                    if session_id not in sessions:
+                        sessions[session_id] = {}
+                    sessions[session_id]["refresh_token"] = refresh_token
                     
                     # Clean up OAuth state
                     if session_id in sessions:
@@ -1007,6 +1526,7 @@ async def upload_file(
     file: UploadFile = File(...),
     runpod_token: Optional[str] = Form(None),
     language: Optional[str] = Form(None),
+    save_audio: Optional[str] = Form(None),
 ):
     job_id = str(uuid.uuid4())
     user_email = get_user_email(request)
@@ -1014,6 +1534,21 @@ async def upload_file(
     if in_hiatus_mode:
         capture_event(job_id, "file-upload-hiatus-rejected", {"user": user_email})
         return JSONResponse({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}, status_code=503)
+
+    # Check if user already has a job transcoding, queued, or running
+    if user_email in user_jobs:
+        return JSONResponse({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+    
+    # Check if user has a transcoding job queued or in progress
+    async with transcoding_lock:
+        # Check queued transcoding jobs
+        for queued_job in list(transcoding_queue.queue):
+            if queued_job.user_email == user_email:
+                return JSONResponse({"error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+        # Check running transcoding jobs
+        for existing_job_id, existing_job in transcoding_running_jobs.items():
+            if existing_job.user_email == user_email:
+                return JSONResponse({"error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
 
     capture_event(job_id, "file-upload", {"user": user_email})
 
@@ -1120,70 +1655,129 @@ async def upload_file(
                 message = "ה-endpoint שלך עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
             return JSONResponse({"error": message}, status_code=400)
 
-    # Use the background event loop to call the async function
-    queued, res = await queue_job(job_id, user_email, filename, duration, runpod_token, requested_lang)
-    if queued:
-        job_results[job_id] = {"results": [], "completion_time": None, "progress": 0}
-    else:
-        cleanup_temp_file(job_id)
-
-    return res
-
-
-@app.get("/job_status/{job_id}")
-async def job_status(job_id: str, request: Request):
-    # Make sure the job has been queued
-    if job_id not in job_results:
-        return JSONResponse({"error": "מזהה העבודה אינו תקין. אנא נסה להעלות את הקובץ מחדש."}, status_code=400)
-
-    # Update last access time for the job
-    job_last_accessed[job_id] = time.time()
-
-    # Check if the job is in the queue
-    queue_position = None
-    job_type = None
-    queue_to_use = None
-
-    # Check all queues for the job
-    for queue_type in [SHORT, LONG, PRIVATE]:
-        for idx, job_desc in enumerate(queues[queue_type].queue):
-            if job_desc.id == job_id:
-                queue_position = idx + 1
-                job_type = queue_type
-                queue_to_use = queues[queue_type]
-                break
-        if queue_position:
-            break
-
-    if queue_position:
-        running_jobs_to_check = running_jobs[job_type]
-        # Use the background event loop to call the async function
-        time_ahead_str = await calculate_queue_time(queue_to_use, running_jobs_to_check)
-        return JSONResponse({"queue_position": queue_position, "time_ahead": time_ahead_str, "job_type": job_type})
-
-    # Check if job is running and update progress
-    for queue_type in [SHORT, LONG, PRIVATE]:
-        if job_id in running_jobs[queue_type]:
-            if job_results[job_id]["progress"] == 1.0:
-                return JSONResponse({"progress": job_results[job_id]["progress"]})
-
-            job_desc = running_jobs[queue_type][job_id]
-            # Calculate progress based on elapsed time with speedup factor of 15
-            if hasattr(job_desc, 'transcribe_start_time'):
-                elapsed_time = time.time() - job_desc.transcribe_start_time
-                estimated_total_time = job_desc.duration / 15  # Speedup factor of 15
-                progress = min(elapsed_time / estimated_total_time, 0.99)  # Cap at 1.0
-                job_results[job_id]["progress"] = progress
-            break
+    # Retrieve Google refresh token from session
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
     
-    # If job is in progress, return only the progress
+    # Parse save_audio parameter (require explicit parameter - no default)
+    if save_audio is None:
+        return JSONResponse({"error": "Missing save_audio parameter"}, status_code=400)
+    save_audio_bool = save_audio.lower() == 'true'
+    
+    # Create transcoding job descriptor
+    transcoding_job = box.Box()
+    transcoding_job.id = job_id
+    transcoding_job.filename = filename
+    transcoding_job.user_email = user_email
+    transcoding_job.duration = duration
+    transcoding_job.runpod_token = runpod_token
+    transcoding_job.language = requested_lang
+    transcoding_job.refresh_token = refresh_token
+    transcoding_job.input_path = temp_file_path
+    transcoding_job.qtime = time.time()
+    transcoding_job.save_audio = save_audio_bool
+    
+    # Queue transcoding job instead of starting immediately
+    try:
+        async with transcoding_lock:
+            queue_depth = transcoding_queue.qsize()
+            transcoding_queue.put_nowait(transcoding_job)
+        
+        # Initialize job results
+        job_results[job_id] = {"results": [], "completion_time": None}
+        
+        log_message(f"{user_email}: Transcoding job queued: {job_id}, queue depth: {queue_depth}")
+        
+        # Return success response
+        return JSONResponse({"job_id": job_id, "status": "transcoding_queued", "queue_depth": queue_depth})
+    except queue.Full:
+        cleanup_temp_file(job_id)
+        log_message(f"{user_email}: Transcoding queue full for job {job_id}")
+        return JSONResponse({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}, status_code=503)
 
-    # If job is complete, return the full job_result data
-    result = job_results[job_id].copy()
-    # Convert datetime to ISO string for JSON serialization
-    if result["completion_time"]:
-        result["completion_time"] = result["completion_time"].isoformat()
-    return JSONResponse(result)
+
+
+
+async def handle_transcoding(job_id: str):
+    """
+    Handle transcoding of an uploaded file to Opus format.
+    After transcoding completes, queues the job for transcription.
+    """
+    if job_id not in transcoding_running_jobs:
+        log_message(f"Transcoding job {job_id} not found in running jobs")
+        return
+    
+    transcoding_job = transcoding_running_jobs[job_id]
+    input_path = transcoding_job.input_path
+    
+    # Create output path for transcoded file
+    output_path = input_path + ".opus"
+    
+    try:
+        # Run transcoding in thread pool (blocking operation)
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(None, transcode_to_opus, input_path, output_path)
+        
+        if not success:
+            log_message(f"Transcoding failed for job {job_id}")
+            # Clean up
+            if job_id in transcoding_running_jobs:
+                del transcoding_running_jobs[job_id]
+            cleanup_temp_file(job_id)
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            return
+        
+        # Replace original file with transcoded file
+        try:
+            # Remove original file
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+            # Rename transcoded file to original path
+            os.rename(output_path, input_path)
+            # Update temp_files to point to the transcoded file
+            temp_files[job_id] = input_path
+        except Exception as e:
+            log_message(f"Error replacing file after transcoding for job {job_id}: {str(e)}")
+            # Clean up
+            if job_id in transcoding_running_jobs:
+                del transcoding_running_jobs[job_id]
+            cleanup_temp_file(job_id)
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            return
+        
+        # Remove from running jobs
+        if job_id in transcoding_running_jobs:
+            del transcoding_running_jobs[job_id]
+        
+        # Queue the job for transcription
+        queued, res = await queue_job(
+            job_id,
+            transcoding_job.user_email,
+            transcoding_job.filename,
+            transcoding_job.duration,
+            transcoding_job.runpod_token,
+            transcoding_job.language,
+            transcoding_job.refresh_token,
+            transcoding_job.save_audio
+        )
+        
+        if not queued:
+            log_message(f"Failed to queue job {job_id} after transcoding")
+            cleanup_temp_file(job_id)
+        
+    except Exception as e:
+        log_message(f"Error in transcoding task for job {job_id}: {str(e)}")
+        # Clean up
+        if job_id in transcoding_running_jobs:
+            del transcoding_running_jobs[job_id]
+        cleanup_temp_file(job_id)
+        if os.path.exists(output_path):
+            try:
+                os.unlink(output_path)
+            except:
+                pass
 
 
 def cleanup_temp_file(job_id):
@@ -1221,11 +1815,6 @@ async def download_file(job_id: str, request: Request):
 
 async def process_segment(job_id, segment, duration):
     """Process a single segment and update job results"""
-    # Check if the job should be terminated
-    if time.time() - job_last_accessed.get(job_id, 0) > JOB_TIMEOUT:
-        log_message(f"Terminating inactive job: {job_id}")
-        return False
-
     # Convert segment to dict using dataclasses.asdict
     segment_dict = dataclasses.asdict(segment)
     
@@ -1236,7 +1825,6 @@ async def process_segment(job_id, segment, duration):
     for word in segment_dict['words']:
         word['word'] = clean_some_unicode_from_text(word['word'])
 
-    # Progress calculation will be done in job_status endpoint
     job_results[job_id]["results"].append(segment_dict)
 
     return True
@@ -1262,7 +1850,7 @@ async def transcribe_job(job_desc):
             log_message(f"{job_desc.user_email}: using custom RunPod credentials, skipping quota consumption")
 
         transcribe_start_time = time.time()
-        # Store the start time in the job description for progress calculation
+        # Store the start time in the job description for ETA calculation
         job_desc.transcribe_start_time = transcribe_start_time
         capture_event(
             job_id,
@@ -1305,10 +1893,7 @@ async def transcribe_job(job_desc):
                 segs = m.transcribe_async(url=download_url, diarize=True)
             
             async for segment in segs:
-                if not await process_segment(job_id, segment, duration):
-                    # Job was terminated
-                    log_message(f"Terminating runpod job due to process_segment error.")
-                    return
+                await process_segment(job_id, segment, duration)
 
         except Exception as e:
             log_message(f"Exception during transcription: {e}")
@@ -1331,8 +1916,106 @@ async def transcribe_job(job_desc):
             },
         )
 
-        job_results[job_id]["progress"] = 1.0
         job_results[job_id]["completion_time"] = datetime.now()
+
+        # After completion, store results separately and update TOC
+        try:
+            # Get TOC version from environment
+            toc_version = os.environ.get("TOC_VER", "1.0")
+
+            completed_at_iso = job_results[job_id]["completion_time"].isoformat()
+            results_id = str(uuid.uuid4())
+            
+            # Create full payload with both metadata AND results
+            # This allows TOC to be rebuilt from individual files if needed
+            full_payload = {
+                "results_id": results_id,
+                "job_id": job_id,
+                "source_filename": job_desc.filename,
+                "language": job_desc.language,
+                "duration_seconds": duration,
+                "completed_at": completed_at_iso,
+                "toc_version": toc_version,
+                "results": job_results[job_id]["results"],
+            }
+            
+            # Upload results file first (before TOC update)
+            # This ensures results exist before TOC references them
+            results_filename = f"{results_id}.json.gz"
+            # Compress JSON data
+            json_data = json.dumps(full_payload).encode('utf-8')
+            file_data = gzip.compress(json_data)
+            mime_type = "application/gzip"
+            upload_success = await upload_to_drive_folder(
+                job_desc.refresh_token,
+                results_filename,
+                file_data,
+                mime_type,
+                job_desc.user_email
+            )
+            
+            if not upload_success:
+                logger.error(f"Failed to upload results file for {job_id}, skipping TOC update")
+                return
+            
+            # Upload opus file if save_audio is True
+            if job_desc.save_audio:
+                try:
+                    opus_file_path = temp_files.get(job_id)
+                    if opus_file_path and os.path.exists(opus_file_path):
+                        # Read the opus file
+                        with open(opus_file_path, 'rb') as f:
+                            opus_data = f.read()
+                        
+                        # Upload as uuid4.opus
+                        opus_filename = f"{results_id}.opus"
+                        opus_mime_type = "audio/opus"
+                        opus_upload_success = await upload_to_drive_folder(
+                            job_desc.refresh_token,
+                            opus_filename,
+                            opus_data,
+                            opus_mime_type,
+                            job_desc.user_email
+                        )
+                        
+                        if opus_upload_success:
+                            log_message(f"{job_desc.user_email}: Uploaded opus file for {job_id} as {opus_filename}")
+                        else:
+                            logger.warning(f"Failed to upload opus file for {job_id}, but continuing")
+                    else:
+                        logger.warning(f"Opus file not found for {job_id} at {opus_file_path}, skipping audio upload")
+                except Exception as e:
+                    logger.error(f"Error uploading opus file for {job_id}: {e}")
+                        
+            # Create TOC entry for completed job
+            toc_entry = {
+                "results_id": results_id,
+                "job_id": job_id,
+                "source_filename": job_desc.filename,
+                "language": job_desc.language,
+                "duration_seconds": duration,
+                "completed_at": completed_at_iso,
+                "status": "Ready",
+                "toc_version": toc_version,
+            }
+            
+            # Acquire per-user lock for TOC updates
+            toc_lock = get_toc_lock(job_desc.user_email)
+            async with toc_lock:
+                # Download current TOC
+                toc_data = await download_toc(job_desc.refresh_token)
+                
+                # Append new entry
+                if "entries" not in toc_data:
+                    toc_data["entries"] = []
+                toc_data["entries"].append(toc_entry)
+                
+                # Upload updated TOC atomically
+                await upload_toc(job_desc.refresh_token, toc_data, job_desc.user_email)
+            
+            log_message(f"{job_desc.user_email}: Uploaded transcription to TOC (results_id: {results_id})")
+        except Exception as e:
+            logger.error(f"Failed to upload transcription for {job_id}: {e}")
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
     finally:
@@ -1363,6 +2046,19 @@ async def submit_next_task(job_queue, running_jobs, max_parallel_jobs, queue_typ
             asyncio.create_task(transcribe_job(job_desc))
 
 
+async def submit_next_transcoding_task():
+    """Submit next transcoding task from queue if capacity available"""
+    async with transcoding_lock:
+        # Submit all possible tasks until max_parallel_jobs are reached or queue is empty
+        while len(transcoding_running_jobs) < MAX_PARALLEL_TRANSCODES and not transcoding_queue.empty():
+            transcoding_job = transcoding_queue.get()
+            # Track start time for ETA calculation
+            transcoding_job.transcode_start_time = time.time()
+            transcoding_running_jobs[transcoding_job.id] = transcoding_job
+            # Create async task for transcoding
+            asyncio.create_task(handle_transcoding(transcoding_job.id))
+
+
 async def cleanup_old_results():
     current_time = datetime.now()
     jobs_to_delete = []
@@ -1384,44 +2080,15 @@ async def cleanup_old_results():
         del user_buckets[user_email]
 
 
-async def terminate_inactive_jobs():
-    current_time = time.time()
-    jobs_to_terminate = []
-
-    # Check queued jobs in all queues.
-    # Running jobs are handled in transcribe_job.
-    for queue_type in [SHORT, LONG, PRIVATE]:
-        async with queue_locks[queue_type]:
-            queue_to_check = queues[queue_type]
-            for job in list(queue_to_check.queue):
-                if current_time - job_last_accessed.get(job.id, 0) > JOB_TIMEOUT:
-                    jobs_to_terminate.append(job.id)
-                    queue_to_check.queue.remove(job)
-
-    # Terminate and clean up jobs
-    for job_id in jobs_to_terminate:
-        log_message(f"Terminating inactive job: {job_id}")
-        if job_id in job_results:
-            del job_results[job_id]
-        if job_id in job_last_accessed:
-            del job_last_accessed[job_id]
-        cleanup_temp_file(job_id)
-
-        # Remove job from user's active jobs
-        for user_email, active_job_id in list(user_jobs.items()):
-            if active_job_id == job_id:
-                del user_jobs[user_email]
-
-        # The job thread will terminate itself in the next iteration of the transcribe_job function
 
 
 async def event_loop():
     while True:
+        await submit_next_transcoding_task()
         await submit_next_task(queues[SHORT], running_jobs[SHORT], max_parallel_jobs[SHORT], SHORT)
         await submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG], LONG)
         await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
         await cleanup_old_results()
-        await terminate_inactive_jobs()
         await asyncio.sleep(0.1)
 
 
@@ -1434,4 +2101,21 @@ queue_locks = {
 
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500
-    uvicorn.run(app, host="0.0.0.0", port=port)
+
+    # Configure SSL if dev-https is enabled
+    ssl_kwargs = {}
+    if args.dev_https:
+        if not args.dev_cert_folder:
+            raise RuntimeError("--dev-cert-folder is required when --dev-https is enabled")
+
+        cert_file = os.path.join(args.dev_cert_folder, "cert.pem")
+        key_file = os.path.join(args.dev_cert_folder, "key.pem")
+
+        if not os.path.exists(cert_file):
+            raise RuntimeError(f"Certificate file not found: {cert_file}")
+        if not os.path.exists(key_file):
+            raise RuntimeError(f"Key file not found: {key_file}")
+
+        ssl_kwargs = {"ssl_certfile": cert_file, "ssl_keyfile": key_file}
+
+    uvicorn.run(app, host="0.0.0.0", port=port, **ssl_kwargs)
