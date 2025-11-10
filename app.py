@@ -100,13 +100,14 @@ for lang_key, lang_cfg in LANG_CONFIG["languages"].items():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown"""
-    global queue_locks
+    global queue_locks, transcoding_lock
     
     # Startup
     # Initialize locks
     queue_locks[SHORT] = asyncio.Lock()
     queue_locks[LONG] = asyncio.Lock()
     queue_locks[PRIVATE] = asyncio.Lock()
+    transcoding_lock = asyncio.Lock()
     
     # Start background event loop
     asyncio.create_task(event_loop())
@@ -259,6 +260,7 @@ PRIVATE = "private"
 MAX_PARALLEL_SHORT_JOBS = 1
 MAX_PARALLEL_LONG_JOBS = 1
 MAX_PARALLEL_PRIVATE_JOBS = 1000
+MAX_PARALLEL_TRANSCODES = 4
 MAX_QUEUED_JOBS = 20
 MAX_QUEUED_PRIVATE_JOBS = 5000
 SHORT_JOB_THRESHOLD = 20 * 60
@@ -272,8 +274,12 @@ EXECUTION_TIMEOUT_MS = int(MAX_AUDIO_DURATION_IN_HOURS * 3600 * 1000 / SPEEDUP_F
 # Dictionary to store temporary file paths
 temp_files = {}
 
-# Dictionary to track transcoding jobs (job_id -> job_desc)
-transcoding_jobs = {}
+# Transcoding queue and running jobs
+transcoding_queue = queue.Queue(maxsize=MAX_QUEUED_JOBS)
+transcoding_running_jobs = {}
+
+# Transcoding queue lock
+transcoding_lock = None
 
 # Programmatic queue management
 queues = {
@@ -659,22 +665,68 @@ async def get_toc(request: Request):
     # Augment with in-memory jobs for this user
     in_memory_entries = []
     
-    # Check transcoding jobs for this user
-    for job_id, transcoding_job in list(transcoding_jobs.items()):
-        if transcoding_job.user_email == user_email:
-            # Calculate ETA for transcoding
-            transcoding_eta_seconds = transcoding_job.duration / TRANSCODING_SPEEDUP
-            entry = {
-                "job_id": transcoding_job.id,
-                "source_filename": transcoding_job.filename,
-                "language": transcoding_job.language,
-                "duration_seconds": transcoding_job.duration,
-                "submitted_at": datetime.fromtimestamp(transcoding_job.qtime).isoformat(),
-                "status": "Transcoding...",
-                "toc_version": toc_version,
-                "eta_seconds": int(transcoding_eta_seconds),
-            }
-            in_memory_entries.append(entry)
+    # Check transcoding queue and running jobs for this user
+    async with transcoding_lock:
+        # Check queued transcoding jobs
+        for transcoding_job in list(transcoding_queue.queue):
+            if transcoding_job.user_email == user_email:
+                # Calculate ETA for queued transcoding jobs
+                # Find position of this job in queue
+                queue_list = list(transcoding_queue.queue)
+                job_position = queue_list.index(transcoding_job)
+                
+                # Calculate time for jobs ahead of this one
+                jobs_ahead = queue_list[:job_position]
+                time_ahead = sum(job.duration for job in jobs_ahead)
+                
+                # Add remaining time from running transcoding jobs
+                for running_job_id, running_job in transcoding_running_jobs.items():
+                    # Calculate remaining time based on elapsed time since transcoding started
+                    if hasattr(running_job, 'transcode_start_time') and running_job.transcode_start_time:
+                        elapsed_time = time.time() - running_job.transcode_start_time
+                        # Remaining time = duration - (elapsed_time * TRANSCODING_SPEEDUP)
+                        remaining_duration = max(0, running_job.duration - elapsed_time * TRANSCODING_SPEEDUP)
+                        time_ahead += remaining_duration
+                
+                # Apply transcoding speedup factor to total time ahead
+                eta_seconds = time_ahead / TRANSCODING_SPEEDUP
+                # Add this job's own transcoding time
+                eta_seconds += transcoding_job.duration / TRANSCODING_SPEEDUP
+                
+                entry = {
+                    "job_id": transcoding_job.id,
+                    "source_filename": transcoding_job.filename,
+                    "language": transcoding_job.language,
+                    "duration_seconds": transcoding_job.duration,
+                    "submitted_at": datetime.fromtimestamp(transcoding_job.qtime).isoformat(),
+                    "status": "Transcoding queued",
+                    "toc_version": toc_version,
+                    "eta_seconds": int(eta_seconds),
+                }
+                in_memory_entries.append(entry)
+        
+        # Check running transcoding jobs
+        for job_id, transcoding_job in transcoding_running_jobs.items():
+            if transcoding_job.user_email == user_email:
+                # Calculate ETA for running transcoding jobs
+                # Calculate remaining time based on elapsed time since transcoding started
+                if hasattr(transcoding_job, 'transcode_start_time') and transcoding_job.transcode_start_time:
+                    elapsed_time = time.time() - transcoding_job.transcode_start_time
+                    # Remaining time = duration - (elapsed_time * TRANSCODING_SPEEDUP)
+                    remaining_duration = max(0, transcoding_job.duration - elapsed_time * TRANSCODING_SPEEDUP)
+                    eta_seconds = remaining_duration / TRANSCODING_SPEEDUP
+                    
+                    entry = {
+                        "job_id": transcoding_job.id,
+                        "source_filename": transcoding_job.filename,
+                        "language": transcoding_job.language,
+                        "duration_seconds": transcoding_job.duration,
+                        "submitted_at": datetime.fromtimestamp(transcoding_job.qtime).isoformat(),
+                        "status": "Transcoding...",
+                        "toc_version": toc_version,
+                        "eta_seconds": int(eta_seconds),
+                    }
+                    in_memory_entries.append(entry)
     
     # Check all queues for jobs from this user
     for queue_type in [SHORT, LONG, PRIVATE]:
@@ -740,14 +792,9 @@ async def get_toc(request: Request):
                         else:
                             remaining_duration = job_desc.duration
                         
-                        # Calculate queue time for jobs ahead (queued jobs + other running jobs)
-                        # Create a dict of other running jobs (excluding this one)
-                        other_running_jobs = {k: v for k, v in running_jobs_to_use.items() if k != job_id}
-                        queue_time = await calculate_queue_time(queue_to_use, other_running_jobs, exclude_last=False)
-                        
-                        # ETA = queue time + (remaining time for this job / SPEEDUP_FACTOR) + submission delay
-                        # Note: queue_time already has SPEEDUP_FACTOR applied, so we need to divide remaining_duration
-                        eta_seconds = queue_time + (remaining_duration / SPEEDUP_FACTOR) + SUBMISSION_DELAY
+                        # ETA is based on the remaining time for this job plus submission delay.
+                        # Other jobs in the queue do not delay the completion of this already running task.
+                        eta_seconds = (remaining_duration / SPEEDUP_FACTOR) + SUBMISSION_DELAY
                     
                     entry = {
                         "job_id": job_desc.id,
@@ -1492,10 +1539,16 @@ async def upload_file(
     if user_email in user_jobs:
         return JSONResponse({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
     
-    # Check if user has a transcoding job in progress
-    for existing_job_id, existing_job in transcoding_jobs.items():
-        if existing_job.user_email == user_email:
-            return JSONResponse({"error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+    # Check if user has a transcoding job queued or in progress
+    async with transcoding_lock:
+        # Check queued transcoding jobs
+        for queued_job in list(transcoding_queue.queue):
+            if queued_job.user_email == user_email:
+                return JSONResponse({"error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+        # Check running transcoding jobs
+        for existing_job_id, existing_job in transcoding_running_jobs.items():
+            if existing_job.user_email == user_email:
+                return JSONResponse({"error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
 
     capture_event(job_id, "file-upload", {"user": user_email})
 
@@ -1624,17 +1677,23 @@ async def upload_file(
     transcoding_job.qtime = time.time()
     transcoding_job.save_audio = save_audio_bool
     
-    # Add to transcoding jobs
-    transcoding_jobs[job_id] = transcoding_job
-    
-    # Start transcoding task in background
-    asyncio.create_task(handle_transcoding(job_id))
-    
-    # Initialize job results
-    job_results[job_id] = {"results": [], "completion_time": None}
-    
-    # Return success response
-    return JSONResponse({"job_id": job_id, "status": "transcoding"})
+    # Queue transcoding job instead of starting immediately
+    try:
+        async with transcoding_lock:
+            queue_depth = transcoding_queue.qsize()
+            transcoding_queue.put_nowait(transcoding_job)
+        
+        # Initialize job results
+        job_results[job_id] = {"results": [], "completion_time": None}
+        
+        log_message(f"{user_email}: Transcoding job queued: {job_id}, queue depth: {queue_depth}")
+        
+        # Return success response
+        return JSONResponse({"job_id": job_id, "status": "transcoding_queued", "queue_depth": queue_depth})
+    except queue.Full:
+        cleanup_temp_file(job_id)
+        log_message(f"{user_email}: Transcoding queue full for job {job_id}")
+        return JSONResponse({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}, status_code=503)
 
 
 
@@ -1644,11 +1703,11 @@ async def handle_transcoding(job_id: str):
     Handle transcoding of an uploaded file to Opus format.
     After transcoding completes, queues the job for transcription.
     """
-    if job_id not in transcoding_jobs:
-        log_message(f"Transcoding job {job_id} not found")
+    if job_id not in transcoding_running_jobs:
+        log_message(f"Transcoding job {job_id} not found in running jobs")
         return
     
-    transcoding_job = transcoding_jobs[job_id]
+    transcoding_job = transcoding_running_jobs[job_id]
     input_path = transcoding_job.input_path
     
     # Create output path for transcoded file
@@ -1662,8 +1721,8 @@ async def handle_transcoding(job_id: str):
         if not success:
             log_message(f"Transcoding failed for job {job_id}")
             # Clean up
-            if job_id in transcoding_jobs:
-                del transcoding_jobs[job_id]
+            if job_id in transcoding_running_jobs:
+                del transcoding_running_jobs[job_id]
             cleanup_temp_file(job_id)
             if os.path.exists(output_path):
                 os.unlink(output_path)
@@ -1681,16 +1740,16 @@ async def handle_transcoding(job_id: str):
         except Exception as e:
             log_message(f"Error replacing file after transcoding for job {job_id}: {str(e)}")
             # Clean up
-            if job_id in transcoding_jobs:
-                del transcoding_jobs[job_id]
+            if job_id in transcoding_running_jobs:
+                del transcoding_running_jobs[job_id]
             cleanup_temp_file(job_id)
             if os.path.exists(output_path):
                 os.unlink(output_path)
             return
         
-        # Remove from transcoding jobs
-        if job_id in transcoding_jobs:
-            del transcoding_jobs[job_id]
+        # Remove from running jobs
+        if job_id in transcoding_running_jobs:
+            del transcoding_running_jobs[job_id]
         
         # Queue the job for transcription
         queued, res = await queue_job(
@@ -1711,8 +1770,8 @@ async def handle_transcoding(job_id: str):
     except Exception as e:
         log_message(f"Error in transcoding task for job {job_id}: {str(e)}")
         # Clean up
-        if job_id in transcoding_jobs:
-            del transcoding_jobs[job_id]
+        if job_id in transcoding_running_jobs:
+            del transcoding_running_jobs[job_id]
         cleanup_temp_file(job_id)
         if os.path.exists(output_path):
             try:
@@ -1987,6 +2046,19 @@ async def submit_next_task(job_queue, running_jobs, max_parallel_jobs, queue_typ
             asyncio.create_task(transcribe_job(job_desc))
 
 
+async def submit_next_transcoding_task():
+    """Submit next transcoding task from queue if capacity available"""
+    async with transcoding_lock:
+        # Submit all possible tasks until max_parallel_jobs are reached or queue is empty
+        while len(transcoding_running_jobs) < MAX_PARALLEL_TRANSCODES and not transcoding_queue.empty():
+            transcoding_job = transcoding_queue.get()
+            # Track start time for ETA calculation
+            transcoding_job.transcode_start_time = time.time()
+            transcoding_running_jobs[transcoding_job.id] = transcoding_job
+            # Create async task for transcoding
+            asyncio.create_task(handle_transcoding(transcoding_job.id))
+
+
 async def cleanup_old_results():
     current_time = datetime.now()
     jobs_to_delete = []
@@ -2012,6 +2084,7 @@ async def cleanup_old_results():
 
 async def event_loop():
     while True:
+        await submit_next_transcoding_task()
         await submit_next_task(queues[SHORT], running_jobs[SHORT], max_parallel_jobs[SHORT], SHORT)
         await submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG], LONG)
         await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
