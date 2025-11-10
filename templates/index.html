@@ -3875,22 +3875,29 @@
         return groups.join("\n\n")
       }
 
-      // Viewer download menu - only JSON is enabled
+      // Viewer download menu - all formats enabled
       document.getElementById('viewer-menu-json').addEventListener('click', () => {
         if (!currentViewerData) return
         const fileName = document.getElementById('viewer-file-name').textContent
         downloadInFormat(currentViewerData.results, fileName, 'json', currentViewerLanguage)
       })
       
-      // Hide non-JSON download options
-      const viewerMenuVttButton = document.getElementById('viewer-menu-vtt')
-      const viewerMenuSrtButton = document.getElementById('viewer-menu-srt')
-      const viewerMenuDocxButton = document.getElementById('viewer-menu-docx')
-      ;[viewerMenuVttButton, viewerMenuSrtButton, viewerMenuDocxButton].forEach((btn) => {
-        if (btn) {
-          btn.disabled = true
-          btn.style.display = 'none'
-        }
+      document.getElementById('viewer-menu-vtt').addEventListener('click', () => {
+        if (!currentViewerData) return
+        const fileName = document.getElementById('viewer-file-name').textContent
+        downloadInFormat(currentViewerData.results, fileName, 'vtt', currentViewerLanguage)
+      })
+      
+      document.getElementById('viewer-menu-srt').addEventListener('click', () => {
+        if (!currentViewerData) return
+        const fileName = document.getElementById('viewer-file-name').textContent
+        downloadInFormat(currentViewerData.results, fileName, 'srt', currentViewerLanguage)
+      })
+      
+      document.getElementById('viewer-menu-docx').addEventListener('click', () => {
+        if (!currentViewerData) return
+        const fileName = document.getElementById('viewer-file-name').textContent
+        downloadInFormat(currentViewerData.results, fileName, 'docx', currentViewerLanguage)
       })
     </script>
   </body>
