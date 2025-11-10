@@ -3468,8 +3468,9 @@
           
           if (response.ok) {
             showToast((window.I18N ? window.I18N.t('fileDeletedSuccess') : 'הקובץ נמחק בהצלחה'), 'success')
-            // Refresh the files list
-            loadSavedFiles(false)
+            // Invalidate client-side cache and refresh the files list
+            lastKnownEntries = null
+            loadSavedFiles(true)
           } else {
             showToast(data.error || (window.I18N ? window.I18N.t('deleteError') : 'שגיאה במחיקת הקובץ'), 'error')
           }
