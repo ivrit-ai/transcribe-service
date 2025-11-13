@@ -2431,8 +2431,8 @@
         const formData = new FormData()
         formData.append("file", selectedFile)
 
-        // Add RunPod credentials if available
-        const token = getCookie("runpod_token")
+        // Add RunPod credentials if available (from input field OR cookie)
+        const token = runpodTokenInput.value.trim() || getCookie("runpod_token")
         if (token) {
           formData.append("runpod_token", token)
         }
