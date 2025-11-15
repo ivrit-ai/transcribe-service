@@ -2,11 +2,16 @@
 
 import os
 import json
+import time
 import hashlib
 import logging
 import aiohttp
 import dotenv
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
+# Access token caching
+ACCESS_TOKEN_EXPIRY_TIME = int(os.environ.get("GOOGLE_ACCESS_TOKEN_EXPIRY_SECONDS", "3600"))
+ACCESS_TOKEN_REFRESH_THRESHOLD = ACCESS_TOKEN_EXPIRY_TIME * 0.9
+access_token_cache: Dict[str, Dict[str, Any]] = {}
 
 # Load environment variables
 dotenv.load_dotenv()
@@ -30,7 +35,15 @@ def _get_folder_cache_key(refresh_token: str) -> str:
 
 
 async def refresh_google_access_token(refresh_token: str) -> Optional[dict]:
-    """Use a refresh token to obtain a new access token."""
+    """Use a refresh token to obtain a new access token, with time-based caching."""
+    cache_key = _get_folder_cache_key(refresh_token)
+    cached_entry = access_token_cache.get(cache_key)
+
+    if cached_entry:
+        age = time.time() - cached_entry["timestamp"]
+        if age < ACCESS_TOKEN_REFRESH_THRESHOLD:
+            return cached_entry["data"]
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -46,6 +59,11 @@ async def refresh_google_access_token(refresh_token: str) -> Optional[dict]:
                 if "error" in data:
                     logger.error(f"Google token refresh failed: {data}")
                     return None
+
+                access_token_cache[cache_key] = {
+                    "data": data,
+                    "timestamp": time.time(),
+                }
                 return data
     except Exception as e:
         logger.error(f"Exception during token refresh: {e}")
