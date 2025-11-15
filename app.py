@@ -197,6 +197,8 @@ from gdrive_utils import (
     download_drive_file_bytes,
     find_drive_file_by_name,
     delete_drive_file,
+    ensure_drive_folder,
+    GoogleDriveError,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REDIRECT_URI,
@@ -1585,6 +1587,9 @@ async def upload_file(
         except (ValueError, TypeError):
             pass
 
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+
     metadata, error_response = await validate_upload_request_metadata(
         request,
         user_email=user_email,
@@ -1592,6 +1597,7 @@ async def upload_file(
         runpod_token=runpod_token,
         save_audio=save_audio,
         file_size=content_length,
+        refresh_token=refresh_token,
     )
     if error_response:
         return error_response
@@ -1647,10 +1653,6 @@ async def upload_file(
 
     # Store the temporary file path
     temp_files[job_id] = temp_file_path
-    
-    # Retrieve Google refresh token from session
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
     
     # Create transcoding job descriptor
     transcoding_job = box.Box()
@@ -1787,6 +1789,7 @@ async def validate_upload_request_metadata(
     runpod_token: Optional[str],
     save_audio: Optional[str],
     file_size: Optional[int],
+    refresh_token: Optional[str],
 ) -> tuple[Optional[dict], Optional[JSONResponse]]:
     if in_hiatus_mode:
         return None, JSONResponse({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}, status_code=503)
@@ -1807,6 +1810,22 @@ async def validate_upload_request_metadata(
 
     if save_audio is None:
         return None, JSONResponse({"error": "Missing save_audio parameter"}, status_code=400)
+
+    if not refresh_token:
+        return None, JSONResponse({"error": "לא זוהה חיבור ל-Google Drive. אנא התחבר מחדש."}, status_code=401)
+
+    try:
+        folder_id = await ensure_drive_folder(refresh_token)
+    except GoogleDriveError as exc:
+        error_text = str(exc).lower()
+        if "access_token_scope_insufficient" in error_text or "insufficientpermission" in error_text:
+            return None, JSONResponse({"error": "הרשאות Google Drive חסרות. אנא התנתק והתחבר מחדש כדי לאשר גישה לדרייב."}, status_code=403)
+        logger.error("Drive folder validation failed for %s: %s", user_email, exc)
+        return None, JSONResponse({"error": "שגיאה בגישה ל-Google Drive. אנא נסה שוב מאוחר יותר."}, status_code=500)
+
+    if not folder_id:
+        logger.warning("Drive folder not available during upload validation for %s", user_email)
+        return None, JSONResponse({"error": "לא ניתן לגשת ל-Google Drive. אנא התחבר מחדש."}, status_code=401)
 
     normalized_runpod_token = runpod_token.strip() if runpod_token else ""
     has_private_credentials = bool(normalized_runpod_token)
@@ -1862,6 +1881,9 @@ async def precheck_upload(request: Request):
     if not user_email:
         return JSONResponse({"error": "User email not found"}, status_code=401)
 
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+
     try:
         body = await request.json()
     except Exception:
@@ -1885,6 +1907,7 @@ async def precheck_upload(request: Request):
         runpod_token=body.get("runpod_token"),
         save_audio=body.get("save_audio"),
         file_size=file_size,
+        refresh_token=refresh_token,
     )
     if error_response:
         return error_response
