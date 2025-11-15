@@ -2222,6 +2222,35 @@
         }
       }
 
+      async function runUploadPrecheck({ fileSize, language, runpodToken, saveAudio }) {
+        try {
+          const response = await fetch("/upload/precheck", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              file_size: fileSize,
+              language,
+              runpod_token: runpodToken || "",
+              save_audio: saveAudio,
+            }),
+          })
+
+          const data = await response.json()
+          if (!response.ok || data.error) {
+            showError(data.error || (window.I18N ? window.I18N.t("uploadError") : "שגיאת העלאה"))
+            return { ok: false }
+          }
+
+          return { ok: true, data }
+        } catch (error) {
+          console.error("Precheck error:", error)
+          showError(window.I18N ? window.I18N.t("uploadError") : "שגיאת העלאה")
+          return { ok: false }
+        }
+      }
+
       // Initialize settings button indicator on page load
       updateSettingsButtonIndicator()
 
@@ -2425,29 +2454,39 @@
         }
       })
 
-      function uploadFile() {
+      async function uploadFile() {
         if (!selectedFile) return
+
+        const token = getCookie("runpod_token")
+        let selectedLang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
+        try {
+          if (languageSelect && languageSelect.value) {
+            selectedLang = languageSelect.value
+          }
+        } catch {}
+
+        const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
+        const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
+
+        const precheckResult = await runUploadPrecheck({
+          fileSize: selectedFile.size,
+          language: selectedLang,
+          runpodToken: token,
+          saveAudio: saveAudioValue,
+        })
+
+        if (!precheckResult.ok) {
+          return
+        }
 
         const formData = new FormData()
         formData.append("file", selectedFile)
 
-        // Add RunPod credentials if available
-        const token = getCookie("runpod_token")
         if (token) {
           formData.append("runpod_token", token)
         }
-
-        // Include selected transcription language for backend
-        try {
-          const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
-          formData.append('language', selectedLang)
-        } catch {}
-        
-        // Include save_audio checkbox value
-        const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
-        if (saveAudioCheckbox) {
-          formData.append('save_audio', saveAudioCheckbox.checked ? 'true' : 'false')
-        }
+        formData.append("language", selectedLang)
+        formData.append("save_audio", saveAudioValue)
 
         transcribeBtn.disabled = true
         progressContainer.style.display = "block"
@@ -2471,11 +2510,9 @@
             if (response.error) {
               showError(response.error)
             } else {
-              // Job queued successfully
               resetUploadState()
               activeTranscription = false
               showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.'), 'success')
-              // Switch to My Files tab
               switchTab('files')
             }
           } else {
@@ -2485,9 +2522,7 @@
               if (response.error) {
                 errorMessage = response.error
               }
-            } catch (e) {
-              // If parsing fails, use statusText as fallback
-            }
+            } catch (e) {}
 
             let reportMessage = `${errorMessage}`
 
@@ -2516,10 +2551,26 @@
 
         const token = getCookie("runpod_token")
         const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
+        const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
+        const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
 
         let successCount = 0
         for (let i = 0; i < selectedFiles.length; i++) {
           const file = selectedFiles[i]
+
+          const precheckResult = await runUploadPrecheck({
+            fileSize: file.size,
+            language: selectedLang,
+            runpodToken: token,
+            saveAudio: saveAudioValue,
+          })
+
+          if (!precheckResult.ok) {
+            transcribeBtn.disabled = false
+            progressContainer.style.display = "none"
+            progressBar.style.width = "0%"
+            return
+          }
 
           const formData = new FormData()
           formData.append("file", file)
@@ -2527,10 +2578,7 @@
           if (token) formData.append("runpod_token", token)
           
           // Include save_audio checkbox value
-          const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
-          if (saveAudioCheckbox) {
-            formData.append('save_audio', saveAudioCheckbox.checked ? 'true' : 'false')
-          }
+          formData.append('save_audio', saveAudioValue)
 
           try {
             const resp = await fetch("/upload", { method: "POST", body: formData })
