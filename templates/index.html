@@ -2425,8 +2425,22 @@
         }
       })
 
-      function uploadFile() {
+      async function uploadFile() {
         if (!selectedFile) return
+
+        // PRE-FLIGHT CHECK: Verify user doesn't have a job queued
+        try {
+          const checkResponse = await fetch('/api/check-job-status')
+          const checkData = await checkResponse.json()
+
+          if (checkResponse.status === 400 || checkData.has_job) {
+            showError(checkData.error)
+            return  // Stop before uploading
+          }
+        } catch (e) {
+          console.error('Job status check failed:', e)
+          // Continue with upload if check fails (fail-open)
+        }
 
         const formData = new FormData()
         formData.append("file", selectedFile)

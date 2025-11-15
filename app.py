@@ -1520,6 +1520,36 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
         return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
 
 
+@app.get("/api/check-job-status")
+async def check_job_status(request: Request):
+    """Check if user has any jobs queued or running before allowing upload"""
+    user_email = get_user_email(request)
+
+    # Check transcription jobs
+    if user_email in user_jobs:
+        return JSONResponse({
+            "has_job": True,
+            "error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."
+        }, status_code=400)
+
+    # Check transcoding jobs
+    async with transcoding_lock:
+        for queued_job in list(transcoding_queue.queue):
+            if queued_job.user_email == user_email:
+                return JSONResponse({
+                    "has_job": True,
+                    "error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."
+                }, status_code=400)
+        for existing_job_id, existing_job in transcoding_running_jobs.items():
+            if existing_job.user_email == user_email:
+                return JSONResponse({
+                    "has_job": True,
+                    "error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."
+                }, status_code=400)
+
+    return JSONResponse({"has_job": False})
+
+
 @app.post("/upload")
 async def upload_file(
     request: Request,
