@@ -17,6 +17,7 @@ access_token_cache: Dict[str, Dict[str, Any]] = {}
 dotenv.load_dotenv()
 
 logger = logging.getLogger("transcribe_service.gdrive_utils")
+logger.info("gdrive_utils module loaded - this message should appear in both console and app.log")
 
 # Google OAuth configuration
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]

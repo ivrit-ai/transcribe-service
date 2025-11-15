@@ -97,6 +97,30 @@ for lang_key, lang_cfg in LANG_CONFIG["languages"].items():
     if "enabled" not in lang_cfg or not isinstance(lang_cfg["enabled"], bool):
         raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'enabled' (bool)")
 
+# Configure logging EARLY - before any other imports that might create loggers
+LOG_FORMAT = "[%(asctime)s] %(message)s"
+LOGGER_NAME = "transcribe_service"
+
+# Ensure log file is created in the same directory as this script
+LOG_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.log")
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.handlers.clear()
+
+# Add file handler for app.log (no console handler - logs only to file)
+file_handler = RotatingFileHandler(
+    filename=LOG_FILE_PATH, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"  # 10MB
+)
+file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+root_logger.addHandler(file_handler)
+
+# Log a test message to verify file handler is working
+root_logger.info("File logging initialized - this message should appear in app.log")
+
+logger = logging.getLogger(LOGGER_NAME)
+logger.info("Logger configured for transcribe_service")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown"""
@@ -119,22 +143,6 @@ app = FastAPI(title="Transcription Service", version="1.0.0", lifespan=lifespan)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Configure logging
-LOG_FORMAT = "[%(asctime)s] %(message)s"
-LOGGER_NAME = "transcribe_service"
-
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-root_logger.handlers.clear()
-
-file_handler = RotatingFileHandler(
-    filename="app.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"  # 10MB
-)
-file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-root_logger.addHandler(file_handler)
-
-logger = logging.getLogger(LOGGER_NAME)
 
 # Templates
 templates = Jinja2Templates(directory="templates")
@@ -2217,4 +2225,4 @@ if __name__ == "__main__":
 
         ssl_kwargs = {"ssl_certfile": cert_file, "ssl_keyfile": key_file}
 
-    uvicorn.run(app, host="0.0.0.0", port=port, **ssl_kwargs)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_config=None, **ssl_kwargs)
