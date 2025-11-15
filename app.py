@@ -201,8 +201,8 @@ async def download_toc(refresh_token: Optional[str]) -> dict:
     """Download TOC file from Google Drive (gzipped), using cache if available."""
     cache_key = get_toc_cache_key(refresh_token)
     
-    # Try to get from cache first
-    if cache_key:
+    # Try to get from cache first (currently disabled)
+    if TOC_CACHE_ENABLED and cache_key:
         cached_toc = toc_cache.get(cache_key)
         if cached_toc is not None:
             return copy.deepcopy(cached_toc)
@@ -222,7 +222,7 @@ async def download_toc(refresh_token: Optional[str]) -> dict:
             toc_data = json.loads(file_bytes)
     
     # Store in cache (only persistent TOC from Google Drive)
-    if cache_key:
+    if TOC_CACHE_ENABLED and cache_key:
         toc_cache[cache_key] = copy.deepcopy(toc_data)
     
     return toc_data
@@ -248,7 +248,7 @@ async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: O
     # Invalidate cache for this refresh_token if upload was successful
     if success:
         cache_key = get_toc_cache_key(refresh_token)
-        if cache_key:
+        if TOC_CACHE_ENABLED and cache_key:
             toc_cache.pop(cache_key, None)
     
     return success
@@ -348,6 +348,7 @@ toc_locks = {}
 # LRU cache for persistent TOC data (keyed by refresh_token hash)
 TOC_CACHE_MAX_SIZE = int(os.environ.get("TOC_CACHE_MAX_SIZE", "100"))
 toc_cache = LRUCache(maxsize=TOC_CACHE_MAX_SIZE)
+TOC_CACHE_ENABLED = False
 
 def get_toc_cache_key(refresh_token: Optional[str]) -> Optional[str]:
     """Generate cache key from refresh_token."""

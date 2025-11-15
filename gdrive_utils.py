@@ -30,6 +30,18 @@ FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 folder_id_cache: Dict[str, str] = {}
 
 
+class GoogleAPIError(Exception):
+    """Base exception for Google API interactions."""
+
+
+class GoogleAuthError(GoogleAPIError):
+    """Raised when Google OAuth operations fail."""
+
+
+class GoogleDriveError(GoogleAPIError):
+    """Raised when Google Drive operations fail."""
+
+
 def _get_folder_cache_key(refresh_token: str) -> str:
     return hashlib.sha256(refresh_token.encode()).hexdigest()
 
@@ -55,19 +67,31 @@ async def refresh_google_access_token(refresh_token: str) -> Optional[dict]:
                     "refresh_token": refresh_token,
                 },
             ) as resp:
+                if not 200 <= resp.status < 300:
+                    err = await resp.text()
+                    logger.error(
+                        "Failed to refresh Google access token: %s %s",
+                        resp.status,
+                        err,
+                    )
+                    raise GoogleAuthError(
+                        f"Failed to refresh Google access token: {resp.status} {err}"
+                    )
                 data = await resp.json()
                 if "error" in data:
-                    logger.error(f"Google token refresh failed: {data}")
-                    return None
+                    logger.error("Google token refresh failed: %s", data)
+                    raise GoogleAuthError(f"Google token refresh failed: {data}")
 
                 access_token_cache[cache_key] = {
                     "data": data,
                     "timestamp": time.time(),
                 }
                 return data
-    except Exception as e:
-        logger.error(f"Exception during token refresh: {e}")
-        return None
+    except GoogleAPIError:
+        raise
+    except Exception as exc:
+        logger.exception("Exception during token refresh")
+        raise GoogleAuthError("Exception during token refresh") from exc
 
 
 async def get_access_token_from_refresh(refresh_token: Optional[str]) -> Optional[str]:
@@ -121,8 +145,14 @@ async def ensure_drive_folder(refresh_token: Optional[str], access_token: Option
                         return folder_id
                 else:
                     err = await resp.text()
-                    logger.error(f"Failed to query Drive folder: {resp.status} {err}")
-                    return None
+                    logger.error(
+                        "Failed to query Drive folder: %s %s",
+                        resp.status,
+                        err,
+                    )
+                    raise GoogleDriveError(
+                        f"Failed to query Drive folder: {resp.status} {err}"
+                    )
 
             create_headers = {
                 "Authorization": headers["Authorization"],
@@ -143,16 +173,30 @@ async def ensure_drive_folder(refresh_token: Optional[str], access_token: Option
                     folder_id = data.get("id")
                     if folder_id:
                         folder_id_cache[cache_key] = folder_id
-                        logger.info(f"Created Drive folder '{DRIVE_FOLDER_NAME}' with id {folder_id}")
+                        logger.info(
+                            "Created Drive folder '%s' with id %s",
+                            DRIVE_FOLDER_NAME,
+                            folder_id,
+                        )
                         return folder_id
                     logger.error("Drive API response missing folder id after creation")
-                    return None
+                    raise GoogleDriveError(
+                        "Drive API response missing folder id after creation"
+                    )
                 err = await create_resp.text()
-                logger.error(f"Failed to create Drive folder: {create_resp.status} {err}")
-                return None
-    except Exception as e:
-        logger.error(f"Exception ensuring Drive folder: {e}")
-        return None
+                logger.error(
+                    "Failed to create Drive folder: %s %s",
+                    create_resp.status,
+                    err,
+                )
+                raise GoogleDriveError(
+                    f"Failed to create Drive folder: {create_resp.status} {err}"
+                )
+    except GoogleAPIError:
+        raise
+    except Exception as exc:
+        logger.exception("Exception ensuring Drive folder")
+        raise GoogleDriveError("Exception ensuring Drive folder") from exc
 
 
 async def upload_to_drive_folder(refresh_token: Optional[str], filename: str, file_data: bytes, mime_type: str, user_email: Optional[str] = None) -> bool:
@@ -188,14 +232,27 @@ async def upload_to_drive_folder(refresh_token: Optional[str], filename: str, fi
                 headers=headers,
             ) as resp:
                 if 200 <= resp.status < 300:
-                    logger.info(f"Uploaded file to Drive for {user_email} as {filename}")
+                    logger.info(
+                        "Uploaded file to Drive for %s as %s",
+                        user_email,
+                        filename,
+                    )
                     return True
                 err = await resp.text()
-                logger.error(f"Failed to upload to Drive for {user_email}: {resp.status} {err}")
-                return False
-    except Exception as e:
-        logger.error(f"Exception uploading to Drive for {user_email}: {e}")
-        return False
+                logger.error(
+                    "Failed to upload to Drive for %s: %s %s",
+                    user_email,
+                    resp.status,
+                    err,
+                )
+                raise GoogleDriveError(
+                    f"Failed to upload to Drive: {resp.status} {err}"
+                )
+    except GoogleAPIError:
+        raise
+    except Exception as exc:
+        logger.exception("Exception uploading to Drive for %s", user_email)
+        raise GoogleDriveError("Exception uploading to Drive") from exc
 
 
 async def update_drive_file(refresh_token: Optional[str], file_id: str, file_data: bytes, mime_type: str, user_email: Optional[str] = None) -> bool:
@@ -217,14 +274,32 @@ async def update_drive_file(refresh_token: Optional[str], file_id: str, file_dat
                 data=file_data,
             ) as resp:
                 if 200 <= resp.status < 300:
-                    logger.info(f"Updated Drive file {file_id} for {user_email}")
+                    logger.info(
+                        "Updated Drive file %s for %s",
+                        file_id,
+                        user_email,
+                    )
                     return True
                 err = await resp.text()
-                logger.error(f"Failed to update Drive file {file_id} for {user_email}: {resp.status} {err}")
-                return False
-    except Exception as e:
-        logger.error(f"Exception updating Drive file {file_id} for {user_email}: {e}")
-        return False
+                logger.error(
+                    "Failed to update Drive file %s for %s: %s %s",
+                    file_id,
+                    user_email,
+                    resp.status,
+                    err,
+                )
+                raise GoogleDriveError(
+                    f"Failed to update Drive file {file_id}: {resp.status} {err}"
+                )
+    except GoogleAPIError:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Exception updating Drive file %s for %s",
+            file_id,
+            user_email,
+        )
+        raise GoogleDriveError("Exception updating Drive file") from exc
 
 
 async def download_drive_file_bytes(refresh_token: Optional[str], file_id: str) -> Optional[bytes]:
@@ -246,11 +321,20 @@ async def download_drive_file_bytes(refresh_token: Optional[str], file_id: str) 
                 if 200 <= resp.status < 300:
                     return await resp.read()
                 err = await resp.text()
-                logger.error(f"Failed to download Drive file {file_id}: {resp.status} {err}")
-                return None
-    except Exception as e:
-        logger.error(f"Exception downloading Drive file {file_id}: {e}")
-        return None
+                logger.error(
+                    "Failed to download Drive file %s: %s %s",
+                    file_id,
+                    resp.status,
+                    err,
+                )
+                raise GoogleDriveError(
+                    f"Failed to download Drive file {file_id}: {resp.status} {err}"
+                )
+    except GoogleAPIError:
+        raise
+    except Exception as exc:
+        logger.exception("Exception downloading Drive file %s", file_id)
+        raise GoogleDriveError("Exception downloading Drive file") from exc
 
 
 async def list_drive_folder_files(refresh_token: Optional[str]) -> Optional[list]:
@@ -284,11 +368,19 @@ async def list_drive_folder_files(refresh_token: Optional[str]) -> Optional[list
                     data = await resp.json()
                     return data.get("files", [])
                 err = await resp.text()
-                logger.error(f"Failed to list Drive files: {resp.status} {err}")
-                return None
-    except Exception as e:
-        logger.error(f"Exception listing Drive files: {e}")
-        return None
+                logger.error(
+                    "Failed to list Drive files: %s %s",
+                    resp.status,
+                    err,
+                )
+                raise GoogleDriveError(
+                    f"Failed to list Drive files: {resp.status} {err}"
+                )
+    except GoogleAPIError:
+        raise
+    except Exception as exc:
+        logger.exception("Exception listing Drive files")
+        raise GoogleDriveError("Exception listing Drive files") from exc
 
 
 async def find_drive_file_by_name(refresh_token: Optional[str], filename: str) -> Optional[str]:
@@ -326,11 +418,20 @@ async def find_drive_file_by_name(refresh_token: Optional[str], filename: str) -
                         return files[0]["id"]
                     return None
                 err = await resp.text()
-                logger.error(f"Failed to search Drive file {filename}: {resp.status} {err}")
-                return None
-    except Exception as e:
-        logger.error(f"Exception finding Drive file by name {filename}: {e}")
-        return None
+                logger.error(
+                    "Failed to search Drive file %s: %s %s",
+                    filename,
+                    resp.status,
+                    err,
+                )
+                raise GoogleDriveError(
+                    f"Failed to search Drive file {filename}: {resp.status} {err}"
+                )
+    except GoogleAPIError:
+        raise
+    except Exception as exc:
+        logger.exception("Exception finding Drive file by name %s", filename)
+        raise GoogleDriveError("Exception finding Drive file by name") from exc
 
 
 async def delete_drive_file(refresh_token: Optional[str], file_id: str, user_email: Optional[str] = None) -> bool:
@@ -351,12 +452,30 @@ async def delete_drive_file(refresh_token: Optional[str], file_id: str, user_ema
                 headers=headers,
             ) as resp:
                 if resp.status == 204:
-                    logger.info(f"Deleted Drive file {file_id} for {user_email or 'unknown user'}")
+                    logger.info(
+                        "Deleted Drive file %s for %s",
+                        file_id,
+                        user_email or "unknown user",
+                    )
                     return True
                 err = await resp.text()
-                logger.warning(f"Failed to delete Drive file {file_id} for {user_email}: {resp.status} {err}")
-                return False
-    except Exception as e:
-        logger.error(f"Exception deleting Drive file {file_id} for {user_email}: {e}")
-        return False
+                logger.error(
+                    "Failed to delete Drive file %s for %s: %s %s",
+                    file_id,
+                    user_email,
+                    resp.status,
+                    err,
+                )
+                raise GoogleDriveError(
+                    f"Failed to delete Drive file {file_id}: {resp.status} {err}"
+                )
+    except GoogleAPIError:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Exception deleting Drive file %s for %s",
+            file_id,
+            user_email,
+        )
+        raise GoogleDriveError("Exception deleting Drive file") from exc
 
