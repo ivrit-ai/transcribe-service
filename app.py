@@ -121,15 +121,20 @@ app = FastAPI(title="Transcription Service", version="1.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
-logger = logging.getLogger(__name__)
+LOG_FORMAT = "[%(asctime)s] %(message)s"
+LOGGER_NAME = "transcribe_service"
 
-# Configure file logging
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.handlers.clear()
+
 file_handler = RotatingFileHandler(
     filename="app.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"  # 10MB
 )
-file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s"))
-logger.addHandler(file_handler)
+file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+root_logger.addHandler(file_handler)
+
+logger = logging.getLogger(LOGGER_NAME)
 
 # Templates
 templates = Jinja2Templates(directory="templates")

@@ -11,7 +11,7 @@ from typing import Optional, Dict
 # Load environment variables
 dotenv.load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("transcribe_service.gdrive_utils")
 
 # Google OAuth configuration
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
