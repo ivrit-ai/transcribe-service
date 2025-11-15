@@ -75,7 +75,7 @@ REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically deriv
 
 
 in_dev = args.staging or args.dev
-in_hiatus_mode = args.hiatus
+in_hiatus_mode = args.hiatus or os.environ.get("TS_HIATUS_MODE", "0") == "1"
 verbose = args.verbose
 
 # Load language/model configuration (mandatory, after args are parsed)
