@@ -204,6 +204,14 @@ from gdrive_utils import (
     GOOGLE_REDIRECT_URI,
 )
 
+# Required OAuth2 scopes for Google authentication
+REQUIRED_OAUTH_SCOPES = [
+    "openid",
+    "email",
+    "profile",
+    "https://www.googleapis.com/auth/drive.file"
+]
+
 def log_message(message):
     logger.info(f"{message}")
 
@@ -1069,7 +1077,7 @@ async def authorize(request: Request):
         "response_type": "code",
         "redirect_uri": GOOGLE_REDIRECT_URI,
         # Request identity scopes + Drive AppData for storing results
-        "scope": "openid email profile https://www.googleapis.com/auth/drive.file",
+        "scope": " ".join(REQUIRED_OAUTH_SCOPES),
         "access_type": "offline",
         "prompt": "consent",
         "state": state
@@ -1523,6 +1531,21 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
                     error_message = f"Token exchange failed: {token_data.get('error_description', 'Unknown error')}"
                     return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
                 
+                # Validate that all required scopes were granted
+                required_scopes = set(REQUIRED_OAUTH_SCOPES)
+                granted_scopes_str = token_data.get("scope", "")
+                granted_scopes = set(granted_scopes_str.split())
+                
+                # Check if all required scopes are present in granted scopes
+                missing_scopes = required_scopes - granted_scopes
+                if missing_scopes:
+                    logger.warning(f"User did not grant all required scopes. Missing: {missing_scopes}")
+                    error_message = "השירות דורש הרשאות Google Drive כדי לשמור את התמלולים שלך. אנא אשר את כל ההרשאות המבוקשות כדי להמשיך."
+                    # Clean up OAuth state
+                    if session_id in sessions:
+                        sessions[session_id].pop("oauth_state", None)
+                    return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+                
                 access_token = token_data["access_token"]
                 
                 # Get user info using v2 endpoint
@@ -1932,7 +1955,7 @@ def clean_some_unicode_from_text(text):
     return text.translate({ord(c): None for c in chars_to_remove})
 
 
-@app.get("/download/{job_id}", dependencies=[Depends(require_google_login)])
+@app.get("/download/{job_id}")
 async def download_file(job_id: str, request: Request):
     if job_id not in temp_files:
         return JSONResponse({"error": "File not found"}, status_code=404)
