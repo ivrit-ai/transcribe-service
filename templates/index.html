@@ -2071,7 +2071,7 @@
 
           if (!response.ok) {
             showToast(
-              `שגיאה בבדיקת הגדרות RunPod:\n${response.status}: ${data.error}`,
+              `שגיאה בבדיקת הגדרות RunPod:\n${response.status}: ${translateServerError(data)}`,
               "error"
             )
           } else {
@@ -2096,7 +2096,7 @@
               updateSettingsButtonIndicator()
               checkBalance() // Update balance display
             } else {
-              showToast(`${window.I18N.t('endpointCheckError')}\n${endpointResult.error || ''}`.trim(), "error")
+              showToast(`${window.I18N.t('endpointCheckError')}\n${translateServerError(endpointResult) || ''}`.trim(), "error")
             }
           }
         } catch (error) {
@@ -2239,7 +2239,7 @@
             }
           } else {
             console.error("Endpoint check failed:", data.error)
-            return { success: false, error: data.error }
+            return { success: false, error: translateServerError(data) }
           }
         } catch (error) {
           console.error("Error checking endpoint:", error)
@@ -2284,7 +2284,7 @@
 
           const data = await response.json()
           if (!response.ok || data.error) {
-            showError(data.error || (window.I18N ? window.I18N.t("uploadError") : "שגיאת העלאה"))
+            showError(data || (window.I18N ? window.I18N.t("uploadError") : "שגיאת העלאה"))
             return { ok: false }
           }
 
@@ -2550,7 +2550,7 @@
           if (xhr.status === 200) {
             const response = JSON.parse(xhr.responseText)
             if (response.error) {
-              showError(response.error)
+              showError(response)
             } else {
               resetUploadState()
               activeTranscription = false
@@ -2562,7 +2562,7 @@
             try {
               const response = JSON.parse(xhr.responseText)
               if (response.error) {
-                errorMessage = response.error
+                errorMessage = translateServerError(response)
               }
             } catch (e) {}
 
@@ -2626,7 +2626,7 @@
             const resp = await fetch("/upload", { method: "POST", body: formData })
             const data = await resp.json()
             if (!resp.ok || data.error) {
-              const err = data && data.error ? data.error : (window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')
+              const err = translateServerError(data) || (window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')
               showToast(`${file.name}: ${err}`, "error")
               continue
             }
@@ -2947,8 +2947,48 @@
         return groups.join("\n\n")
       }
 
+      /**
+       * Translate server error response if it contains an i18n key
+       * @param {string|object} errorData - Error string or response object with error field
+       * @returns {string} - Translated error message
+       */
+      function translateServerError(errorData) {
+        // If errorData is a string, it might be an i18n key
+        if (typeof errorData === 'string') {
+          // Check if it looks like an i18n key (starts with 'error')
+          if (errorData.startsWith('error') && window.I18N) {
+            return window.I18N.t(errorData)
+          }
+          return errorData
+        }
+        
+        // If errorData is an object with error field
+        if (errorData && typeof errorData === 'object') {
+          const error = errorData.error
+          const i18nKey = errorData.i18n_key
+          const i18nVars = errorData.i18n_vars || {}
+          
+          // If we have an i18n_key field, use it for translation
+          if (i18nKey && window.I18N) {
+            return window.I18N.t(i18nKey, i18nVars)
+          }
+          
+          // Otherwise, check if error field looks like an i18n key
+          if (error && typeof error === 'string') {
+            if (error.startsWith('error') && window.I18N) {
+              return window.I18N.t(error, i18nVars)
+            }
+            return error
+          }
+        }
+        
+        // Fallback
+        return window.I18N ? window.I18N.t('errorInternalServer') : 'Internal server error'
+      }
+
       function showError(message) {
-        showToast(`${window.I18N.t('errorPrefix')}: ${message}`, 'error')
+        const translatedMessage = translateServerError(message)
+        showToast(`${window.I18N.t('errorPrefix')}: ${translatedMessage}`, 'error')
         resetAllState()
       }
 
@@ -3158,7 +3198,7 @@
           if (!response.ok) {
             if (showLoading) {
               filesError.style.display = 'block'
-              filesErrorMessage.textContent = data.error || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקבצים')
+              filesErrorMessage.textContent = translateServerError(data) || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקבצים')
             }
             // Silent failure for background refresh
             return
@@ -3474,7 +3514,7 @@
               loadSavedFiles(false)
             } else {
               nameElement.textContent = originalName
-              showToast(data.error || (window.I18N ? window.I18N.t('renameError') : 'שגיאה בשינוי השם'), 'error')
+              showToast(translateServerError(data) || (window.I18N ? window.I18N.t('renameError') : 'שגיאה בשינוי השם'), 'error')
             }
           } catch (error) {
             console.error('Rename error:', error)
@@ -3562,7 +3602,7 @@
             lastKnownEntries = null
             loadSavedFiles(true)
           } else {
-            showToast(data.error || (window.I18N ? window.I18N.t('deleteError') : 'שגיאה במחיקת הקובץ'), 'error')
+            showToast(translateServerError(data) || (window.I18N ? window.I18N.t('deleteError') : 'שגיאה במחיקת הקובץ'), 'error')
           }
         } catch (error) {
           console.error('Delete error:', error)
@@ -3612,7 +3652,7 @@
           
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
-            showToast(errorData.error || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
+            showToast(translateServerError(errorData) || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
             hideSpinner()
             return
           }

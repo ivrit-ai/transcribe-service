@@ -2,12 +2,16 @@
 <html>
 <head>
     <title>Login Result</title>
+    <script src="/static/i18n.js"></script>
     <script>
     window.onload = function() {
         if ({{ success|tojson }}) {
             window.opener.postMessage({type: 'login_success'}, '*');
         } else {
-            window.opener.postMessage({type: 'login_failure', message: {{ message|default('Login failed')|tojson }}}, '*');
+            const message = {{ message|default('Login failed')|tojson }};
+            const isI18nKey = {{ i18n_key|default(false)|tojson }};
+            const translatedMessage = isI18nKey && window.I18N ? window.I18N.t(message) : message;
+            window.opener.postMessage({type: 'login_failure', message: translatedMessage}, '*');
         }
         window.close();
     }
