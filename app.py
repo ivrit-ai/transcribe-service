@@ -207,8 +207,8 @@ from gdrive_utils import (
 # Required OAuth2 scopes for Google authentication
 REQUIRED_OAUTH_SCOPES = [
     "openid",
-    "email",
-    "profile",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/drive.file"
 ]
 
