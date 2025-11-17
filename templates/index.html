@@ -7,6 +7,12 @@
     <title>תמלול בעזרת ivrit.ai</title>
     <script src="https://cdn.jsdelivr.net/npm/html-docx-js/dist/html-docx.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@latest/dist/duckdb-mvp.wasm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@latest/dist/duckdb-browser-mvp.worker.js"></script>
+    <script type="module">
+      import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@latest/+esm';
+      window.duckdb = duckdb;
+    </script>
     <style>
       :root {
         --bg-color: #f5f5f5;
@@ -1385,6 +1391,137 @@
         direction: ltr;
         text-align: left;
       }
+
+      /* Search tab styles */
+      .search-container {
+        margin-top: 1rem;
+      }
+      .search-input-group {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+      }
+      .search-input {
+        flex: 1;
+        padding: 0.75rem;
+        border: 2px solid var(--border-color);
+        border-radius: 8px;
+        font-size: 1rem;
+        background-color: var(--input-bg);
+        color: var(--text-color);
+      }
+      .search-input:focus {
+        outline: none;
+        border-color: var(--primary-color);
+      }
+      .search-btn {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+        cursor: pointer;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+        white-space: nowrap;
+      }
+      .search-btn:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+      }
+      .search-btn:disabled {
+        background-color: var(--border-color);
+        cursor: not-allowed;
+      }
+      .search-status {
+        text-align: center;
+        padding: 1rem;
+        color: var(--text-color);
+        opacity: 0.7;
+        font-size: 0.9rem;
+      }
+      .search-progress {
+        margin: 1rem 0;
+        display: none;
+      }
+      .search-progress.show {
+        display: block;
+      }
+      .search-progress-bar-container {
+        width: 100%;
+        background-color: var(--secondary-color);
+        border-radius: 8px;
+        height: 24px;
+        overflow: hidden;
+        border: 1px solid var(--border-color);
+      }
+      .search-progress-bar {
+        height: 100%;
+        background-color: var(--primary-color);
+        transition: width 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+      .search-results {
+        margin-top: 1.5rem;
+      }
+      .search-result-item {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .search-result-item:hover {
+        border-color: var(--primary-color);
+        background: var(--container-bg);
+        transform: translateY(-2px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      }
+      .search-result-filename {
+        font-weight: 600;
+        color: var(--text-color);
+        margin-bottom: 0.5rem;
+        font-size: 1.05rem;
+      }
+      .search-result-matches {
+        font-size: 0.85rem;
+        color: var(--text-color);
+        opacity: 0.6;
+        margin-bottom: 0.5rem;
+      }
+      .search-result-snippet {
+        font-size: 0.9rem;
+        color: var(--text-color);
+        line-height: 1.6;
+        padding: 0.5rem;
+        background: var(--input-bg);
+        border-radius: 4px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .search-highlight {
+        background-color: #ffeb3b;
+        padding: 2px 4px;
+        border-radius: 2px;
+        font-weight: 600;
+      }
+      [data-theme="dark"] .search-highlight {
+        background-color: #f9a825;
+        color: #000;
+      }
+      .search-no-results {
+        text-align: center;
+        padding: 3rem 2rem;
+        color: var(--text-color);
+        opacity: 0.6;
+      }
     </style>
   </head>
   <body>
@@ -1438,6 +1575,7 @@
       <div class="tabs">
         <button class="tab-button active" data-tab="transcribe" data-i18n="tabTranscribe">תמלול חדש</button>
         <button class="tab-button" data-tab="files" data-i18n="tabMyFiles">הקבצים שלי</button>
+        <button class="tab-button" data-tab="search" data-i18n="tabSearch">חיפוש</button>
         <button class="tab-button" data-tab="viewer" id="viewer-tab-btn" style="display: none;" data-i18n="tabViewer">צפייה</button>
       </div>
 
@@ -1497,6 +1635,33 @@
         </div>
       </div>
       <!-- End My Files Tab -->
+
+      <!-- Search Tab Content -->
+      <div id="tab-search" class="tab-content">
+        <div class="search-container">
+          <div class="search-input-group">
+            <input 
+              type="text" 
+              id="search-input" 
+              class="search-input" 
+              placeholder="חפש בתמלולים..."
+              data-i18n-placeholder="searchPlaceholder"
+            />
+            <button id="search-btn" class="search-btn" data-i18n="search">חפש</button>
+          </div>
+
+          <div class="search-progress" id="search-progress">
+            <div class="search-progress-bar-container">
+              <div class="search-progress-bar" id="search-progress-bar">0%</div>
+            </div>
+          </div>
+
+          <div class="search-status" id="search-status"></div>
+
+          <div class="search-results" id="search-results"></div>
+        </div>
+      </div>
+      <!-- End Search Tab -->
 
       <!-- Viewer Tab Content -->
       <div id="tab-viewer" class="tab-content">
@@ -4029,6 +4194,310 @@
         const fileName = document.getElementById('viewer-file-name').textContent
         downloadInFormat(currentViewerData.results, fileName, 'docx', currentViewerLanguage)
       })
+
+      // ============================================================================
+      // SEARCH SERVICE - Client-side DuckDB-powered full-text search
+      // ============================================================================
+
+      let searchDB = null
+      let searchDBInitialized = false
+      let searchIndexLoaded = false
+
+      // Initialize DuckDB
+      async function initSearchDB() {
+        if (searchDBInitialized) return
+
+        try {
+          const DUCKDB_BUNDLES = window.duckdb.getJsDelivrBundles()
+          const bundle = await window.duckdb.selectBundle(DUCKDB_BUNDLES)
+          const worker = new Worker(bundle.mainWorker)
+          const logger = new window.duckdb.ConsoleLogger()
+          searchDB = new window.duckdb.AsyncDuckDB(logger, worker)
+          await searchDB.instantiate(bundle.mainModule, bundle.pthreadWorker)
+          
+          const conn = await searchDB.connect()
+          
+          // Create segments table
+          await conn.query(`
+            CREATE TABLE IF NOT EXISTS segments (
+              results_id VARCHAR,
+              segment_idx INTEGER,
+              text VARCHAR,
+              start DOUBLE,
+              "end" DOUBLE,
+              speakers VARCHAR
+            )
+          `)
+          
+          await conn.close()
+          
+          searchDBInitialized = true
+        } catch (error) {
+          console.error('Error initializing DuckDB:', error)
+          throw error
+        }
+      }
+
+      // Load all transcription data into DuckDB
+      async function loadSearchIndex() {
+        if (searchIndexLoaded) return
+
+        const statusEl = document.getElementById('search-status')
+        const progressEl = document.getElementById('search-progress')
+        const progressBar = document.getElementById('search-progress-bar')
+
+        try {
+          statusEl.textContent = 'מאתחל מסד נתונים...'
+          
+          // Initialize DB
+          await initSearchDB()
+
+          statusEl.textContent = 'טוען רשימת קבצים...'
+          
+          // Fetch TOC
+          const tocResponse = await fetch('/appdata/toc')
+          if (!tocResponse.ok) {
+            throw new Error('Failed to load TOC')
+          }
+          const tocData = await tocResponse.json()
+          const entries = tocData.entries || []
+
+          // Filter only ready entries with results_id
+          const readyEntries = entries.filter(e => e.status === 'Ready' && e.results_id)
+
+          if (readyEntries.length === 0) {
+            statusEl.textContent = 'אין קבצים לאינדקס'
+            return
+          }
+
+          // Show progress bar
+          progressEl.classList.add('show')
+          progressBar.textContent = '0%'
+          progressBar.style.width = '0%'
+
+          statusEl.textContent = `טוען ${readyEntries.length} קבצים...`
+
+          const conn = await searchDB.connect()
+
+          // Clear existing data
+          await conn.query('DELETE FROM segments')
+
+          // Load each entry's results
+          for (let i = 0; i < readyEntries.length; i++) {
+            const entry = readyEntries[i]
+            
+            // Update progress
+            const progress = Math.round(((i + 1) / readyEntries.length) * 100)
+            progressBar.style.width = `${progress}%`
+            progressBar.textContent = `${progress}%`
+
+            try {
+              // Fetch results file (gzipped)
+              const resultsResponse = await fetch(`/appdata/results/${entry.results_id}`)
+              if (!resultsResponse.ok) {
+                console.warn(`Failed to load results for ${entry.results_id}`)
+                continue
+              }
+
+              // Decompress
+              const arrayBuffer = await resultsResponse.arrayBuffer()
+              const decompressed = await decompressGzip(arrayBuffer)
+              const data = JSON.parse(decompressed)
+
+              const segments = data.results || []
+
+              // Insert segments into DuckDB
+              for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+                const seg = segments[segIdx]
+                const speakersStr = seg.speakers ? seg.speakers.join(',') : ''
+                
+                await conn.query(`
+                  INSERT INTO segments (results_id, segment_idx, text, start, "end", speakers)
+                  VALUES (?, ?, ?, ?, ?, ?)
+                `, [
+                  entry.results_id,
+                  segIdx,
+                  seg.text || '',
+                  seg.start || 0,
+                  seg.end || 0,
+                  speakersStr
+                ])
+              }
+            } catch (error) {
+              console.error(`Error loading entry ${entry.results_id}:`, error)
+            }
+          }
+
+          await conn.close()
+
+          progressEl.classList.remove('show')
+          statusEl.textContent = `אינדקס מוכן - ${readyEntries.length} קבצים`
+          searchIndexLoaded = true
+
+        } catch (error) {
+          console.error('Error loading search index:', error)
+          statusEl.textContent = 'שגיאה בטעינת האינדקס'
+          progressEl.classList.remove('show')
+          showToast('שגיאה בטעינת מנוע החיפוש', 'error')
+        }
+      }
+
+      // Perform search
+      async function performSearch(query) {
+        if (!query.trim()) {
+          document.getElementById('search-results').innerHTML = ''
+          document.getElementById('search-status').textContent = ''
+          return
+        }
+
+        const statusEl = document.getElementById('search-status')
+        const resultsContainer = document.getElementById('search-results')
+
+        try {
+          // Load index if not loaded
+          if (!searchIndexLoaded) {
+            await loadSearchIndex()
+          }
+
+          statusEl.textContent = 'מחפש...'
+          resultsContainer.innerHTML = ''
+
+          const conn = await searchDB.connect()
+
+          // Search for segments containing the query (case-insensitive)
+          const searchQuery = `
+            SELECT 
+              results_id,
+              segment_idx,
+              text,
+              start,
+              "end",
+              speakers
+            FROM segments
+            WHERE LOWER(text) LIKE LOWER(?)
+            ORDER BY results_id, segment_idx
+          `
+
+          const result = await conn.query(searchQuery, [`%${query}%`])
+          const rows = result.toArray()
+
+          await conn.close()
+
+          if (rows.length === 0) {
+            resultsContainer.innerHTML = '<div class="search-no-results"><i data-lucide="search-x" style="width: 48px; height: 48px; margin-bottom: 1rem;"></i><p>לא נמצאו תוצאות</p></div>'
+            statusEl.textContent = ''
+            if (window.lucide) window.lucide.createIcons()
+            return
+          }
+
+          // Group results by results_id
+          const groupedResults = {}
+          for (const row of rows) {
+            const resultsId = row.results_id
+            if (!groupedResults[resultsId]) {
+              groupedResults[resultsId] = []
+            }
+            groupedResults[resultsId].push(row)
+          }
+
+          // Fetch TOC to get filenames
+          const tocResponse = await fetch('/appdata/toc')
+          const tocData = await tocResponse.json()
+          const tocMap = {}
+          for (const entry of tocData.entries || []) {
+            if (entry.results_id) {
+              tocMap[entry.results_id] = entry
+            }
+          }
+
+          // Display results
+          const resultsHTML = []
+          for (const [resultsId, matches] of Object.entries(groupedResults)) {
+            const entry = tocMap[resultsId]
+            const filename = entry ? entry.source_filename : 'Unknown'
+            const matchCount = matches.length
+
+            // Get first match for snippet
+            const firstMatch = matches[0]
+            const snippet = highlightSearchTerm(firstMatch.text, query)
+
+            resultsHTML.push(`
+              <div class="search-result-item" data-results-id="${resultsId}">
+                <div class="search-result-filename">${escapeHtml(filename)}</div>
+                <div class="search-result-matches">${matchCount} תוצאות</div>
+                <div class="search-result-snippet">${snippet}</div>
+              </div>
+            `)
+          }
+
+          resultsContainer.innerHTML = resultsHTML.join('')
+          statusEl.textContent = `נמצאו ${Object.keys(groupedResults).length} קבצים עם ${rows.length} תוצאות`
+
+          // Add click handlers
+          document.querySelectorAll('.search-result-item').forEach(item => {
+            item.addEventListener('click', async () => {
+              const resultsId = item.getAttribute('data-results-id')
+              const entry = tocMap[resultsId]
+              if (entry) {
+                await viewSavedFileFromTOC(entry)
+              }
+            })
+          })
+
+          // Refresh icons
+          if (window.lucide) window.lucide.createIcons()
+
+        } catch (error) {
+          console.error('Search error:', error)
+          statusEl.textContent = 'שגיאה בחיפוש'
+          showToast('שגיאה בביצוע החיפוש', 'error')
+        }
+      }
+
+      // Highlight search term in text
+      function highlightSearchTerm(text, query) {
+        const escapedText = escapeHtml(text)
+        const escapedQuery = escapeHtml(query)
+        
+        // Case-insensitive replacement
+        const regex = new RegExp(`(${escapedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
+        return escapedText.replace(regex, '<span class="search-highlight">$1</span>')
+      }
+
+      // Escape HTML
+      function escapeHtml(text) {
+        const div = document.createElement('div')
+        div.textContent = text
+        return div.innerHTML
+      }
+
+      // Wire up search UI
+      document.getElementById('search-btn').addEventListener('click', () => {
+        const query = document.getElementById('search-input').value
+        performSearch(query)
+      })
+
+      document.getElementById('search-input').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          const query = document.getElementById('search-input').value
+          performSearch(query)
+        }
+      })
+
+      // Update switchTab to handle search tab
+      const originalSwitchTab = switchTab
+      switchTab = function(tabName) {
+        originalSwitchTab(tabName)
+        
+        // Initialize search index when switching to search tab (in background)
+        if (tabName === 'search' && !searchIndexLoaded) {
+          setTimeout(() => {
+            loadSearchIndex().catch(err => {
+              console.error('Failed to load search index:', err)
+            })
+          }, 100)
+        }
+      }
     </script>
   </body>
 </html>
