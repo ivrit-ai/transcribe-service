@@ -567,7 +567,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
 
     # Check if user already has a job queued or running
     if user_email in user_jobs:
-        return False, JSONResponse({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+        return False, JSONResponse({"error": "errorJobAlreadyActive", "i18n_key": "errorJobAlreadyActive"}, status_code=400)
 
     # Check rate limits only if not using custom RunPod credentials
     custom_runpod_credentials = bool(runpod_token)
@@ -580,12 +580,14 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
             log_message(f"{user_email}: Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
             
             if eta_seconds == float('inf'):
-                error_msg = f"הקובץ המבוקש גדול מדי ועובר את מגבלת השימוש החופשי הכוללת. אנא השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://youtu.be/xr8RQRFERLs"
+                return False, JSONResponse({"error": "errorFileTooLargeForFreeService", "i18n_key": "errorFileTooLargeForFreeService"}, status_code=429)
             else:
                 wait_minutes = math.ceil(eta_seconds / 60)
-                error_msg = f"עברת את מגבלת השימוש החופשי. אנא המתן {wait_minutes} דקות לפני העלאת קובץ חדש, או השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://youtu.be/xr8RQRFERLs"
-            
-            return False, JSONResponse({"error": error_msg}, status_code=429)
+                return False, JSONResponse({
+                    "error": "errorRateLimitExceeded",
+                    "i18n_key": "errorRateLimitExceeded",
+                    "i18n_vars": {"minutes": wait_minutes}
+                }, status_code=429)
 
     try:
         job_desc = box.Box()
@@ -645,7 +647,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
         log_message(f"{user_email}: Job queuing failed: {job_id}")
 
         cleanup_temp_file(job_id)
-        return False, JSONResponse({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}, status_code=503)
+        return False, JSONResponse({"error": "errorServerBusy", "i18n_key": "errorServerBusy"}, status_code=503)
 
 
 @app.get("/", dependencies=[Depends(require_google_login)])
@@ -688,16 +690,16 @@ async def get_toc(request: Request):
     user_email = get_user_email(request)
     
     if not refresh_token:
-        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     if not user_email:
-        return JSONResponse({"error": "User email not found"}, status_code=401)
+        return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
     
     # Load persistent TOC (cached in download_toc, only contains completed jobs)
     toc_data = await download_toc(refresh_token)
     
     if toc_data is None:
-        return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
+        return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
     
     # Make a copy to avoid modifying cached data
     toc_data = copy.deepcopy(toc_data)
@@ -867,20 +869,20 @@ async def get_transcription_results(results_id: str, request: Request):
     refresh_token = sessions.get(session_id, {}).get("refresh_token")
     
     if not refresh_token:
-        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     # Find the results file (gzipped)
     filename = f"{results_id}.json.gz"
     file_id = await find_drive_file_by_name(refresh_token, filename)
     
     if not file_id:
-        return JSONResponse({"error": "Results file not found"}, status_code=404)
+        return JSONResponse({"error": "errorResultsNotFound", "i18n_key": "errorResultsNotFound"}, status_code=404)
     
     # Download gzipped file as bytes
     file_content = await download_drive_file_bytes(refresh_token, file_id)
     
     if file_content is None:
-        return JSONResponse({"error": "Failed to download results"}, status_code=500)
+        return JSONResponse({"error": "errorResultsDownloadFailed", "i18n_key": "errorResultsDownloadFailed"}, status_code=500)
     
     # Return gzipped data for client-side decompression
     from fastapi.responses import Response
@@ -900,20 +902,20 @@ async def get_audio_file(results_id: str, request: Request):
     refresh_token = sessions.get(session_id, {}).get("refresh_token")
     
     if not refresh_token:
-        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     # Find the opus file
     filename = f"{results_id}.opus"
     file_id = await find_drive_file_by_name(refresh_token, filename)
     
     if not file_id:
-        return JSONResponse({"error": "Audio file not found"}, status_code=404)
+        return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
     
     # Download opus file as bytes
     file_content = await download_drive_file_bytes(refresh_token, file_id)
     
     if file_content is None:
-        return JSONResponse({"error": "Failed to download audio"}, status_code=500)
+        return JSONResponse({"error": "errorAudioDownloadFailed", "i18n_key": "errorAudioDownloadFailed"}, status_code=500)
     
     # Return opus audio file
     from fastapi.responses import Response
@@ -934,10 +936,10 @@ async def rename_file(request: Request):
     user_email = get_user_email(request)
     
     if not refresh_token:
-        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     if not user_email:
-        return JSONResponse({"error": "User email not found"}, status_code=401)
+        return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
     
     try:
         body = await request.json()
@@ -945,12 +947,12 @@ async def rename_file(request: Request):
         new_filename = body.get("new_filename")
         
         if not results_id or not new_filename:
-            return JSONResponse({"error": "Missing results_id or new_filename"}, status_code=400)
+            return JSONResponse({"error": "errorMissingNewFilename", "i18n_key": "errorMissingNewFilename"}, status_code=400)
         
         # Sanitize new filename
         new_filename = new_filename.strip()
         if not new_filename:
-            return JSONResponse({"error": "Filename cannot be empty"}, status_code=400)
+            return JSONResponse({"error": "errorFilenameEmpty", "i18n_key": "errorFilenameEmpty"}, status_code=400)
         
         # Acquire per-user lock for TOC updates
         toc_lock = get_toc_lock(user_email)
@@ -959,7 +961,7 @@ async def rename_file(request: Request):
             toc_data = await download_toc(refresh_token)
             
             if not toc_data or "entries" not in toc_data:
-                return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
+                return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
             
             # Find the entry with matching results_id
             entry_found = False
@@ -970,20 +972,20 @@ async def rename_file(request: Request):
                     break
             
             if not entry_found:
-                return JSONResponse({"error": "File not found in TOC"}, status_code=404)
+                return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
             
             # Upload updated TOC atomically
             success = await upload_toc(refresh_token, toc_data, user_email)
             
             if not success:
-                return JSONResponse({"error": "Failed to update TOC"}, status_code=500)
+                return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
         
         logging.info(f"{user_email}: Renamed file {results_id} to {new_filename}")
         return JSONResponse({"success": True, "new_filename": new_filename})
         
     except Exception as e:
         logging.error(f"Error renaming file: {e}")
-        return JSONResponse({"error": "Internal server error"}, status_code=500)
+        return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer"}, status_code=500)
 
 
 @app.post("/appdata/delete", dependencies=[Depends(require_google_login)])
@@ -994,17 +996,17 @@ async def delete_file(request: Request):
     user_email = get_user_email(request)
     
     if not refresh_token:
-        return JSONResponse({"error": "Not authenticated with Google Drive"}, status_code=401)
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     if not user_email:
-        return JSONResponse({"error": "User email not found"}, status_code=401)
+        return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
     
     try:
         body = await request.json()
         results_id = body.get("results_id")
         
         if not results_id:
-            return JSONResponse({"error": "Missing results_id"}, status_code=400)
+            return JSONResponse({"error": "errorMissingResultsId", "i18n_key": "errorMissingResultsId"}, status_code=400)
         
         # Acquire per-user lock for TOC updates
         toc_lock = get_toc_lock(user_email)
@@ -1013,7 +1015,7 @@ async def delete_file(request: Request):
             toc_data = await download_toc(refresh_token)
             
             if not toc_data or "entries" not in toc_data:
-                return JSONResponse({"error": "Failed to load TOC"}, status_code=500)
+                return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
             
             # Find and remove the entry with matching results_id
             entry_found = False
@@ -1027,13 +1029,13 @@ async def delete_file(request: Request):
                 entry_found = True
             
             if not entry_found:
-                return JSONResponse({"error": "File not found in TOC"}, status_code=404)
+                return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
             
             # Upload updated TOC atomically (removing from TOC first)
             success = await upload_toc(refresh_token, toc_data, user_email)
             
             if not success:
-                return JSONResponse({"error": "Failed to update TOC"}, status_code=500)
+                return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
         
         # After TOC update, delete associated files
         # Delete opus file if it exists
@@ -1053,7 +1055,7 @@ async def delete_file(request: Request):
         
     except Exception as e:
         logging.error(f"Error deleting file: {e}")
-        return JSONResponse({"error": "Internal server error"}, status_code=500)
+        return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer"}, status_code=500)
 
 
 @app.get("/login")
@@ -1391,11 +1393,11 @@ async def create_runpod_endpoint(api_key: str, template_id: str) -> Optional[dic
 async def get_balance(request: Request, runpod_token: str = None):
     """Get RunPod balance for the provided credentials"""
     if not runpod_token:
-        return JSONResponse({"error": "Missing RunPod token"}, status_code=400)
+        return JSONResponse({"error": "errorMissingRunpodToken", "i18n_key": "errorMissingRunpodToken"}, status_code=400)
     
     balance_info = await check_runpod_balance(runpod_token)
     if balance_info is None:
-        return JSONResponse({"error": "Failed to fetch balance"}, status_code=500)
+        return JSONResponse({"error": "errorBalanceFetchFailed", "i18n_key": "errorBalanceFetchFailed"}, status_code=500)
     
     return JSONResponse(balance_info)
 
@@ -1482,18 +1484,18 @@ async def check_endpoint(request: Request):
         runpod_token = body.get("runpod_token")
         
         if not runpod_token:
-            return JSONResponse({"error": "Missing RunPod token"}, status_code=400)
+            return JSONResponse({"error": "errorMissingRunpodToken", "i18n_key": "errorMissingRunpodToken"}, status_code=400)
         
         result = await check_runpod_endpoint(runpod_token)
         
         if result["success"]:
             return JSONResponse(result)
         else:
-            return JSONResponse({"error": result["error"]}, status_code=500)
+            return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer", "details": result.get("error", "")}, status_code=500)
             
     except Exception as e:
         logger.error(f"Error in check_endpoint: {e}")
-        return JSONResponse({"error": "Internal server error"}, status_code=500)
+        return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer"}, status_code=500)
 
 @app.get("/login/authorized")
 async def authorized(request: Request, code: str = None, state: str = None, error: str = None):
@@ -1540,11 +1542,11 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
                 missing_scopes = required_scopes - granted_scopes
                 if missing_scopes:
                     logger.warning(f"User did not grant all required scopes. Missing: {missing_scopes}")
-                    error_message = "השירות דורש הרשאות Google Drive כדי לשמור את התמלולים שלך. אנא אשר את כל ההרשאות המבוקשות כדי להמשיך."
+                    error_message = "errorDrivePermissionsRequired"
                     # Clean up OAuth state
                     if session_id in sessions:
                         sessions[session_id].pop("oauth_state", None)
-                    return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
+                    return templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message, "i18n_key": True})
                 
                 access_token = token_data["access_token"]
                 
@@ -1591,15 +1593,15 @@ async def upload_file(
 
     if in_hiatus_mode:
         capture_event(job_id, "file-upload-hiatus-rejected", {"user": user_email})
-        return JSONResponse({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}, status_code=503)
+        return JSONResponse({"error": "errorServiceUnavailable", "i18n_key": "errorServiceUnavailable"}, status_code=503)
 
     capture_event(job_id, "file-upload", {"user": user_email})
 
     if not file:
-        return JSONResponse({"error": "לא נבחר קובץ. אנא בחר קובץ להעלאה."}, status_code=200)
+        return JSONResponse({"error": "errorNoFileSelected", "i18n_key": "errorNoFileSelected"}, status_code=200)
 
     if file.filename == "":
-        return JSONResponse({"error": "שם הקובץ ריק. אנא בחר קובץ תקין."}, status_code=200)
+        return JSONResponse({"error": "errorEmptyFilename", "i18n_key": "errorEmptyFilename"}, status_code=200)
 
     filename = secure_filename(file.filename)
 
@@ -1646,7 +1648,11 @@ async def upload_file(
                 total_size += len(chunk)
                 if total_size > max_file_size:
                     os.unlink(temp_file_path)
-                    return JSONResponse({"error": f"הקובץ גדול מדי. הגודל המקסימלי המותר הוא {max_file_size_text}."}, status_code=400)
+                    return JSONResponse({
+                        "error": "errorFileTooLarge",
+                        "i18n_key": "errorFileTooLarge",
+                        "i18n_vars": {"size": max_file_size_text}
+                    }, status_code=400)
                 f.write(chunk)
         
         file_size = total_size
@@ -1654,25 +1660,24 @@ async def upload_file(
         # Clean up temp file if it exists
         if os.path.exists(temp_file_path):
             os.unlink(temp_file_path)
-        return JSONResponse({"error": f"העלאת הקובץ נכשלה: {str(e)}"}, status_code=200)
+        return JSONResponse({
+            "error": "errorUploadFailed",
+            "i18n_key": "errorUploadFailed",
+            "i18n_vars": {"details": str(e)}
+        }, status_code=200)
 
     # Get the MIME type of the file
     filetype = magic.Magic(mime=True).from_file(temp_file_path)
 
     if not is_ffmpeg_supported_mimetype(filetype):
-        return JSONResponse({"error": f"סוג הקובץ {filetype} אינו נתמך. אנא העלה קובץ אודיו או וידאו תקין."}, status_code=200)
+        return JSONResponse({
+            "error": "errorUnsupportedFileType",
+            "i18n_key": "errorUnsupportedFileType",
+            "i18n_vars": {"type": filetype}
+        }, status_code=200)
 
-    # Get the duration of the audio file
-    duration = get_media_duration(temp_file_path)
-
-    if duration is None:
-        return JSONResponse({"error": "לא ניתן לקרוא את משך הקובץ. אנא ודא שהקובץ תקין ונסה שוב."}, status_code=200)
-
-    # Check if audio duration exceeds maximum allowed duration
-    max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
-    if duration > max_duration_seconds:
-        cleanup_temp_file(job_id)
-        return JSONResponse({"error": f"הקובץ ארוך מדי. המשך המקסימלי המותר הוא {MAX_AUDIO_DURATION_IN_HOURS} שעות ({max_duration_seconds/3600:.1f} שעות), אך הקובץ שלך הוא {duration/3600:.1f} שעות."}, status_code=400)
+    # Estimate duration based on file size: 1 minute per 1MB (for transcoding progress only)
+    estimated_duration = (file_size / (1024 * 1024)) * 60
 
     # Store the temporary file path
     temp_files[job_id] = temp_file_path
@@ -1682,7 +1687,7 @@ async def upload_file(
     transcoding_job.id = job_id
     transcoding_job.filename = filename
     transcoding_job.user_email = user_email
-    transcoding_job.duration = duration
+    transcoding_job.duration = estimated_duration  # Estimated based on file size, will be validated after transcoding
     transcoding_job.runpod_token = runpod_token
     transcoding_job.language = requested_lang
     transcoding_job.refresh_token = refresh_token
@@ -1706,7 +1711,7 @@ async def upload_file(
     except queue.Full:
         cleanup_temp_file(job_id)
         log_message(f"{user_email}: Transcoding queue full for job {job_id}")
-        return JSONResponse({"error": "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר."}, status_code=503)
+        return JSONResponse({"error": "errorServerBusy", "i18n_key": "errorServerBusy"}, status_code=503)
 
 
 
@@ -1759,6 +1764,43 @@ async def handle_transcoding(job_id: str):
             if os.path.exists(output_path):
                 os.unlink(output_path)
             return
+        
+        # Get duration of transcoded file
+        duration = get_media_duration(input_path)
+        
+        if duration is None:
+            log_message(f"Cannot read duration of transcoded file for job {job_id}")
+            # Clean up
+            if job_id in transcoding_running_jobs:
+                del transcoding_running_jobs[job_id]
+            cleanup_temp_file(job_id)
+            # Store error in job_results for client to retrieve
+            if job_id in job_results:
+                job_results[job_id]["error"] = "errorCannotReadDuration"
+                job_results[job_id]["i18n_key"] = "errorCannotReadDuration"
+            return
+        
+        # Check if audio duration exceeds maximum allowed duration
+        max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
+        if duration > max_duration_seconds:
+            log_message(f"Transcoded file exceeds maximum duration for job {job_id}: {duration}s > {max_duration_seconds}s")
+            # Clean up
+            if job_id in transcoding_running_jobs:
+                del transcoding_running_jobs[job_id]
+            cleanup_temp_file(job_id)
+            # Store error in job_results for client to retrieve
+            if job_id in job_results:
+                job_results[job_id]["error"] = "errorFileTooLong"
+                job_results[job_id]["i18n_key"] = "errorFileTooLong"
+                job_results[job_id]["i18n_vars"] = {
+                    "maxHours": MAX_AUDIO_DURATION_IN_HOURS,
+                    "maxSeconds": f"{max_duration_seconds/3600:.1f}",
+                    "fileHours": f"{duration/3600:.1f}"
+                }
+            return
+        
+        # Update the job with actual duration
+        transcoding_job.duration = duration
         
         # Remove from running jobs
         if job_id in transcoding_running_jobs:
@@ -1815,76 +1857,84 @@ async def validate_upload_request_metadata(
     refresh_token: Optional[str],
 ) -> tuple[Optional[dict], Optional[JSONResponse]]:
     if in_hiatus_mode:
-        return None, JSONResponse({"error": "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר."}, status_code=503)
+        return None, JSONResponse({"error": "errorServiceUnavailable", "i18n_key": "errorServiceUnavailable"}, status_code=503)
 
     if not user_email:
-        return None, JSONResponse({"error": "User email not found"}, status_code=401)
+        return None, JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
 
     if user_email in user_jobs:
-        return None, JSONResponse({"error": "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+        return None, JSONResponse({"error": "errorJobAlreadyActive", "i18n_key": "errorJobAlreadyActive"}, status_code=400)
 
     async with transcoding_lock:
         for queued_job in list(transcoding_queue.queue):
             if queued_job.user_email == user_email:
-                return None, JSONResponse({"error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+                return None, JSONResponse({"error": "errorTranscodingJobActive", "i18n_key": "errorTranscodingJobActive"}, status_code=400)
         for existing_job_id, existing_job in transcoding_running_jobs.items():
             if existing_job.user_email == user_email:
-                return None, JSONResponse({"error": "יש לך כבר עבודה בתהליך המרה. אנא המתן לסיומה לפני העלאת קובץ חדש."}, status_code=400)
+                return None, JSONResponse({"error": "errorTranscodingJobActive", "i18n_key": "errorTranscodingJobActive"}, status_code=400)
 
     if save_audio is None:
-        return None, JSONResponse({"error": "Missing save_audio parameter"}, status_code=400)
+        return None, JSONResponse({"error": "errorMissingSaveAudio", "i18n_key": "errorMissingSaveAudio"}, status_code=400)
 
     if not refresh_token:
-        return None, JSONResponse({"error": "לא זוהה חיבור ל-Google Drive. אנא התחבר מחדש."}, status_code=401)
+        return None, JSONResponse({"error": "errorDriveNotConnected", "i18n_key": "errorDriveNotConnected"}, status_code=401)
 
     try:
         folder_id = await ensure_drive_folder(refresh_token)
     except GoogleDriveError as exc:
         error_text = str(exc).lower()
         if "access_token_scope_insufficient" in error_text or "insufficientpermission" in error_text:
-            return None, JSONResponse({"error": "הרשאות Google Drive חסרות. אנא התנתק והתחבר מחדש כדי לאשר גישה לדרייב."}, status_code=403)
+            return None, JSONResponse({"error": "errorDrivePermissionsInsufficient", "i18n_key": "errorDrivePermissionsInsufficient"}, status_code=403)
         logger.error("Drive folder validation failed for %s: %s", user_email, exc)
-        return None, JSONResponse({"error": "שגיאה בגישה ל-Google Drive. אנא נסה שוב מאוחר יותר."}, status_code=500)
+        return None, JSONResponse({"error": "errorDriveAccessFailed", "i18n_key": "errorDriveAccessFailed"}, status_code=500)
 
     if not folder_id:
         logger.warning("Drive folder not available during upload validation for %s", user_email)
-        return None, JSONResponse({"error": "לא ניתן לגשת ל-Google Drive. אנא התחבר מחדש."}, status_code=401)
+        return None, JSONResponse({"error": "errorDriveUnavailable", "i18n_key": "errorDriveUnavailable"}, status_code=401)
 
     normalized_runpod_token = runpod_token.strip() if runpod_token else ""
     has_private_credentials = bool(normalized_runpod_token)
 
     if not language:
-        return None, JSONResponse({"error": "Missing language"}, status_code=400)
+        return None, JSONResponse({"error": "errorMissingLanguage", "i18n_key": "errorMissingLanguage"}, status_code=400)
 
     languages_cfg = LANG_CONFIG["languages"]
     if language not in languages_cfg:
-        return None, JSONResponse({"error": "Unsupported language"}, status_code=400)
+        return None, JSONResponse({"error": "errorUnsupportedLanguage", "i18n_key": "errorUnsupportedLanguage"}, status_code=400)
 
     lang_cfg = languages_cfg[language]
 
     if (not lang_cfg["general_availability"]) and (not has_private_credentials):
-        return None, JSONResponse({"error": "שפה זו זמינה רק לשימוש עם מפתח RunPod פרטי."}, status_code=400)
+        return None, JSONResponse({"error": "errorLanguageRequiresPrivateKey", "i18n_key": "errorLanguageRequiresPrivateKey"}, status_code=400)
 
     max_file_size = MAX_FILE_SIZE_PRIVATE if has_private_credentials else MAX_FILE_SIZE_REGULAR
     max_file_size_text = "3GB" if has_private_credentials else "300MB"
 
     if file_size is not None and file_size > max_file_size:
-        return None, JSONResponse({"error": f"הקובץ גדול מדי. הגודל המקסימלי המותר הוא {max_file_size_text}."}, status_code=400)
+        return None, JSONResponse({
+            "error": "errorFileTooLarge",
+            "i18n_key": "errorFileTooLarge",
+            "i18n_vars": {"size": max_file_size_text}
+        }, status_code=400)
 
     save_audio_bool = str(save_audio).lower() == "true"
 
     if normalized_runpod_token:
         endpoint_result = await check_runpod_endpoint(normalized_runpod_token)
         if not endpoint_result["success"]:
-            return None, JSONResponse({"error": f"שגיאה בבדיקת ה-endpoint: {endpoint_result['error']}"}, status_code=400)
+            return None, JSONResponse({
+                "error": "errorEndpointCheckFailed",
+                "i18n_key": "errorEndpointCheckFailed",
+                "i18n_vars": {"details": endpoint_result.get('error', '')}
+            }, status_code=400)
 
         if endpoint_result.get("needs_wait", False):
             action = endpoint_result.get("action", "updated")
             if action == "created":
-                message = "נוצר endpoint חדש עבור המפתח שלך. אנא המתן 3 דקות לפני העלאת קבצים."
+                i18n_key = "errorEndpointCreated"
             else:
-                message = "ה-endpoint שלך עודכן. אנא המתן 3 דקות לפני העלאת קבצים."
-            return None, JSONResponse({"error": message}, status_code=400)
+                i18n_key = "errorEndpointUpdated"
+            return None, JSONResponse({"error": i18n_key, "i18n_key": i18n_key}, status_code=400)
 
     metadata = {
         "lang_cfg": lang_cfg,
@@ -1910,18 +1960,18 @@ async def precheck_upload(request: Request):
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        return JSONResponse({"error": "errorInvalidJson", "i18n_key": "errorInvalidJson"}, status_code=400)
 
     file_size_raw = body.get("file_size")
     if file_size_raw is None:
-        return JSONResponse({"error": "Missing file_size"}, status_code=400)
+        return JSONResponse({"error": "errorMissingFileSize", "i18n_key": "errorMissingFileSize"}, status_code=400)
 
     try:
         file_size = int(file_size_raw)
         if file_size < 0:
             raise ValueError
     except (TypeError, ValueError):
-        return JSONResponse({"error": "Invalid file_size"}, status_code=400)
+        return JSONResponse({"error": "errorInvalidFileSize", "i18n_key": "errorInvalidFileSize"}, status_code=400)
 
     metadata, error_response = await validate_upload_request_metadata(
         request,
