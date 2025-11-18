@@ -1676,25 +1676,8 @@ async def upload_file(
             "i18n_vars": {"type": filetype}
         }, status_code=200)
 
-    # Get the duration of the audio file
-    duration = get_media_duration(temp_file_path)
-
-    if duration is None:
-        return JSONResponse({"error": "errorCannotReadDuration", "i18n_key": "errorCannotReadDuration"}, status_code=200)
-
-    # Check if audio duration exceeds maximum allowed duration
-    max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
-    if duration > max_duration_seconds:
-        cleanup_temp_file(job_id)
-        return JSONResponse({
-            "error": "errorFileTooLong",
-            "i18n_key": "errorFileTooLong",
-            "i18n_vars": {
-                "maxHours": MAX_AUDIO_DURATION_IN_HOURS,
-                "maxSeconds": f"{max_duration_seconds/3600:.1f}",
-                "fileHours": f"{duration/3600:.1f}"
-            }
-        }, status_code=400)
+    # Estimate duration based on file size: 1 minute per 1MB (for transcoding progress only)
+    estimated_duration = (file_size / (1024 * 1024)) * 60
 
     # Store the temporary file path
     temp_files[job_id] = temp_file_path
@@ -1704,7 +1687,7 @@ async def upload_file(
     transcoding_job.id = job_id
     transcoding_job.filename = filename
     transcoding_job.user_email = user_email
-    transcoding_job.duration = duration
+    transcoding_job.duration = estimated_duration  # Estimated based on file size, will be validated after transcoding
     transcoding_job.runpod_token = runpod_token
     transcoding_job.language = requested_lang
     transcoding_job.refresh_token = refresh_token
@@ -1781,6 +1764,43 @@ async def handle_transcoding(job_id: str):
             if os.path.exists(output_path):
                 os.unlink(output_path)
             return
+        
+        # Get duration of transcoded file
+        duration = get_media_duration(input_path)
+        
+        if duration is None:
+            log_message(f"Cannot read duration of transcoded file for job {job_id}")
+            # Clean up
+            if job_id in transcoding_running_jobs:
+                del transcoding_running_jobs[job_id]
+            cleanup_temp_file(job_id)
+            # Store error in job_results for client to retrieve
+            if job_id in job_results:
+                job_results[job_id]["error"] = "errorCannotReadDuration"
+                job_results[job_id]["i18n_key"] = "errorCannotReadDuration"
+            return
+        
+        # Check if audio duration exceeds maximum allowed duration
+        max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
+        if duration > max_duration_seconds:
+            log_message(f"Transcoded file exceeds maximum duration for job {job_id}: {duration}s > {max_duration_seconds}s")
+            # Clean up
+            if job_id in transcoding_running_jobs:
+                del transcoding_running_jobs[job_id]
+            cleanup_temp_file(job_id)
+            # Store error in job_results for client to retrieve
+            if job_id in job_results:
+                job_results[job_id]["error"] = "errorFileTooLong"
+                job_results[job_id]["i18n_key"] = "errorFileTooLong"
+                job_results[job_id]["i18n_vars"] = {
+                    "maxHours": MAX_AUDIO_DURATION_IN_HOURS,
+                    "maxSeconds": f"{max_duration_seconds/3600:.1f}",
+                    "fileHours": f"{duration/3600:.1f}"
+                }
+            return
+        
+        # Update the job with actual duration
+        transcoding_job.duration = duration
         
         # Remove from running jobs
         if job_id in transcoding_running_jobs:
