@@ -1385,6 +1385,16 @@
         direction: ltr;
         text-align: left;
       }
+      /* Red mic button hover effect */
+      .record-mic-only-btn:hover {
+        background-color: #c82333 !important;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(220, 53, 69, 0.4);
+      }
+      /* Dropdown menu item hover effect */
+      .record-dropdown button:hover {
+        background-color: var(--hover-bg);
+      }
     </style>
   </head>
   <body>
@@ -1443,9 +1453,57 @@
 
       <!-- Transcribe Tab Content -->
       <div id="tab-transcribe" class="tab-content active">
+      
+      <!-- Recording Interface -->
+      <div id="recording-interface" style="display: none;">
+        <div style="text-align: center; padding: 2rem;">
+          <canvas id="waveform-canvas" width="500" height="150" style="border: 2px solid var(--border-color); border-radius: 12px; background: var(--secondary-color); max-width: 100%;"></canvas>
+          <div id="recording-timer" style="font-size: 2rem; font-weight: bold; margin: 1rem 0; color: var(--primary-color);">00:00</div>
+          <button id="stop-recording-btn" class="btn btn-primary" style="padding: 0.75rem 1.5rem; font-size: 1rem;">
+            <i data-lucide="square" style="width: 16px; height: 16px; margin-left: 0.5rem;"></i>
+            <span data-i18n="stopRecording">עצור הקלטה</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Recorded Audio Preview -->
+      <div id="recorded-audio-preview" style="display: none;">
+        <div style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem;">
+          <div style="text-align: center; margin-bottom: 1rem;">
+            <i data-lucide="mic" style="width: 48px; height: 48px; color: var(--primary-color);"></i>
+          </div>
+          <audio id="recorded-audio-player" controls style="width: 100%;"></audio>
+        </div>
+      </div>
+
       <div id="drop-area">
         <p data-i18n="dropPrompt">גרור קובץ לכאן או לחץ לבחירת קובץ</p>
         <input type="file" id="file-input" accept="audio/*,video/*" />
+      </div>
+      
+      <!-- Record Audio Button with Menu -->
+      <div style="text-align: center; margin-top: 1rem;">
+        <div class="record-menu" style="display: inline-block; position: relative;">
+          <button id="record-menu-btn" class="btn record-mic-only-btn" style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background-color: #dc3545; border: none; padding: 0; transition: all 0.2s ease;" data-i18n-title="recordAudio">
+            <i data-lucide="mic" style="width: 24px; height: 24px; color: white;"></i>
+          </button>
+          <div class="record-dropdown" style="display: none; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 0.5rem; background: var(--container-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); padding: 0.4rem 0; min-width: 180px; z-index: 200; direction: rtl;">
+            <button type="button" id="record-mic-only-btn" style="background: none; border: none; width: 100%; text-align: right; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem; direction: rtl; justify-content: flex-end;">
+              <span data-i18n="recordMicOnly">הקלט ממיקרופון בלבד</span>
+              <i data-lucide="mic" style="width: 18px; height: 18px;"></i>
+            </button>
+            <button type="button" id="record-mic-screen-btn" style="background: none; border: none; width: 100%; text-align: right; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem; direction: rtl; justify-content: flex-end;">
+              <span data-i18n="recordMicAndScreen">הקלט מיקרופון + מסך</span>
+              <i data-lucide="mic" style="width: 16px; height: 16px;"></i>
+              <span style="font-size: 0.9rem;">+</span>
+              <i data-lucide="monitor" style="width: 16px; height: 16px;"></i>
+            </button>
+            <button type="button" id="record-screen-only-btn" style="background: none; border: none; width: 100%; text-align: right; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem; direction: rtl; justify-content: flex-end;">
+              <span data-i18n="recordScreenOnly">הקלט ממסך בלבד</span>
+              <i data-lucide="monitor" style="width: 18px; height: 18px;"></i>
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="file-preview" id="file-preview">
@@ -1931,6 +1989,29 @@
         document.getElementById("file-name").style.display = "block"
         document.getElementById("file-name").textContent = ""
         fileInput.value = ""
+        
+        // Hide recorded audio preview if it's showing
+        const recordedAudioPreview = document.getElementById('recorded-audio-preview')
+        const recordedAudioPlayer = document.getElementById('recorded-audio-player')
+        if (recordedAudioPreview && recordedAudioPreview.style.display !== 'none') {
+          recordedAudioPreview.style.display = 'none'
+          if (recordedAudioPlayer && recordedAudioPlayer.src) {
+            URL.revokeObjectURL(recordedAudioPlayer.src)
+            recordedAudioPlayer.src = ''
+          }
+          // Clear recording data
+          if (typeof recordedBlob !== 'undefined') {
+            recordedBlob = null
+          }
+          if (typeof audioChunks !== 'undefined') {
+            audioChunks = []
+          }
+          const recordingTimer = document.getElementById('recording-timer')
+          if (recordingTimer) {
+            recordingTimer.textContent = '00:00'
+          }
+        }
+        
         showToast(window.I18N.t('fileRemovedSuccess'), "success")
       }
 
@@ -4029,6 +4110,562 @@
         const fileName = document.getElementById('viewer-file-name').textContent
         downloadInFormat(currentViewerData.results, fileName, 'docx', currentViewerLanguage)
       })
+
+      // ========== MICROPHONE RECORDING FUNCTIONALITY ==========
+      
+      let mediaRecorder = null
+      let audioChunks = []
+      let recordingStream = null
+      let audioContext = null
+      let analyser = null
+      let animationFrameId = null
+      let recordingStartTime = null
+      let recordingTimerInterval = null
+      let recordedBlob = null
+
+      const recordMenuBtn = document.getElementById('record-menu-btn')
+      const recordDropdown = document.querySelector('.record-dropdown')
+      const recordMenu = document.querySelector('.record-menu')
+      const recordMicOnlyBtn = document.getElementById('record-mic-only-btn')
+      const recordMicScreenBtn = document.getElementById('record-mic-screen-btn')
+      const recordScreenOnlyBtn = document.getElementById('record-screen-only-btn')
+      const stopRecordingBtn = document.getElementById('stop-recording-btn')
+      const recordingInterface = document.getElementById('recording-interface')
+      const recordedAudioPreview = document.getElementById('recorded-audio-preview')
+      const recordedAudioPlayer = document.getElementById('recorded-audio-player')
+      const waveformCanvas = document.getElementById('waveform-canvas')
+      const recordingTimer = document.getElementById('recording-timer')
+      
+      // Toggle dropdown menu
+      recordMenuBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        recordDropdown.style.display = recordDropdown.style.display === 'none' ? 'block' : 'none'
+      })
+      
+      // Close dropdown when clicking outside
+      document.addEventListener('click', (e) => {
+        if (!recordMenu.contains(e.target)) {
+          recordDropdown.style.display = 'none'
+        }
+      })
+      
+      // Helper to close dropdown after selection
+      const closeDropdown = () => {
+        recordDropdown.style.display = 'none'
+      }
+
+      // Start recording from microphone only
+      recordMicOnlyBtn.addEventListener('click', async () => {
+        closeDropdown()
+        try {
+          // Request microphone access
+          recordingStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+              channelCount: 1,
+              sampleRate: 48000,
+              echoCancellation: true,
+              noiseSuppression: true
+            } 
+          })
+
+          // Set up Web Audio API for visualization
+          audioContext = new (window.AudioContext || window.webkitAudioContext)()
+          const source = audioContext.createMediaStreamSource(recordingStream)
+          analyser = audioContext.createAnalyser()
+          analyser.fftSize = 2048
+          analyser.smoothingTimeConstant = 0.8
+          source.connect(analyser)
+
+          // Create MediaRecorder with opus codec if available
+          const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? { mimeType: 'audio/webm;codecs=opus' }
+            : { mimeType: 'audio/webm' }
+          
+          mediaRecorder = new MediaRecorder(recordingStream, options)
+          audioChunks = []
+
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              audioChunks.push(event.data)
+            }
+          }
+
+          mediaRecorder.onstop = () => {
+            recordedBlob = new Blob(audioChunks, { type: 'audio/webm' })
+            const audioUrl = URL.createObjectURL(recordedBlob)
+            recordedAudioPlayer.src = audioUrl
+            
+            // Stop all tracks
+            if (recordingStream) {
+              recordingStream.getTracks().forEach(track => track.stop())
+              recordingStream = null
+            }
+
+            // Stop audio context
+            if (audioContext) {
+              audioContext.close()
+              audioContext = null
+            }
+
+            // Convert blob to file and add to file list
+            const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
+            const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
+            
+            selectedFile = file
+            selectedFiles = []
+            batchMode = false
+            transcribeBtn.disabled = false
+
+            // Show file preview
+            showFilePreview(file)
+
+            // Show both player and normal UI
+            recordingInterface.style.display = 'none'
+            recordedAudioPreview.style.display = 'block'
+            dropArea.style.display = 'block'
+            recordMenu.style.display = 'inline-block'
+
+            // Refresh icons
+            if (window.lucide && typeof window.lucide.createIcons === 'function') {
+              window.lucide.createIcons()
+            }
+
+            showToast((window.I18N ? window.I18N.t('recordingReadyToTranscribe') : 'ההקלטה מוכנה לתמלול. לחץ על "תמלל" להמשך.'), 'success')
+          }
+
+          // Start recording
+          mediaRecorder.start(100) // Collect data every 100ms
+          recordingStartTime = Date.now()
+
+          // Show recording interface
+          dropArea.style.display = 'none'
+          recordMenu.style.display = 'none'
+          recordingInterface.style.display = 'block'
+
+          // Start visualization and timer
+          drawWaveform()
+          startRecordingTimer()
+
+          // Refresh icons
+          if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons()
+          }
+
+        } catch (error) {
+          console.error('Error accessing microphone:', error)
+          if (error.name === 'NotAllowedError') {
+            showToast((window.I18N ? window.I18N.t('micPermissionDenied') : 'הגישה למיקרופון נדחתה. אנא אפשר גישה למיקרופון בהגדרות הדפדפן.'), 'error')
+          } else {
+            showToast((window.I18N ? window.I18N.t('micError') : 'שגיאה בגישה למיקרופון. אנא ודא שהמיקרופון מחובר ומופעל.'), 'error')
+          }
+        }
+      })
+
+      // Start recording from screen/system audio only (no microphone)
+      recordScreenOnlyBtn.addEventListener('click', async () => {
+        closeDropdown()
+        try {
+          // Request system audio only
+          let systemStream = null
+          try {
+            systemStream = await navigator.mediaDevices.getDisplayMedia({
+              video: true, // Required for picker dialog
+              audio: true, // Makes audio sharing available
+              preferCurrentTab: false,
+              surfaceSwitching: "include",
+              systemAudio: "include"
+            })
+            
+            // Stop all video tracks immediately - we only want audio
+            systemStream.getVideoTracks().forEach(track => track.stop())
+            
+            // Check if audio was actually captured
+            if (!systemStream.getAudioTracks().length) {
+              throw new Error('No audio track available')
+            }
+          } catch (displayError) {
+            console.warn('Could not capture system audio:', displayError)
+            showToast((window.I18N ? window.I18N.t('screenAudioNotSelected') : 'לא נבחר אודיו מערכת'), 'error')
+            return
+          }
+
+          // Set up Web Audio API for visualization
+          audioContext = new (window.AudioContext || window.webkitAudioContext)()
+          const source = audioContext.createMediaStreamSource(systemStream)
+          analyser = audioContext.createAnalyser()
+          analyser.fftSize = 2048
+          analyser.smoothingTimeConstant = 0.8
+          source.connect(analyser)
+
+          // Use the system stream for recording
+          recordingStream = systemStream
+
+          // Create MediaRecorder with opus codec if available
+          const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? { mimeType: 'audio/webm;codecs=opus' }
+            : { mimeType: 'audio/webm' }
+          
+          mediaRecorder = new MediaRecorder(recordingStream, options)
+          audioChunks = []
+
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              audioChunks.push(event.data)
+            }
+          }
+
+          mediaRecorder.onstop = () => {
+            recordedBlob = new Blob(audioChunks, { type: 'audio/webm' })
+            const audioUrl = URL.createObjectURL(recordedBlob)
+            recordedAudioPlayer.src = audioUrl
+            
+            // Stop all tracks
+            if (recordingStream) {
+              recordingStream.getTracks().forEach(track => track.stop())
+              recordingStream = null
+            }
+
+            // Stop audio context
+            if (audioContext) {
+              audioContext.close()
+              audioContext = null
+            }
+
+            // Convert blob to file and add to file list
+            const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
+            const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
+            
+            selectedFile = file
+            selectedFiles = []
+            batchMode = false
+            transcribeBtn.disabled = false
+
+            // Show file preview
+            showFilePreview(file)
+
+            // Show both player and normal UI
+            recordingInterface.style.display = 'none'
+            recordedAudioPreview.style.display = 'block'
+            dropArea.style.display = 'block'
+            recordMenu.style.display = 'inline-block'
+
+            // Refresh icons
+            if (window.lucide && typeof window.lucide.createIcons === 'function') {
+              window.lucide.createIcons()
+            }
+
+            showToast((window.I18N ? window.I18N.t('recordingReadyToTranscribe') : 'ההקלטה מוכנה לתמלול. לחץ על "תמלל" להמשך.'), 'success')
+          }
+
+          // Start recording
+          mediaRecorder.start(100)
+          recordingStartTime = Date.now()
+
+          // Show recording interface
+          dropArea.style.display = 'none'
+          recordMenu.style.display = 'none'
+          recordingInterface.style.display = 'block'
+
+          // Start visualization and timer
+          drawWaveform()
+          startRecordingTimer()
+
+          // Refresh icons
+          if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons()
+          }
+
+        } catch (error) {
+          console.error('Error accessing screen audio:', error)
+          showToast((window.I18N ? window.I18N.t('screenAudioError') : 'שגיאה בגישה לאודיו המערכת'), 'error')
+        }
+      })
+
+      // Start recording from microphone and system audio
+      recordMicScreenBtn.addEventListener('click', async () => {
+        closeDropdown()
+        try {
+          // Request microphone access
+          const micStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+              channelCount: 1,
+              sampleRate: 48000,
+              echoCancellation: true,
+              noiseSuppression: true
+            } 
+          })
+
+          // Request system audio (screen/tab/window audio)
+          // Note: We need to request video for the browser to show the picker dialog
+          // We'll immediately stop the video track and only use audio
+          // Note: Browsers don't allow programmatically checking "Share audio" for security,
+          // but including audio constraints makes it available in the dialog
+          let systemStream = null
+          try {
+            systemStream = await navigator.mediaDevices.getDisplayMedia({
+              video: true, // Required for picker dialog
+              audio: true, // Makes audio sharing available (user must manually check)
+              preferCurrentTab: false,
+              surfaceSwitching: "include",
+              systemAudio: "include" // Hint to include system audio option if supported
+            })
+            
+            // Stop all video tracks immediately - we only want audio
+            systemStream.getVideoTracks().forEach(track => track.stop())
+          } catch (displayError) {
+            console.warn('Could not capture system audio:', displayError)
+            // Show warning but continue with microphone only
+            showToast((window.I18N ? window.I18N.t('recordingMicOnlyWarning') : 'הקלטה ממיקרופון בלבד (אודיו מערכת לא נבחר)'), 'error')
+          }
+
+          // Set up Web Audio API to mix both streams
+          audioContext = new (window.AudioContext || window.webkitAudioContext)()
+          const destination = audioContext.createMediaStreamDestination()
+          
+          // Connect microphone
+          const micSource = audioContext.createMediaStreamSource(micStream)
+          const micGain = audioContext.createGain()
+          micGain.gain.value = 1.0
+          micSource.connect(micGain)
+          micGain.connect(destination)
+
+          // Connect system audio if available
+          if (systemStream) {
+            const systemSource = audioContext.createMediaStreamSource(systemStream)
+            const systemGain = audioContext.createGain()
+            systemGain.gain.value = 1.0
+            systemSource.connect(systemGain)
+            systemGain.connect(destination)
+          }
+
+          // Set up analyzer for visualization (connected to mixed output)
+          analyser = audioContext.createAnalyser()
+          analyser.fftSize = 2048
+          analyser.smoothingTimeConstant = 0.8
+          micGain.connect(analyser)
+          if (systemStream) {
+            const systemSource = audioContext.createMediaStreamSource(systemStream)
+            systemSource.connect(analyser)
+          }
+
+          // Use the mixed stream for recording
+          recordingStream = destination.stream
+
+          // Store original streams for cleanup
+          recordingStream._originalStreams = [micStream]
+          if (systemStream) {
+            recordingStream._originalStreams.push(systemStream)
+          }
+
+          // Create MediaRecorder with opus codec if available
+          const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? { mimeType: 'audio/webm;codecs=opus' }
+            : { mimeType: 'audio/webm' }
+          
+          mediaRecorder = new MediaRecorder(recordingStream, options)
+          audioChunks = []
+
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              audioChunks.push(event.data)
+            }
+          }
+
+          mediaRecorder.onstop = () => {
+            recordedBlob = new Blob(audioChunks, { type: 'audio/webm' })
+            const audioUrl = URL.createObjectURL(recordedBlob)
+            recordedAudioPlayer.src = audioUrl
+            
+            // Stop all tracks from original streams
+            if (recordingStream && recordingStream._originalStreams) {
+              recordingStream._originalStreams.forEach(stream => {
+                stream.getTracks().forEach(track => track.stop())
+              })
+            }
+            
+            // Stop destination stream tracks
+            if (recordingStream) {
+              recordingStream.getTracks().forEach(track => track.stop())
+              recordingStream = null
+            }
+
+            // Stop audio context
+            if (audioContext) {
+              audioContext.close()
+              audioContext = null
+            }
+
+            // Convert blob to file and add to file list
+            const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
+            const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
+            
+            selectedFile = file
+            selectedFiles = []
+            batchMode = false
+            transcribeBtn.disabled = false
+
+            // Show file preview
+            showFilePreview(file)
+
+            // Show both player and normal UI
+            recordingInterface.style.display = 'none'
+            recordedAudioPreview.style.display = 'block'
+            dropArea.style.display = 'block'
+            recordMenu.style.display = 'inline-block'
+
+            // Refresh icons
+            if (window.lucide && typeof window.lucide.createIcons === 'function') {
+              window.lucide.createIcons()
+            }
+
+            showToast((window.I18N ? window.I18N.t('recordingReadyToTranscribe') : 'ההקלטה מוכנה לתמלול. לחץ על "תמלל" להמשך.'), 'success')
+          }
+
+          // Start recording
+          mediaRecorder.start(100) // Collect data every 100ms
+          recordingStartTime = Date.now()
+
+          // Show recording interface
+          dropArea.style.display = 'none'
+          recordMenu.style.display = 'none'
+          recordingInterface.style.display = 'block'
+
+          // Start visualization and timer
+          drawWaveform()
+          startRecordingTimer()
+
+          // Refresh icons
+          if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons()
+          }
+
+        } catch (error) {
+          console.error('Error accessing audio:', error)
+          if (error.name === 'NotAllowedError') {
+            showToast((window.I18N ? window.I18N.t('micPermissionDenied') : 'הגישה למיקרופון נדחתה. אנא אפשר גישה למיקרופון בהגדרות הדפדפן.'), 'error')
+          } else {
+            showToast((window.I18N ? window.I18N.t('micError') : 'שגיאה בגישה למיקרופון. אנא ודא שהמיקרופון מחובר ומופעל.'), 'error')
+          }
+        }
+      })
+
+      // Stop recording
+      stopRecordingBtn.addEventListener('click', () => {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          mediaRecorder.stop()
+          stopRecordingTimer()
+          cancelAnimationFrame(animationFrameId)
+        }
+      })
+
+      // Draw waveform animation (WhatsApp-style scrolling volume bars)
+      function drawWaveform() {
+        if (!analyser || !waveformCanvas) return
+
+        const canvasContext = waveformCanvas.getContext('2d')
+        const dataArray = new Uint8Array(analyser.frequencyBinCount)
+        
+        // Volume history - stores past volume readings
+        const volumeHistory = []
+        let lastDrawTime = 0
+        const drawInterval = 80 // Update every 80ms for smooth scrolling
+
+        const barWidth = 3
+        const barSpacing = 2
+        const maxBars = Math.floor(waveformCanvas.width / (barWidth + barSpacing))
+
+        const draw = (currentTime) => {
+          animationFrameId = requestAnimationFrame(draw)
+
+          // Throttle drawing
+          if (currentTime - lastDrawTime < drawInterval) {
+            return
+          }
+          lastDrawTime = currentTime
+
+          // Get volume data
+          analyser.getByteFrequencyData(dataArray)
+          
+          // Calculate average volume
+          let sum = 0
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i]
+          }
+          const avgVolume = sum / dataArray.length
+          const normalizedVolume = Math.min(avgVolume / 128, 1.0)
+          
+          // Add new volume reading to history (at the end, will be drawn on right)
+          volumeHistory.push(normalizedVolume)
+          
+          // Remove old readings if we exceed max bars
+          if (volumeHistory.length > maxBars) {
+            volumeHistory.shift()
+          }
+
+          const width = waveformCanvas.width
+          const height = waveformCanvas.height
+
+          // Get theme colors
+          const computedStyle = getComputedStyle(document.documentElement)
+          const bgColor = computedStyle.getPropertyValue('--secondary-color').trim()
+          const primaryColor = computedStyle.getPropertyValue('--primary-color').trim()
+
+          // Clear canvas
+          canvasContext.fillStyle = bgColor || '#f8f9fa'
+          canvasContext.fillRect(0, 0, width, height)
+
+          // Draw volume bars scrolling from right to left
+          const maxBarHeight = height * 0.7
+          const centerY = height / 2
+
+          canvasContext.fillStyle = primaryColor || '#4caf50'
+
+          // Draw each bar in history, from left to right (oldest to newest)
+          for (let i = 0; i < volumeHistory.length; i++) {
+            const volume = volumeHistory[i]
+            
+            // Calculate bar height based on volume
+            let barHeight = Math.max(volume * maxBarHeight, 4)
+            
+            // Position: bars fill from right to left as history grows
+            const x = width - ((volumeHistory.length - i) * (barWidth + barSpacing))
+            const y = centerY - (barHeight / 2)
+            
+            // Draw rounded rectangle (with fallback for older browsers)
+            if (typeof canvasContext.roundRect === 'function') {
+              canvasContext.beginPath()
+              canvasContext.roundRect(x, y, barWidth, barHeight, 1.5)
+              canvasContext.fill()
+            } else {
+              // Fallback: draw regular rectangle
+              canvasContext.fillRect(x, y, barWidth, barHeight)
+            }
+          }
+        }
+
+        draw(0)
+      }
+
+      // Start recording timer
+      function startRecordingTimer() {
+        recordingTimerInterval = setInterval(() => {
+          const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000)
+          const minutes = Math.floor(elapsed / 60)
+          const seconds = elapsed % 60
+          recordingTimer.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+        }, 1000)
+      }
+
+      // Stop recording timer
+      function stopRecordingTimer() {
+        if (recordingTimerInterval) {
+          clearInterval(recordingTimerInterval)
+          recordingTimerInterval = null
+        }
+      }
+
+      // Note: Recording is now automatically added to file list when stopped
+      // User can remove the file using the "Remove file" button in the file preview
     </script>
   </body>
 </html>
