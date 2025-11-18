@@ -1487,20 +1487,26 @@
           <button id="record-menu-btn" class="btn record-mic-only-btn" style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background-color: #dc3545; border: none; padding: 0; transition: all 0.2s ease;" data-i18n-title="recordAudio">
             <i data-lucide="mic" style="width: 24px; height: 24px; color: white;"></i>
           </button>
-          <div class="record-dropdown" style="display: none; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 0.5rem; background: var(--container-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); padding: 0.4rem 0; min-width: 180px; z-index: 200; direction: rtl;">
-            <button type="button" id="record-mic-only-btn" style="background: none; border: none; width: 100%; text-align: right; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem; direction: rtl; justify-content: flex-end;">
+          <div class="record-dropdown" style="display: none; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 0.5rem; background: var(--container-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); padding: 0.4rem 0; min-width: 200px; z-index: 200;">
+            <button type="button" id="record-mic-only-btn" style="background: none; border: none; width: 100%; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem;">
+              <span style="display: inline-flex; align-items: center; gap: 0.25rem; width: 52px; flex-shrink: 0;">
+                <i data-lucide="mic" style="width: 18px; height: 18px;"></i>
+              </span>
               <span data-i18n="recordMicOnly">הקלט ממיקרופון בלבד</span>
-              <i data-lucide="mic" style="width: 18px; height: 18px;"></i>
             </button>
-            <button type="button" id="record-mic-screen-btn" style="background: none; border: none; width: 100%; text-align: right; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem; direction: rtl; justify-content: flex-end;">
+            <button type="button" id="record-mic-screen-btn" style="background: none; border: none; width: 100%; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem;">
+              <span style="display: inline-flex; align-items: center; gap: 0.25rem; width: 52px; flex-shrink: 0;">
+                <i data-lucide="mic" style="width: 16px; height: 16px;"></i>
+                <span style="font-size: 0.9rem;">+</span>
+                <i data-lucide="monitor" style="width: 16px; height: 16px;"></i>
+              </span>
               <span data-i18n="recordMicAndScreen">הקלט מיקרופון + מסך</span>
-              <i data-lucide="mic" style="width: 16px; height: 16px;"></i>
-              <span style="font-size: 0.9rem;">+</span>
-              <i data-lucide="monitor" style="width: 16px; height: 16px;"></i>
             </button>
-            <button type="button" id="record-screen-only-btn" style="background: none; border: none; width: 100%; text-align: right; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem; direction: rtl; justify-content: flex-end;">
+            <button type="button" id="record-screen-only-btn" style="background: none; border: none; width: 100%; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem;">
+              <span style="display: inline-flex; align-items: center; gap: 0.25rem; width: 52px; flex-shrink: 0;">
+                <i data-lucide="monitor" style="width: 18px; height: 18px;"></i>
+              </span>
               <span data-i18n="recordScreenOnly">הקלט ממסך בלבד</span>
-              <i data-lucide="monitor" style="width: 18px; height: 18px;"></i>
             </button>
           </div>
         </div>
