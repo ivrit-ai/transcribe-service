@@ -553,6 +553,14 @@
         border-radius: 4px;
         transition: width 0.3s;
       }
+      #progress-status {
+        display: none;
+        margin-top: 0.4rem;
+        text-align: center;
+        font-size: 0.9rem;
+        color: var(--text-color);
+        opacity: 0.8;
+      }
       #transcription-container {
         position: relative;
         margin: 1rem auto 0;
@@ -1580,6 +1588,7 @@
       <div id="progress-container">
         <div id="progress-bar"></div>
       </div>
+      <div id="progress-status" aria-live="polite"></div>
       </div>
       <!-- End Transcribe Tab -->
 
@@ -2022,6 +2031,7 @@
       const transcribeBtn = document.getElementById("transcribe-btn")
       const progressContainer = document.getElementById("progress-container")
       const progressBar = document.getElementById("progress-bar")
+      const progressStatus = document.getElementById("progress-status")
       const transcriptionArea = document.getElementById("transcription")
       const languageSelect = document.getElementById("language-select")
       const copyBtn = document.getElementById("copy-btn")
@@ -2142,6 +2152,8 @@
       let transcriptionSegments = []
       let activeTranscription = false
       let currentJobId = null
+      let uploadPhase = "idle"
+      let streamingUploadActive = false
 
       // Function to get current max file size based on private key usage
       function getMaxFileSize() {
@@ -2591,6 +2603,215 @@
         }
       }
 
+      function setProgressStatusText(key, vars) {
+        if (!progressStatus) return
+        if (!key) {
+          progressStatus.textContent = ""
+          progressStatus.style.display = "none"
+          return
+        }
+        const text = window.I18N ? window.I18N.t(key, vars) : key
+        progressStatus.textContent = text
+        progressStatus.style.display = "block"
+      }
+
+      function showProgressUI() {
+        if (progressContainer) {
+          progressContainer.style.display = "block"
+        }
+        if (progressBar) {
+          progressBar.style.width = "0%"
+        }
+        if (progressStatus) {
+          progressStatus.style.display = "none"
+          progressStatus.textContent = ""
+        }
+      }
+
+      function hideProgressUI() {
+        if (progressContainer) {
+          progressContainer.style.display = "none"
+        }
+        if (progressBar) {
+          progressBar.style.width = "0%"
+        }
+        if (progressStatus) {
+          progressStatus.style.display = "none"
+          progressStatus.textContent = ""
+        }
+        uploadPhase = "idle"
+      }
+
+      function startUploadPhaseUI() {
+        uploadPhase = "upload"
+        showProgressUI()
+        setProgressStatusText("uploading")
+      }
+
+      function startTranscodingPhaseUI(statusKey = "uploadTranscodingPending") {
+        uploadPhase = "transcoding"
+        if (progressBar && parseFloat(progressBar.style.width || "0") < 10) {
+          progressBar.style.width = "10%"
+        }
+        setProgressStatusText(statusKey)
+      }
+
+      function getJobTypeLabel(jobType) {
+        if (!window.I18N) return jobType || ""
+        if (jobType === "short") return window.I18N.t('jobTypeShort')
+        if (jobType === "long") return window.I18N.t('jobTypeLong')
+        if (jobType === "private") return window.I18N.t('jobTypePrivate')
+        return jobType || ""
+      }
+
+      function formatEtaDisplay(event) {
+        if (!event) return "-"
+        if (event.eta_display) return event.eta_display
+        const seconds = typeof event.eta_seconds === "number" ? event.eta_seconds : null
+        if (seconds === null) return "-"
+        const mins = Math.floor(seconds / 60)
+        const secs = Math.max(0, Math.round(seconds % 60))
+        return `${mins}:${String(secs).padStart(2, "0")}`
+      }
+
+      function handleUploadStreamEvent(event) {
+        if (!event || !event.type) return
+        switch (event.type) {
+          case "transcoding_waiting":
+            startTranscodingPhaseUI("uploadTranscodingPending")
+            if (progressBar) progressBar.style.width = "15%"
+            break
+          case "transcoding_started":
+            startTranscodingPhaseUI("uploadTranscodingStarted")
+            if (progressBar) progressBar.style.width = "35%"
+            break
+          case "queue_position": {
+            startTranscodingPhaseUI()
+            const position = ((event.queue_depth ?? 0) + 1)
+            const jobTypeLabel = getJobTypeLabel(event.job_type)
+            setProgressStatusText("uploadQueuePositionDetail", { position, jobType: jobTypeLabel })
+            if (progressBar) progressBar.style.width = "65%"
+            break
+          }
+          case "eta":
+            startTranscodingPhaseUI()
+            setProgressStatusText("uploadQueueEtaDetail", { eta: formatEtaDisplay(event) })
+            if (progressBar) progressBar.style.width = "85%"
+            break
+          case "transcoding_complete":
+            if (progressBar) progressBar.style.width = "100%"
+            setProgressStatusText("uploadTranscodingComplete")
+            uploadPhase = "done"
+            streamingUploadActive = false
+            break
+        }
+      }
+
+      function sendStreamingUpload({ formData, onUploadProgress, onUploadComplete, onStreamEvent }) {
+        return new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest()
+          let buffer = ""
+          let lastIndex = 0
+          let settled = false
+
+          xhr.open("POST", "/upload", true)
+          xhr.responseType = "text"
+          xhr.setRequestHeader("Accept", "application/x-ndjson, application/json")
+
+          if (typeof onUploadProgress === "function") {
+            xhr.upload.onprogress = (event) => {
+              try {
+                onUploadProgress(event)
+              } catch {}
+            }
+          }
+          if (typeof onUploadComplete === "function") {
+            xhr.upload.onload = () => {
+              try {
+                onUploadComplete()
+              } catch {}
+            }
+          }
+
+          xhr.onreadystatechange = function () {
+            if (xhr.readyState === XMLHttpRequest.LOADING || xhr.readyState === XMLHttpRequest.DONE) {
+              processChunks()
+            }
+            if (xhr.readyState === XMLHttpRequest.DONE && !settled) {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                if (!buffer.trim()) {
+                  try {
+                    const parsed = JSON.parse(xhr.responseText || "{}")
+                    if (parsed.error) {
+                      settled = true
+                      reject(parsed)
+                      return
+                    }
+                  } catch {}
+                }
+                settled = true
+                resolve({})
+              } else {
+                settled = true
+                let payload = { error: "errorUploadFailed", details: xhr.statusText || "http_error" }
+                try {
+                  const parsed = JSON.parse(xhr.responseText || "{}")
+                  if (parsed && parsed.error) {
+                    payload = parsed
+                  }
+                } catch {}
+                reject(payload)
+              }
+            }
+          }
+
+          xhr.onerror = function () {
+            if (settled) return
+            settled = true
+            reject({ error: "errorUploadFailed", details: xhr.statusText || "network_error" })
+          }
+
+          function processChunks() {
+            const text = xhr.responseText || ""
+            if (text.length <= lastIndex) return
+            buffer += text.slice(lastIndex)
+            lastIndex = text.length
+
+            let newlineIndex = buffer.indexOf("\n")
+            while (newlineIndex !== -1) {
+              const rawLine = buffer.slice(0, newlineIndex).trim()
+              buffer = buffer.slice(newlineIndex + 1)
+              if (rawLine) {
+                try {
+                  const event = JSON.parse(rawLine)
+                  if (typeof onStreamEvent === "function") {
+                    try {
+                      onStreamEvent(event)
+                    } catch {}
+                  }
+                  if (event.type === "error" && !settled) {
+                    settled = true
+                    xhr.abort()
+                    reject(event)
+                    return
+                  }
+                  if (event.type === "transcoding_complete" && !settled) {
+                    settled = true
+                    resolve(event)
+                    return
+                  }
+                } catch (err) {
+                  console.warn("Failed to parse upload stream chunk", err)
+                }
+              }
+              newlineIndex = buffer.indexOf("\n")
+            }
+          }
+
+          xhr.send(formData)
+        })
+      }
+
       // Initialize settings button indicator on page load
       updateSettingsButtonIndicator()
 
@@ -2826,65 +3047,49 @@
         formData.append("save_audio", saveAudioValue)
 
         transcribeBtn.disabled = true
-        progressContainer.style.display = "block"
-        progressBar.style.width = "0%"
         transcriptionSegments = []
         currentJobId = null
+        streamingUploadActive = true
+        startUploadPhaseUI()
 
-        const xhr = new XMLHttpRequest()
-        xhr.open("POST", "/upload", true)
-
-        xhr.upload.onprogress = function (event) {
-          if (event.lengthComputable) {
-            const percentComplete = (event.loaded / event.total) * 100
-            progressBar.style.width = percentComplete + "%"
-          }
+        const handleUploadProgress = (event) => {
+          if (!progressBar || !event.lengthComputable) return
+          const percentComplete = Math.round((event.loaded / event.total) * 100)
+          progressBar.style.width = percentComplete + "%"
+          setProgressStatusText("uploadingProgress", { progress: percentComplete })
         }
 
-        xhr.onload = function () {
-          if (xhr.status === 200) {
-            const response = JSON.parse(xhr.responseText)
-            if (response.error) {
-              showError(response)
-            } else {
-              resetUploadState()
-              activeTranscription = false
-              showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.'), 'success')
-              switchTab('files')
-            }
+        let uploadSucceeded = false
+        try {
+          await sendStreamingUpload({
+            formData,
+            onUploadProgress: handleUploadProgress,
+            onUploadComplete: () => startTranscodingPhaseUI("uploadTranscodingPending"),
+            onStreamEvent: handleUploadStreamEvent,
+          })
+          uploadSucceeded = true
+          resetUploadState()
+          activeTranscription = false
+          showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.'), 'success')
+          switchTab('files')
+        } catch (error) {
+          showError(error)
+        } finally {
+          streamingUploadActive = false
+          if (!uploadSucceeded) {
+            transcribeBtn.disabled = false
           } else {
-            let errorMessage = undefined
-            try {
-              const response = JSON.parse(xhr.responseText)
-              if (response.error) {
-                errorMessage = translateServerError(response)
-              }
-            } catch (e) {}
-
-            let reportMessage = `${errorMessage}`
-
-            if (!errorMessage) {
-              const currentTime = new Date().toISOString()
-              reportMessage = window.I18N.t('errorReportTemplate', { time: currentTime, details: xhr.statusText })
-            }
-
-            showError(reportMessage)
+            transcribeBtn.disabled = !(selectedFile || (batchMode && selectedFiles.length > 0))
           }
         }
-
-        xhr.onerror = function () {
-          showError(window.I18N.t('uploadError'))
-        }
-
-        xhr.send(formData)
       }
 
       async function uploadBatch() {
         if (!selectedFiles || selectedFiles.length === 0) return
 
         transcribeBtn.disabled = true
-        progressContainer.style.display = "block"
-        progressBar.style.width = "0%"
+        showProgressUI()
+        setProgressStatusText("batchStarting", { count: selectedFiles.length })
 
         const token = getCookie("runpod_token")
         const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
@@ -2917,20 +3122,26 @@
           // Include save_audio checkbox value
           formData.append('save_audio', saveAudioValue)
 
+          setProgressStatusText("batchUploading", {
+            index: i + 1,
+            total: selectedFiles.length,
+            filename: file.name,
+          })
+
           try {
-            const resp = await fetch("/upload", { method: "POST", body: formData })
-            const data = await resp.json()
-            if (!resp.ok || data.error) {
-              const err = translateServerError(data) || (window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')
-              showToast(`${file.name}: ${err}`, "error")
-              continue
-            }
+            await sendStreamingUpload({
+              formData,
+              onStreamEvent: () => {},
+            })
             successCount++
-            // Update progress
-            progressBar.style.width = `${(i + 1) / selectedFiles.length * 100}%`
           } catch (err) {
-            showToast(`${file.name}: ${(window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')}`, "error")
+            const translated = translateServerError(err) || (window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')
+            showToast(`${file.name}: ${translated}`, "error")
             continue
+          } finally {
+            if (progressBar) {
+              progressBar.style.width = `${Math.min(100, ((i + 1) / selectedFiles.length) * 100)}%`
+            }
           }
         }
 
@@ -3347,16 +3558,14 @@
         if (fileNameElement) {
           fileNameElement.style.display = "block"
         }
-        progressContainer.style.display = "none"
-        progressBar.style.width = "0%"
+        hideProgressUI()
       }
 
       function resetAllState() {
         transcribeBtn.disabled = false
         selectedFile = null
         fileName.textContent = ""
-        progressContainer.style.display = "none"
-        progressBar.style.width = "0%"
+        hideProgressUI()
         currentJobId = null
         transcriptionSegments = []
       }
