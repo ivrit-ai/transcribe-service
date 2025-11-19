@@ -1038,8 +1038,12 @@
         margin-top: 2rem;
         font-size: 0.75rem;
         color: #777;
-        text-align: center;
         direction: rtl;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        text-align: center;
       }
       [data-theme="dark"] .site-footer {
         color: #aaa;
@@ -1395,6 +1399,40 @@
       .record-dropdown button:hover {
         background-color: var(--hover-bg);
       }
+
+      #tab-stats {
+        direction: ltr;
+        text-align: left;
+      }
+      #tab-stats .stats-card {
+        text-align: left;
+      }
+      .stats-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+      }
+      .stats-row-label {
+        flex: 1;
+        text-align: left;
+      }
+      .stats-row-value {
+        min-width: 80px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .stats-footer-link {
+        background: none;
+        border: none;
+        color: var(--primary-color);
+        cursor: pointer;
+        font-weight: 600;
+        margin-top: 0.5rem;
+      }
+      .stats-footer-link:hover {
+        text-decoration: underline;
+      }
     </style>
   </head>
   <body>
@@ -1449,6 +1487,7 @@
         <button class="tab-button active" data-tab="transcribe" data-i18n="tabTranscribe">תמלול חדש</button>
         <button class="tab-button" data-tab="files" data-i18n="tabMyFiles">הקבצים שלי</button>
         <button class="tab-button" data-tab="viewer" id="viewer-tab-btn" style="display: none;" data-i18n="tabViewer">צפייה</button>
+        <button class="tab-button" data-tab="stats" id="stats-tab-btn" style="display: none;">Stats for Nerds</button>
       </div>
 
       <!-- Transcribe Tab Content -->
@@ -1611,6 +1650,171 @@
       </div>
       <!-- End Viewer Tab -->
 
+      <!-- Statistics Tab Content -->
+      <div id="tab-stats" class="tab-content">
+        <div style="text-align: center; padding: 2rem;">
+          <h2 style="color: var(--text-color); margin-bottom: 2rem;">System Statistics</h2>
+
+          <div id="stats-loading" class="stats-loading" style="display: block;">
+            <p>Loading statistics...</p>
+          </div>
+
+          <div id="stats-content" class="stats-content" style="display: none;">
+            <div class="stats-section" style="margin-bottom: 2rem;">
+              <h3 style="color: var(--text-color); margin-bottom: 1rem;">System Uptime</h3>
+              <div class="stats-value" id="stats-uptime" style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);">-</div>
+            </div>
+
+            <div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; margin-bottom: 2rem;">
+              <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
+                <h3 style="color: var(--text-color); margin-bottom: 1rem;">Queued Jobs</h3>
+                <div class="stats-job-type" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                  <div class="stats-row">
+                    <span class="stats-row-label">Short:</span>
+                    <span class="stats-row-value" id="queued-short-count">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Long:</span>
+                    <span class="stats-row-value" id="queued-long-count">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Private:</span>
+                    <span class="stats-row-value" id="queued-private-count">-</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
+                <h3 style="color: var(--text-color); margin-bottom: 1rem;">Running Jobs</h3>
+                <div class="stats-job-type" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                  <div class="stats-row">
+                    <span class="stats-row-label">Short:</span>
+                    <span class="stats-row-value" id="running-short-count">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Long:</span>
+                    <span class="stats-row-value" id="running-long-count">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Private:</span>
+                    <span class="stats-row-value" id="running-private-count">-</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stats-section" style="margin-bottom: 2rem;">
+              <h3 style="color: var(--text-color); margin-bottom: 1rem;">Transcoding</h3>
+              <div class="stats-system-info" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
+                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                  <div class="stats-row">
+                    <span class="stats-row-label">Jobs:</span>
+                    <span class="stats-row-value" id="transcoding-total-jobs">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Total GB:</span>
+                    <span class="stats-row-value" id="transcoding-total-gb">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Total Duration:</span>
+                    <span class="stats-row-value" id="transcoding-total-duration">-</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stats-section" style="margin-bottom: 2rem;">
+              <h3 style="color: var(--text-color); margin-bottom: 1rem;">Transcribed Since Launch</h3>
+              <div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem;">
+                <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; text-align: center;">
+                  <h4 style="color: var(--text-color); margin-bottom: 0.5rem;">Short</h4>
+                  <div class="stats-value" id="transcribed-short-jobs" style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);">-</div>
+                  <div id="transcribed-short-minutes" style="font-size: 1rem; color: var(--text-color); opacity: 0.8;">-</div>
+                </div>
+                <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; text-align: center;">
+                  <h4 style="color: var(--text-color); margin-bottom: 0.5rem;">Long</h4>
+                  <div class="stats-value" id="transcribed-long-jobs" style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);">-</div>
+                  <div id="transcribed-long-minutes" style="font-size: 1rem; color: var(--text-color); opacity: 0.8;">-</div>
+                </div>
+                <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; text-align: center;">
+                  <h4 style="color: var(--text-color); margin-bottom: 0.5rem;">Private</h4>
+                  <div class="stats-value" id="transcribed-private-jobs" style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);">-</div>
+                  <div id="transcribed-private-minutes" style="font-size: 1rem; color: var(--text-color); opacity: 0.8;">-</div>
+                </div>
+                <div class="stats-card" style="background: var(--primary-color); border: 1px solid var(--primary-color); border-radius: 12px; padding: 1.5rem; text-align: center;">
+                  <h4 style="color: white; margin-bottom: 0.5rem;">Total</h4>
+                  <div class="stats-value" id="transcribed-total-jobs" style="font-size: 1.5rem; font-weight: bold; color: white;">-</div>
+                  <div id="transcribed-total-minutes" style="font-size: 1rem; color: white; opacity: 0.9;">-</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stats-section" style="margin-bottom: 2rem;">
+              <h3 style="color: var(--text-color); margin-bottom: 1rem;">System Info</h3>
+              <div class="stats-system-info" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
+                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                  <div class="stats-row">
+                    <span class="stats-row-label">Max Parallel Short Jobs:</span>
+                    <span class="stats-row-value" id="max-parallel-short">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Max Parallel Long Jobs:</span>
+                    <span class="stats-row-value" id="max-parallel-long">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Max Parallel Private Jobs:</span>
+                    <span class="stats-row-value" id="max-parallel-private">-</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stats-section">
+              <h3 style="color: var(--text-color); margin-bottom: 1rem;">Errors</h3>
+              <div class="stats-system-info" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
+                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                  <h4 style="margin: 0; color: var(--text-color); font-size: 0.95rem; text-align: left;">Google Drive</h4>
+                  <div class="stats-row">
+                    <span class="stats-row-label">TOC Upload Errors:</span>
+                    <span class="stats-row-value" id="gdrive-toc-upload-errors">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">TOC Download Errors:</span>
+                    <span class="stats-row-value" id="gdrive-toc-download-errors">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Audio Upload Errors:</span>
+                    <span class="stats-row-value" id="gdrive-audio-upload-errors">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Audio Download Errors:</span>
+                    <span class="stats-row-value" id="gdrive-audio-download-errors">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">File Rename Errors:</span>
+                    <span class="stats-row-value" id="gdrive-rename-errors">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">File Delete Errors:</span>
+                    <span class="stats-row-value" id="gdrive-delete-errors">-</span>
+                  </div>
+                  <h4 style="margin: 0; color: var(--text-color); font-size: 0.95rem; text-align: left; margin-top: 1rem;">Quota</h4>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Transcription Quota Exceeded:</span>
+                    <span class="stats-row-value" id="quota-denied-errors">-</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="stats-error" class="stats-error" style="display: none; color: #f44336; margin-top: 2rem;">
+            <p>Error loading statistics</p>
+          </div>
+        </div>
+      </div>
+      <!-- End Statistics Tab -->
+
       <div class="links-container">
         <a href="mailto:info@ivrit.ai" class="contact-link">
           <i data-lucide="mail"></i>
@@ -1629,6 +1833,9 @@
         </a>
       </div>
       <div class="site-footer">
+        <button type="button" class="stats-footer-link" id="stats-link-btn" onclick="openStatsTab()">
+          Stats for Nerds
+        </button>
         <a
           href="https://www.ivrit.ai/en/privacy/"
           target="_blank"
@@ -1832,6 +2039,7 @@
       const menuJsonBtn = document.getElementById("menu-json")
       const settingsBtn = document.getElementById("settings-btn")
       const langMenu = document.getElementById("lang-menu")
+      const statsTabBtn = document.getElementById("stats-tab-btn")
       // Language selection handlers
       if (langMenu && window.I18N) {
         langMenu.addEventListener('click', (e) => {
@@ -4672,6 +4880,137 @@
 
       // Note: Recording is now automatically added to file list when stopped
       // User can remove the file using the "Remove file" button in the file preview
+
+      // ========== STATISTICS FUNCTIONALITY ==========
+
+      let statsTabOpened = false
+
+      function openStatsTab() {
+        statsTabOpened = true
+        if (statsTabBtn) {
+          statsTabBtn.style.display = 'inline-block'
+        }
+        switchTab('stats')
+      }
+
+      function formatMinutesAsHM(minutes) {
+        if (minutes === null || minutes === undefined || isNaN(minutes)) {
+          return '-'
+        }
+        const totalSeconds = Math.round(minutes * 60)
+        const hours = Math.floor(totalSeconds / 3600)
+        const mins = Math.floor((totalSeconds % 3600) / 60)
+        return `${hours}:${String(mins).padStart(2, '0')}`
+      }
+
+      // Load statistics when stats tab is activated
+      async function loadStatistics() {
+        const statsLoading = document.getElementById('stats-loading')
+        const statsContent = document.getElementById('stats-content')
+        const statsError = document.getElementById('stats-error')
+
+        // Show loading, hide content and error
+        statsLoading.style.display = 'block'
+        statsContent.style.display = 'none'
+        statsError.style.display = 'none'
+
+        try {
+          const response = await fetch('/stats')
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+          }
+
+          const data = await response.json()
+
+          // Update uptime
+          document.getElementById('stats-uptime').textContent = data.uptime
+
+          // Update queued jobs
+          document.getElementById('queued-short-count').textContent = `${data.queued_jobs.short.count} (${formatMinutesAsHM(data.queued_jobs.short.total_duration_minutes)})`
+          document.getElementById('queued-long-count').textContent = `${data.queued_jobs.long.count} (${formatMinutesAsHM(data.queued_jobs.long.total_duration_minutes)})`
+          document.getElementById('queued-private-count').textContent = `${data.queued_jobs.private.count} (${formatMinutesAsHM(data.queued_jobs.private.total_duration_minutes)})`
+
+          // Update running jobs
+          document.getElementById('running-short-count').textContent = `${data.running_jobs.short.count} (${formatMinutesAsHM(data.running_jobs.short.total_duration_minutes)})`
+          document.getElementById('running-long-count').textContent = `${data.running_jobs.long.count} (${formatMinutesAsHM(data.running_jobs.long.total_duration_minutes)})`
+          document.getElementById('running-private-count').textContent = `${data.running_jobs.private.count} (${formatMinutesAsHM(data.running_jobs.private.total_duration_minutes)})`
+
+          // Update transcribed statistics
+          document.getElementById('transcribed-short-jobs').textContent = data.transcribed_since_launch.short.jobs_count
+          document.getElementById('transcribed-short-minutes').textContent = data.transcribed_since_launch.short.total_minutes_formatted
+          document.getElementById('transcribed-long-jobs').textContent = data.transcribed_since_launch.long.jobs_count
+          document.getElementById('transcribed-long-minutes').textContent = data.transcribed_since_launch.long.total_minutes_formatted
+          document.getElementById('transcribed-private-jobs').textContent = data.transcribed_since_launch.private.jobs_count
+          document.getElementById('transcribed-private-minutes').textContent = data.transcribed_since_launch.private.total_minutes_formatted
+          document.getElementById('transcribed-total-jobs').textContent = data.transcribed_since_launch.total.jobs_count
+          document.getElementById('transcribed-total-minutes').textContent = data.transcribed_since_launch.total.total_minutes_formatted
+
+          // Update system info
+          document.getElementById('max-parallel-short').textContent = data.system_info.max_parallel_jobs.short
+          document.getElementById('max-parallel-long').textContent = data.system_info.max_parallel_jobs.long
+          document.getElementById('max-parallel-private').textContent = data.system_info.max_parallel_jobs.private
+          // Update transcoding stats
+          document.getElementById('transcoding-total-jobs').textContent = data.transcoding.jobs
+          document.getElementById('transcoding-total-gb').textContent = data.transcoding.total_gb.toFixed(2)
+          document.getElementById('transcoding-total-duration').textContent = data.transcoding.total_duration_formatted
+
+          // Update errors
+          const driveErrors = data.errors?.google_drive || {}
+          document.getElementById('gdrive-toc-upload-errors').textContent = driveErrors.toc_upload ?? '-'
+          document.getElementById('gdrive-toc-download-errors').textContent = driveErrors.toc_download ?? '-'
+          document.getElementById('gdrive-audio-upload-errors').textContent = driveErrors.audio_upload ?? '-'
+          document.getElementById('gdrive-audio-download-errors').textContent = driveErrors.audio_download ?? '-'
+          document.getElementById('gdrive-rename-errors').textContent = driveErrors.rename ?? '-'
+          document.getElementById('gdrive-delete-errors').textContent = driveErrors.delete ?? '-'
+          document.getElementById('quota-denied-errors').textContent = data.errors?.quota_denied ?? '-'
+
+          // Show content, hide loading
+          statsLoading.style.display = 'none'
+          statsContent.style.display = 'block'
+
+        } catch (error) {
+          console.error('Error loading statistics:', error)
+          statsLoading.style.display = 'none'
+          statsError.style.display = 'block'
+        }
+      }
+
+      // Auto-refresh stats when stats tab is active
+      let statsRefreshInterval = null
+      function startStatsAutoRefresh() {
+        // Refresh every 30 seconds
+        statsRefreshInterval = setInterval(() => {
+          const statsTab = document.getElementById('tab-stats')
+          if (statsTab && statsTab.classList.contains('active')) {
+            loadStatistics()
+          }
+        }, 30000)
+      }
+
+      function stopStatsAutoRefresh() {
+        if (statsRefreshInterval) {
+          clearInterval(statsRefreshInterval)
+          statsRefreshInterval = null
+        }
+      }
+
+      // Hook into tab switching to load stats when needed
+      const originalSwitchTab = switchTab
+      switchTab = function(tabName) {
+        if ((tabName === 'stats' || statsTabOpened) && statsTabBtn) {
+          statsTabBtn.style.display = 'inline-block'
+        }
+        // Call original function
+        originalSwitchTab(tabName)
+
+        // Handle stats tab activation
+        if (tabName === 'stats') {
+          loadStatistics()
+          startStatsAutoRefresh()
+        } else {
+          stopStatsAutoRefresh()
+        }
+      }
     </script>
   </body>
 </html>

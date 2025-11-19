@@ -177,6 +177,8 @@
     errorInvalidJson: "Invalid JSON body",
     errorMissingFileSize: "Missing file_size",
     errorInvalidFileSize: "Invalid file_size",
+    tabStats: "סטטיסטיקות",
+    statsForNerds: "סטטיסטיקות לחנונים",
   }
 
   const yi = {
@@ -357,6 +359,8 @@
     errorInvalidJson: "אומגילטיק JSON בלאָק",
     errorMissingFileSize: "פֿעלנדיק file_size",
     errorInvalidFileSize: "אומגילטיק file_size",
+    tabStats: "סטאַטיסטיק",
+    statsForNerds: "סטאַטיסטיק פֿאַר נערדס",
   }
 
   const en = {
@@ -537,6 +541,8 @@
     errorInvalidJson: "Invalid JSON body",
     errorMissingFileSize: "Missing file_size",
     errorInvalidFileSize: "Invalid file_size",
+    tabStats: "Statistics",
+    statsForNerds: "Stats for Nerds",
   }
 
   const resources = { he, yi, en }

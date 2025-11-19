@@ -354,6 +354,32 @@ queue_locks = {
     PRIVATE: None
 }
 
+# Statistics tracking (global counters since app launch)
+stats_lock = asyncio.Lock()
+stats_jobs_transcribed = {SHORT: 0, LONG: 0, PRIVATE: 0}
+stats_minutes_transcribed = {SHORT: 0.0, LONG: 0.0, PRIVATE: 0.0}
+stats_total_jobs_started = 0
+stats_total_minutes_processed = 0.0
+stats_app_start_time = time.time()
+
+# Google Drive error tracking
+stats_gdrive_errors = {
+    "toc_upload": 0,
+    "toc_download": 0,
+    "audio_upload": 0,
+    "audio_download": 0,
+    "rename": 0,
+    "delete": 0
+}
+
+# Transcoding statistics
+stats_transcoding_jobs = 0
+stats_transcoding_total_gb = 0.0
+stats_transcoding_total_duration_seconds = 0.0
+
+# Quota statistics
+stats_quota_denied = 0
+
 # Dictionary to keep track of user's active jobs
 user_jobs = {}
 
@@ -564,6 +590,7 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
 async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he", refresh_token: Optional[str] = None, save_audio: bool = False):
     # Try to add the job to the queue
     log_message(f"{user_email}: Queuing job {job_id}...")
+    global stats_quota_denied
 
     # Check if user already has a job queued or running
     if user_email in user_jobs:
@@ -580,9 +607,13 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
             log_message(f"{user_email}: Job queuing rate limited for user {user_email}. Requested: {duration/60:.1f}min, Remaining: {remaining_minutes:.1f}min")
             
             if eta_seconds == float('inf'):
+                async with stats_lock:
+                    stats_quota_denied += 1
                 return False, JSONResponse({"error": "errorFileTooLargeForFreeService", "i18n_key": "errorFileTooLargeForFreeService"}, status_code=429)
             else:
                 wait_minutes = math.ceil(eta_seconds / 60)
+                async with stats_lock:
+                    stats_quota_denied += 1
                 return False, JSONResponse({
                     "error": "errorRateLimitExceeded",
                     "i18n_key": "errorRateLimitExceeded",
@@ -915,6 +946,8 @@ async def get_audio_file(results_id: str, request: Request):
     file_content = await download_drive_file_bytes(refresh_token, file_id)
     
     if file_content is None:
+        async with stats_lock:
+            stats_gdrive_errors["audio_download"] += 1
         return JSONResponse({"error": "errorAudioDownloadFailed", "i18n_key": "errorAudioDownloadFailed"}, status_code=500)
     
     # Return opus audio file
@@ -959,10 +992,12 @@ async def rename_file(request: Request):
         async with toc_lock:
             # Download current TOC
             toc_data = await download_toc(refresh_token)
-            
+
             if not toc_data or "entries" not in toc_data:
+                async with stats_lock:
+                    stats_gdrive_errors["toc_download"] += 1
                 return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
-            
+
             # Find the entry with matching results_id
             entry_found = False
             for entry in toc_data["entries"]:
@@ -970,14 +1005,16 @@ async def rename_file(request: Request):
                     entry["source_filename"] = new_filename
                     entry_found = True
                     break
-            
+
             if not entry_found:
                 return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
-            
+
             # Upload updated TOC atomically
             success = await upload_toc(refresh_token, toc_data, user_email)
-            
+
             if not success:
+                async with stats_lock:
+                    stats_gdrive_errors["toc_upload"] += 1
                 return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
         
         logging.info(f"{user_email}: Renamed file {results_id} to {new_filename}")
@@ -985,6 +1022,8 @@ async def rename_file(request: Request):
         
     except Exception as e:
         logging.error(f"Error renaming file: {e}")
+        async with stats_lock:
+            stats_gdrive_errors["rename"] += 1
         return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer"}, status_code=500)
 
 
@@ -1013,10 +1052,12 @@ async def delete_file(request: Request):
         async with toc_lock:
             # Download current TOC
             toc_data = await download_toc(refresh_token)
-            
+
             if not toc_data or "entries" not in toc_data:
+                async with stats_lock:
+                    stats_gdrive_errors["toc_download"] += 1
                 return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
-            
+
             # Find and remove the entry with matching results_id
             entry_found = False
             original_entries_count = len(toc_data["entries"])
@@ -1024,17 +1065,19 @@ async def delete_file(request: Request):
                 entry for entry in toc_data["entries"]
                 if entry.get("results_id") != results_id
             ]
-            
+
             if len(toc_data["entries"]) < original_entries_count:
                 entry_found = True
-            
+
             if not entry_found:
                 return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
-            
+
             # Upload updated TOC atomically (removing from TOC first)
             success = await upload_toc(refresh_token, toc_data, user_email)
-            
+
             if not success:
+                async with stats_lock:
+                    stats_gdrive_errors["toc_upload"] += 1
                 return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
         
         # After TOC update, delete associated files
@@ -1042,19 +1085,27 @@ async def delete_file(request: Request):
         opus_filename = f"{results_id}.opus"
         opus_file_id = await find_drive_file_by_name(refresh_token, opus_filename)
         if opus_file_id:
-            await delete_drive_file(refresh_token, opus_file_id, user_email)
-        
+            delete_success = await delete_drive_file(refresh_token, opus_file_id, user_email)
+            if not delete_success:
+                async with stats_lock:
+                    stats_gdrive_errors["delete"] += 1
+
         # Delete json.gz results file
         json_filename = f"{results_id}.json.gz"
         json_file_id = await find_drive_file_by_name(refresh_token, json_filename)
         if json_file_id:
-            await delete_drive_file(refresh_token, json_file_id, user_email)
+            delete_success = await delete_drive_file(refresh_token, json_file_id, user_email)
+            if not delete_success:
+                async with stats_lock:
+                    stats_gdrive_errors["delete"] += 1
         
         logging.info(f"{user_email}: Deleted file {results_id} from TOC and associated files")
         return JSONResponse({"success": True})
         
     except Exception as e:
         logging.error(f"Error deleting file: {e}")
+        async with stats_lock:
+            stats_gdrive_errors["delete"] += 1
         return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer"}, status_code=500)
 
 
@@ -1401,6 +1452,120 @@ async def get_balance(request: Request, runpod_token: str = None):
     
     return JSONResponse(balance_info)
 
+@app.get("/stats", dependencies=[Depends(require_google_login)])
+async def get_stats(request: Request):
+    """Get application statistics"""
+    async with stats_lock:
+        # Calculate current queued jobs by type
+        queued_jobs = {SHORT: [], LONG: [], PRIVATE: []}
+        for queue_type, queue_obj in queues.items():
+            for job_desc in list(queue_obj.queue):
+                queued_jobs[queue_type].append({
+                    "duration": job_desc.duration,
+                    "language": job_desc.language,
+                    "filename": job_desc.filename
+                })
+
+        # Calculate current running jobs by type
+        running_jobs_stats = {SHORT: [], LONG: [], PRIVATE: []}
+        for queue_type, running_dict in running_jobs.items():
+            for job_id, job_desc in running_dict.items():
+                running_jobs_stats[queue_type].append({
+                    "duration": job_desc.duration,
+                    "language": job_desc.language,
+                    "filename": job_desc.filename,
+                    "elapsed_time": time.time() - getattr(job_desc, 'transcribe_start_time', job_desc.utime)
+                })
+
+        # Calculate totals
+        def format_duration(minutes):
+            hours = int(minutes // 60)
+            mins = int(minutes % 60)
+            return f"{hours:02d}:{mins:02d}"
+
+        # Calculate uptime
+        uptime_seconds = time.time() - stats_app_start_time
+        uptime_hours = int(uptime_seconds // 3600)
+        uptime_days = uptime_hours // 24
+        uptime_display = f"{uptime_days}d {uptime_hours % 24}h" if uptime_days > 0 else f"{uptime_hours}h"
+
+        drive_errors = dict(stats_gdrive_errors)
+        transcoding_stats = {
+            "jobs": stats_transcoding_jobs,
+            "total_gb": stats_transcoding_total_gb,
+            "total_duration_seconds": stats_transcoding_total_duration_seconds,
+            "total_duration_formatted": format_duration(stats_transcoding_total_duration_seconds / 60.0 if stats_transcoding_total_duration_seconds else 0)
+        }
+
+        stats_data = {
+            "uptime": uptime_display,
+            "uptime_seconds": uptime_seconds,
+            "queued_jobs": {
+                "short": {
+                    "count": len(queued_jobs[SHORT]),
+                    "total_duration_minutes": sum(job["duration"] for job in queued_jobs[SHORT]) / 60.0
+                },
+                "long": {
+                    "count": len(queued_jobs[LONG]),
+                    "total_duration_minutes": sum(job["duration"] for job in queued_jobs[LONG]) / 60.0
+                },
+                "private": {
+                    "count": len(queued_jobs[PRIVATE]),
+                    "total_duration_minutes": sum(job["duration"] for job in queued_jobs[PRIVATE]) / 60.0
+                }
+            },
+            "running_jobs": {
+                "short": {
+                    "count": len(running_jobs_stats[SHORT]),
+                    "total_duration_minutes": sum(job["duration"] for job in running_jobs_stats[SHORT]) / 60.0
+                },
+                "long": {
+                    "count": len(running_jobs_stats[LONG]),
+                    "total_duration_minutes": sum(job["duration"] for job in running_jobs_stats[LONG]) / 60.0
+                },
+                "private": {
+                    "count": len(running_jobs_stats[PRIVATE]),
+                    "total_duration_minutes": sum(job["duration"] for job in running_jobs_stats[PRIVATE]) / 60.0
+                }
+            },
+            "transcribed_since_launch": {
+                "short": {
+                    "jobs_count": stats_jobs_transcribed[SHORT],
+                    "total_minutes": stats_minutes_transcribed[SHORT],
+                    "total_minutes_formatted": format_duration(stats_minutes_transcribed[SHORT])
+                },
+                "long": {
+                    "jobs_count": stats_jobs_transcribed[LONG],
+                    "total_minutes": stats_minutes_transcribed[LONG],
+                    "total_minutes_formatted": format_duration(stats_minutes_transcribed[LONG])
+                },
+                "private": {
+                    "jobs_count": stats_jobs_transcribed[PRIVATE],
+                    "total_minutes": stats_minutes_transcribed[PRIVATE],
+                    "total_minutes_formatted": format_duration(stats_minutes_transcribed[PRIVATE])
+                },
+                "total": {
+                    "jobs_count": stats_total_jobs_started,
+                    "total_minutes": stats_total_minutes_processed,
+                    "total_minutes_formatted": format_duration(stats_total_minutes_processed)
+                }
+            },
+            "system_info": {
+                "max_parallel_jobs": {
+                    "short": max_parallel_jobs[SHORT],
+                    "long": max_parallel_jobs[LONG],
+                    "private": max_parallel_jobs[PRIVATE]
+                },
+            },
+            "transcoding": transcoding_stats,
+            "errors": {
+                "google_drive": drive_errors,
+                "quota_denied": stats_quota_denied
+            }
+        }
+
+        return JSONResponse(stats_data)
+
 async def check_runpod_endpoint(runpod_token: str) -> dict:
     """
     Check for autogenerated endpoint, validate template ID, and recreate if needed.
@@ -1656,6 +1821,7 @@ async def upload_file(
                 f.write(chunk)
         
         file_size = total_size
+        metadata["file_size_bytes"] = total_size
     except Exception as e:
         # Clean up temp file if it exists
         if os.path.exists(temp_file_path):
@@ -1692,6 +1858,7 @@ async def upload_file(
     transcoding_job.language = requested_lang
     transcoding_job.refresh_token = refresh_token
     transcoding_job.input_path = temp_file_path
+    transcoding_job.file_size_bytes = metadata.get("file_size_bytes", file_size)
     transcoding_job.qtime = time.time()
     transcoding_job.save_audio = save_audio_bool
     
@@ -1721,6 +1888,7 @@ async def handle_transcoding(job_id: str):
     Handle transcoding of an uploaded file to Opus format.
     After transcoding completes, queues the job for transcription.
     """
+    global stats_transcoding_jobs, stats_transcoding_total_gb, stats_transcoding_total_duration_seconds
     if job_id not in transcoding_running_jobs:
         log_message(f"Transcoding job {job_id} not found in running jobs")
         return
@@ -1821,6 +1989,14 @@ async def handle_transcoding(job_id: str):
         if not queued:
             log_message(f"Failed to queue job {job_id} after transcoding")
             cleanup_temp_file(job_id)
+        else:
+            async with stats_lock:
+                stats_transcoding_jobs += 1
+                file_size_gb = 0.0
+                if getattr(transcoding_job, "file_size_bytes", None):
+                    file_size_gb = transcoding_job.file_size_bytes / (1024 ** 3)
+                stats_transcoding_total_gb += file_size_gb
+                stats_transcoding_total_duration_seconds += duration
         
     except Exception as e:
         log_message(f"Error in transcoding task for job {job_id}: {str(e)}")
@@ -2121,6 +2297,13 @@ async def transcribe_job(job_desc):
 
         job_results[job_id]["completion_time"] = datetime.now()
 
+        # Update global statistics
+        async with stats_lock:
+            stats_jobs_transcribed[job_desc.job_type] += 1
+            stats_minutes_transcribed[job_desc.job_type] += duration / 60.0  # Convert to minutes
+            stats_total_jobs_started += 1
+            stats_total_minutes_processed += duration / 60.0
+
         # After completion, store results separately and update TOC
         try:
             # Get TOC version from environment
@@ -2156,8 +2339,10 @@ async def transcribe_job(job_desc):
                 mime_type,
                 job_desc.user_email
             )
-            
+
             if not upload_success:
+                async with stats_lock:
+                    stats_gdrive_errors["audio_upload"] += 1
                 logger.error(f"Failed to upload results file for {job_id}, skipping TOC update")
                 return
             
@@ -2184,6 +2369,8 @@ async def transcribe_job(job_desc):
                         if opus_upload_success:
                             log_message(f"{job_desc.user_email}: Uploaded opus file for {job_id} as {opus_filename}")
                         else:
+                            async with stats_lock:
+                                stats_gdrive_errors["audio_upload"] += 1
                             logger.warning(f"Failed to upload opus file for {job_id}, but continuing")
                     else:
                         logger.warning(f"Opus file not found for {job_id} at {opus_file_path}, skipping audio upload")
@@ -2207,17 +2394,23 @@ async def transcribe_job(job_desc):
             async with toc_lock:
                 # Download current TOC
                 toc_data = await download_toc(job_desc.refresh_token)
-                
+
                 # Append new entry
                 if "entries" not in toc_data:
                     toc_data["entries"] = []
                 toc_data["entries"].append(toc_entry)
-                
+
                 # Upload updated TOC atomically
-                await upload_toc(job_desc.refresh_token, toc_data, job_desc.user_email)
-            
+                success = await upload_toc(job_desc.refresh_token, toc_data, job_desc.user_email)
+                if not success:
+                    async with stats_lock:
+                        stats_gdrive_errors["toc_upload"] += 1
+                    raise Exception("Failed to upload TOC")
+
             log_message(f"{job_desc.user_email}: Uploaded transcription to TOC (results_id: {results_id})")
         except Exception as e:
+            async with stats_lock:
+                stats_gdrive_errors["toc_download" if "download" in str(e).lower() else "toc_upload"] += 1
             logger.error(f"Failed to upload transcription for {job_id}: {e}")
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
