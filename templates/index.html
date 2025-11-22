@@ -228,6 +228,10 @@
         gap: 0.6rem;
         direction: rtl;
       }
+      [dir="ltr"] .storage-container {
+        direction: ltr;
+        justify-content: flex-start;
+      }
       .storage-container.visible {
         display: flex;
       }
@@ -245,6 +249,10 @@
         display: flex;
         flex-direction: column;
         gap: 0.2rem;
+        text-align: right;
+      }
+      [dir="ltr"] .storage-text {
+        text-align: left;
       }
       .storage-label {
         font-weight: 600;
@@ -395,6 +403,9 @@
         margin: 0 0 0.75rem 0;
         font-weight: 600;
         text-align: right;
+      }
+      [dir="ltr"] .settings-section h3 {
+        text-align: left;
       }
       .form-label {
         display: block;
@@ -2627,21 +2638,19 @@
         }
 
         container.classList.add("visible")
-        const usedText = formatFileSize(driveStorageInfo.usageBytes)
+        const freeBytes = Math.max(0, driveStorageInfo.availableBytes)
+        const freeText = formatStorageAmount(freeBytes)
 
         if (driveStorageInfo.hasLimit) {
-          const totalText = formatFileSize(driveStorageInfo.limitBytes)
+          const totalText = formatStorageAmount(driveStorageInfo.limitBytes)
           usageEl.textContent = window.I18N
-            ? window.I18N.t("driveStorageUsageLabel", { used: usedText, total: totalText })
-            : `${usedText} / ${totalText}`
-          const freeText = formatFileSize(Math.max(0, driveStorageInfo.availableBytes))
-          freeEl.textContent = window.I18N
-            ? window.I18N.t("driveStorageFreeLabel", { free: freeText })
-            : `${freeText} free`
+            ? window.I18N.t("driveStorageFreeOfTotal", { free: freeText, total: totalText })
+            : `${freeText} free of ${totalText}`
+          freeEl.textContent = ""
         } else {
           usageEl.textContent = window.I18N
-            ? window.I18N.t("driveStorageUsageNoLimit", { used: usedText })
-            : `${usedText} used`
+            ? window.I18N.t("driveStorageUsageNoLimit", { used: freeText })
+            : `${freeText} available`
           freeEl.textContent = ""
         }
       }
