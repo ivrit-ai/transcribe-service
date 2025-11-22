@@ -2305,10 +2305,14 @@
           window.I18N.t('unitBytes'),
           window.I18N.t('unitKB'),
           window.I18N.t('unitMB'),
-          window.I18N.t('unitGB')
+          window.I18N.t('unitGB'),
+          window.I18N.t('unitTB'),
+          window.I18N.t('unitPB')
         ]
-        const i = Math.floor(Math.log(bytes) / Math.log(k))
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
+        const rawIndex = Math.floor(Math.log(bytes) / Math.log(k))
+        const i = Math.min(rawIndex, sizes.length - 1)
+        const value = bytes / Math.pow(k, i)
+        return parseFloat(value.toFixed(2)) + " " + sizes[i]
       }
 
       function toggleTheme() {
