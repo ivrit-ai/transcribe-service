@@ -215,6 +215,48 @@
       .modal .balance-amount {
         font-size: 0.95rem;
       }
+      .storage-container {
+        display: none;
+        margin-top: 0.75rem;
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 10px;
+        padding: 0.65rem 0.9rem;
+        font-size: 0.9rem;
+        color: #495057;
+        align-items: center;
+        gap: 0.6rem;
+        direction: rtl;
+      }
+      .storage-container.visible {
+        display: flex;
+      }
+      [data-theme="dark"] .storage-container {
+        background: #3a3a3a;
+        border-color: #555555;
+        color: #e0e0e0;
+      }
+      .storage-icon svg {
+        width: 20px;
+        height: 20px;
+        color: var(--primary-color);
+      }
+      .storage-text {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+      }
+      .storage-label {
+        font-weight: 600;
+        color: var(--text-color);
+      }
+      .storage-usage-line {
+        font-size: 0.85rem;
+      }
+      .storage-free-line {
+        font-size: 0.8rem;
+        opacity: 0.8;
+      }
       .modal {
         display: none;
         position: fixed;
@@ -1895,6 +1937,16 @@
                 <span class="balance-amount" id="balance-amount">—</span>
               </div>
             </div>
+            <div class="storage-container" id="drive-storage-container" aria-live="polite">
+              <div class="storage-icon" aria-hidden="true">
+                <i data-lucide="hard-drive"></i>
+              </div>
+              <div class="storage-text">
+                <span class="storage-label" data-i18n="driveStorageLabel">אחסון Google Drive</span>
+                <span class="storage-usage-line" id="drive-storage-usage">—</span>
+                <span class="storage-free-line" id="drive-storage-free"></span>
+              </div>
+            </div>
           </div>
 
           
@@ -2068,6 +2120,7 @@
             }
           }
           updateTranscriptionDirectionUI()
+          updateDriveStorageUI()
         })
       }
       const settingsModal = document.getElementById("settings-modal")
@@ -2149,11 +2202,15 @@
       let batchMode = false
       const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024 // 300MB in bytes
       const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024 // 3GB in bytes
+      const DRIVE_GUARDBAND_BYTES = 100 * 1024 * 1024 // 100MB guardband
       let transcriptionSegments = []
       let activeTranscription = false
       let currentJobId = null
       let uploadPhase = "idle"
       let streamingUploadActive = false
+      let driveStorageInfo = null
+      let driveStorageInfoFetchedAt = 0
+      let driveStorageFetchPromise = null
 
       // Function to get current max file size based on private key usage
       function getMaxFileSize() {
@@ -2518,6 +2575,182 @@
         }
       }
 
+      function normalizeDriveStoragePayload(quota) {
+        if (!quota) return null
+        const limitCandidate = Number.isFinite(quota.limit) ? quota.limit : parseInt(quota.limit ?? "", 10)
+        const usageCandidate =
+          Number.isFinite(quota.usage_in_drive) ? quota.usage_in_drive :
+          Number.isFinite(quota.usageInDrive) ? quota.usageInDrive :
+          Number.isFinite(quota.usage) ? quota.usage :
+          parseInt(quota.usage_in_drive ?? quota.usage ?? quota.usageInDrive ?? "0", 10)
+
+        const hasLimit = Number.isFinite(limitCandidate) && limitCandidate > 0
+        const limitBytes = hasLimit ? limitCandidate : null
+        const usageBytes = Math.max(0, Number.isFinite(usageCandidate) ? usageCandidate : 0)
+        const availableBytes = hasLimit ? Math.max(0, limitBytes - usageBytes) : Number.POSITIVE_INFINITY
+
+        return {
+          limitBytes: hasLimit ? limitBytes : Number.POSITIVE_INFINITY,
+          usageBytes,
+          availableBytes,
+          provisionalAvailableBytes: availableBytes,
+          hasLimit,
+          isUnlimited: !hasLimit,
+        }
+      }
+
+      function formatStorageAmount(bytes) {
+        if (typeof bytes !== "number" || !isFinite(bytes)) {
+          return "∞"
+        }
+        return formatFileSize(bytes)
+      }
+
+      function updateDriveStorageUI(hasError = false) {
+        const container = document.getElementById("drive-storage-container")
+        const usageEl = document.getElementById("drive-storage-usage")
+        const freeEl = document.getElementById("drive-storage-free")
+        if (!container || !usageEl || !freeEl) return
+
+        if (!driveStorageInfo) {
+          container.classList.remove("visible")
+          if (hasError) {
+            usageEl.textContent = window.I18N ? window.I18N.t("driveStorageFetchErrorShort") : "Google Drive storage unavailable"
+            freeEl.textContent = ""
+            container.classList.add("visible")
+          }
+          return
+        }
+
+        container.classList.add("visible")
+        const usedText = formatFileSize(driveStorageInfo.usageBytes)
+
+        if (driveStorageInfo.hasLimit) {
+          const totalText = formatFileSize(driveStorageInfo.limitBytes)
+          usageEl.textContent = window.I18N
+            ? window.I18N.t("driveStorageUsageLabel", { used: usedText, total: totalText })
+            : `${usedText} / ${totalText}`
+          const freeText = formatFileSize(Math.max(0, driveStorageInfo.availableBytes))
+          freeEl.textContent = window.I18N
+            ? window.I18N.t("driveStorageFreeLabel", { free: freeText })
+            : `${freeText} free`
+        } else {
+          usageEl.textContent = window.I18N
+            ? window.I18N.t("driveStorageUsageNoLimit", { used: usedText })
+            : `${usedText} used`
+          freeEl.textContent = ""
+        }
+      }
+
+      async function fetchDriveStorageInfo(force = false) {
+        if (driveStorageFetchPromise && !force) {
+          return driveStorageFetchPromise
+        }
+
+        const fetchPromise = (async () => {
+          try {
+            const response = await fetch("/drive/storage")
+            let data = {}
+            try {
+              data = await response.json()
+            } catch {
+              data = {}
+            }
+            if (!response.ok) {
+              throw data
+            }
+            const normalized = normalizeDriveStoragePayload(data.storage_quota)
+            driveStorageInfo = normalized
+            driveStorageInfoFetchedAt = Date.now()
+            updateDriveStorageUI()
+            return driveStorageInfo
+          } catch (error) {
+            console.error("Drive storage fetch error:", error)
+            driveStorageInfo = null
+            driveStorageInfoFetchedAt = 0
+            updateDriveStorageUI(true)
+            return null
+          } finally {
+            driveStorageFetchPromise = null
+          }
+        })()
+
+        driveStorageFetchPromise = fetchPromise
+        return fetchPromise
+      }
+
+      async function ensureDriveStorageInfo(options = {}) {
+        const { force = false, maxAgeMs = 120000 } = options || {}
+        const stale = !driveStorageInfo || (Date.now() - driveStorageInfoFetchedAt) > maxAgeMs
+        if (force || stale) {
+          return await fetchDriveStorageInfo(true)
+        }
+        return driveStorageInfo
+      }
+
+      function getProvisionalAvailableBytes() {
+        if (!driveStorageInfo) return null
+        if (typeof driveStorageInfo.provisionalAvailableBytes === "number") {
+          return driveStorageInfo.provisionalAvailableBytes
+        }
+        if (!isFinite(driveStorageInfo.availableBytes)) {
+          return Number.POSITIVE_INFINITY
+        }
+        return driveStorageInfo.availableBytes
+      }
+
+      function reserveProvisionalDriveSpace(bytes) {
+        if (!driveStorageInfo || !driveStorageInfo.hasLimit || !Number.isFinite(bytes) || bytes <= 0) {
+          return
+        }
+        const current = getProvisionalAvailableBytes()
+        driveStorageInfo.provisionalAvailableBytes = Math.max(0, current - bytes)
+        updateDriveStorageUI()
+      }
+
+      async function validateDriveStorageForUpload(fileSize, { savingAudio = false, forceRefresh = false } = {}) {
+        const info = await ensureDriveStorageInfo({ force: forceRefresh })
+        if (!info) {
+          showToast(window.I18N ? window.I18N.t("driveStorageFetchError") : "Unable to verify Google Drive storage.", "error")
+          return false
+        }
+        if (info.isUnlimited) {
+          return true
+        }
+
+        const available = getProvisionalAvailableBytes()
+        const guardbandText = formatFileSize(DRIVE_GUARDBAND_BYTES)
+
+        if (savingAudio) {
+          const availableAfterGuardband = available - DRIVE_GUARDBAND_BYTES
+          if (availableAfterGuardband < fileSize) {
+            const requiredText = formatFileSize(fileSize)
+            const freeText = formatFileSize(Math.max(0, availableAfterGuardband))
+            showToast(
+              window.I18N
+                ? window.I18N.t("driveStorageInsufficientAudio", { required: requiredText, available: freeText, guardband: guardbandText })
+                : `Not enough Google Drive space to save audio (${requiredText} needed, only ${freeText} free).`,
+              "error"
+            )
+            return false
+          }
+          reserveProvisionalDriveSpace(fileSize)
+          return true
+        }
+
+        if (available <= DRIVE_GUARDBAND_BYTES) {
+          showToast(
+            window.I18N
+              ? window.I18N.t("driveStorageGuardband", { guardband: guardbandText })
+              : `Please keep at least ${guardbandText} free on Google Drive before uploading.`,
+            "error"
+          )
+          return false
+        }
+
+        return true
+      }
+
       // Check and create endpoint if needed (called automatically when saving settings)
       async function checkAndCreateEndpoint(token) {
         try {
@@ -2844,12 +3077,14 @@
 
       // Check balance on page load
       checkBalance()
+      fetchDriveStorageInfo()
 
       // Settings modal handlers
       settingsBtn.addEventListener("click", () => {
         settingsModal.style.display = "block"
         settingsModal.classList.add("show")
         loadSettings()
+        fetchDriveStorageInfo(true)
       })
 
       closeSettings.addEventListener("click", () => {
@@ -3052,6 +3287,13 @@
 
         const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
         const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
+        const savingAudio = saveAudioValue === 'true'
+
+        const driveOk = await validateDriveStorageForUpload(selectedFile.size, { savingAudio, forceRefresh: true })
+        if (!driveOk) {
+          transcribeBtn.disabled = false
+          return
+        }
 
         const precheckResult = await runUploadPrecheck({
           fileSize: selectedFile.size,
@@ -3099,6 +3341,7 @@
           activeTranscription = false
           showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.'), 'success')
           switchTab('files')
+          fetchDriveStorageInfo(true)
         } catch (error) {
           showError(error)
         } finally {
@@ -3122,10 +3365,21 @@
         const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
         const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
         const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
+        const savingBatchAudio = saveAudioValue === 'true'
 
         let successCount = 0
         for (let i = 0; i < selectedFiles.length; i++) {
           const file = selectedFiles[i]
+
+          const storageOk = await validateDriveStorageForUpload(
+            file.size,
+            { savingAudio: savingBatchAudio, forceRefresh: i === 0 }
+          )
+          if (!storageOk) {
+            transcribeBtn.disabled = false
+            hideProgressUI()
+            return
+          }
 
           const precheckResult = await runUploadPrecheck({
             fileSize: file.size,
@@ -3177,6 +3431,7 @@
           showToast((window.I18N ? window.I18N.t('batchQueued', { count: successCount }) : `${successCount} קבצים נשלחו לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.`), 'success')
           // Switch to My Files tab
           switchTab('files')
+          fetchDriveStorageInfo(true)
         } else {
           showToast((window.I18N ? window.I18N.t('batchFailed') : 'כל הקבצים נכשלו'), 'error')
         }
@@ -4131,6 +4386,7 @@
             // Invalidate client-side cache and refresh the files list
             lastKnownEntries = null
             loadSavedFiles(true)
+          fetchDriveStorageInfo(true)
           } else {
             showToast(translateServerError(data) || (window.I18N ? window.I18N.t('deleteError') : 'שגיאה במחיקת הקובץ'), 'error')
           }

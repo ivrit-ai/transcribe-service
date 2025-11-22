@@ -204,6 +204,7 @@ from gdrive_utils import (
     find_drive_file_by_name,
     delete_drive_file,
     ensure_drive_folder,
+    get_drive_storage_quota,
     GoogleDriveError,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
@@ -1502,6 +1503,22 @@ async def get_balance(request: Request, runpod_token: str = None):
         return JSONResponse({"error": "errorBalanceFetchFailed", "i18n_key": "errorBalanceFetchFailed"}, status_code=500)
     
     return JSONResponse(balance_info)
+
+
+@app.get("/drive/storage", dependencies=[Depends(require_google_login)])
+async def get_drive_storage(request: Request):
+    """Return Google Drive storage quota for the signed-in user."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+
+    if not refresh_token:
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
+
+    storage_quota = await get_drive_storage_quota(refresh_token)
+    if not storage_quota:
+        return JSONResponse({"error": "errorDriveAccessFailed", "i18n_key": "errorDriveAccessFailed"}, status_code=502)
+
+    return JSONResponse({"storage_quota": storage_quota})
 
 @app.get("/stats", dependencies=[Depends(require_google_login)])
 async def get_stats(request: Request):

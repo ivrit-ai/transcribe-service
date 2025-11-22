@@ -384,6 +384,64 @@ async def list_drive_folder_files(refresh_token: Optional[str]) -> Optional[list
         raise GoogleDriveError("Exception listing Drive files") from exc
 
 
+async def get_drive_storage_quota(refresh_token: Optional[str]) -> Optional[dict]:
+    """Return Google Drive storage quota information for the authenticated user."""
+    access_token = await get_access_token_from_refresh(refresh_token)
+    if not access_token:
+        logger.warning("No Google access token available for Drive quota lookup")
+        return None
+
+    params = {
+        "fields": "storageQuota(limit,usage,usageInDrive,usageInDriveTrash)",
+    }
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://www.googleapis.com/drive/v3/about",
+                headers=headers,
+                params=params,
+            ) as resp:
+                if 200 <= resp.status < 300:
+                    data = await resp.json()
+                    quota = data.get("storageQuota")
+                    if not quota:
+                        logger.warning("Drive quota response missing storageQuota field")
+                        return None
+
+                    def _to_int(value):
+                        try:
+                            if value in (None, ""):
+                                return None
+                            return int(value)
+                        except (TypeError, ValueError):
+                            return None
+
+                    return {
+                        "limit": _to_int(quota.get("limit")),
+                        "usage": _to_int(quota.get("usage")),
+                        "usage_in_drive": _to_int(quota.get("usageInDrive")),
+                        "usage_in_drive_trash": _to_int(quota.get("usageInDriveTrash")),
+                    }
+                err = await resp.text()
+                logger.error(
+                    "Failed to fetch Drive storage quota: %s %s",
+                    resp.status,
+                    err,
+                )
+                raise GoogleDriveError(
+                    f"Failed to fetch Drive storage quota: {resp.status} {err}"
+                )
+    except GoogleAPIError:
+        raise
+    except Exception as exc:
+        logger.exception("Exception fetching Drive storage quota")
+        raise GoogleDriveError("Exception fetching Drive storage quota") from exc
+
+
 async def find_drive_file_by_name(refresh_token: Optional[str], filename: str) -> Optional[str]:
     """Find a file by name within the application's Drive folder and return its ID."""
     access_token = await get_access_token_from_refresh(refresh_token)
