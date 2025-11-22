@@ -34,7 +34,7 @@ import random
 import tempfile
 import asyncio
 import queue
-import subprocess
+import asyncio.subprocess
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
@@ -545,42 +545,76 @@ def get_media_duration(file_path):
         return None
 
 
-def transcode_to_opus(input_path: str, output_path: str) -> bool:
+async def transcode_to_opus(
+    input_path: str,
+    output_path: str,
+    *,
+    progress_callback=None,
+    duration_hint: Optional[float] = None,
+) -> bool:
     """
-    Transcode audio file to Opus format with specific parameters:
-    - 2 channels
-    - 48kHz sampling rate
-    - CBR (Constant Bitrate)
-    - 64k bitrate
-    - application = audio
-    - Single thread
+    Transcode audio file to Opus format with progress reporting.
     """
+    cmd = [
+        'ffmpeg',
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-nostats',
+        '-progress', 'pipe:1',
+        '-i', input_path,
+        '-ac', '2',
+        '-ar', '48000',
+        '-c:a', 'libopus',
+        '-b:a', '64k',
+        '-vbr', 'off',
+        '-application', 'audio',
+        '-threads', '1',
+        output_path
+    ]
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def emit_progress(out_time_ms: str):
+        if not progress_callback:
+            return
+        try:
+            progress_seconds = int(out_time_ms) / 1_000_000
+        except (ValueError, TypeError):
+            return
+        try:
+            await progress_callback(progress_seconds, duration_hint)
+        except Exception as exc:
+            log_message(f"Progress callback failed: {exc}")
+
     try:
-        # Run ffmpeg command matching the exact specification
-        result = subprocess.run(
-            [
-                'ffmpeg',
-                '-i', input_path,
-                '-ac', '2',
-                '-ar', '48000',
-                '-c:a', 'libopus',
-                '-b:a', '64k',
-                '-vbr', 'off',
-                '-application', 'audio',
-                '-threads', '1',
-                output_path
-            ],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return True
-    except subprocess.CalledProcessError as e:
-        log_message(f"Transcoding error: {e.stderr}")
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            decoded = line.decode(errors="ignore").strip()
+            if not decoded or "=" not in decoded:
+                continue
+            key, value = decoded.split("=", 1)
+            if key == "out_time_ms":
+                await emit_progress(value)
+            elif key == "progress" and value == "end":
+                break
+    except Exception as exc:
+        log_message(f"Transcoding progress loop failed: {exc}")
+
+    stderr_data = await process.stderr.read()
+    return_code = await process.wait()
+
+    if return_code != 0:
+        stderr_text = stderr_data.decode(errors="ignore")
+        log_message(f"Transcoding error (code {return_code}): {stderr_text}")
         return False
-    except Exception as e:
-        log_message(f"Unexpected transcoding error: {str(e)}")
-        return False
+
+    return True
 
 
 def get_user_quota(user_email):
@@ -1912,6 +1946,18 @@ async def handle_transcoding(job_id: str):
         log_message(f"Transcoding job {job_id} not found in running jobs")
         return
     transcoding_job = transcoding_running_jobs[job_id]
+    input_path = transcoding_job.input_path
+    
+    # Create output path for transcoded file
+    output_path = input_path + ".opus"
+
+    duration_hint_seconds = None
+    try:
+        if transcoding_job.duration:
+            duration_hint_seconds = float(transcoding_job.duration)
+    except Exception:
+        duration_hint_seconds = None
+
     await emit_upload_event(
         job_id,
         "transcoding_started",
@@ -1920,15 +1966,27 @@ async def handle_transcoding(job_id: str):
             "file_size_bytes": transcoding_job.get("file_size_bytes"),
         },
     )
-    input_path = transcoding_job.input_path
-    
-    # Create output path for transcoded file
-    output_path = input_path + ".opus"
+
+    async def progress_callback(progress_seconds: float, duration_hint_value: Optional[float] = None):
+        duration_for_percent = duration_hint_value or duration_hint_seconds or transcoding_job.duration or 0
+        percent = None
+        if duration_for_percent and duration_for_percent > 0:
+            percent = max(0.0, min(100.0, (progress_seconds / duration_for_percent) * 100.0))
+        payload = {
+            "progress_seconds": progress_seconds,
+            "duration_seconds": duration_for_percent,
+            "progress_percent": percent,
+            "filename": transcoding_job.filename,
+        }
+        await emit_upload_event(job_id, "transcoding_progress", payload)
     
     try:
-        # Run transcoding in thread pool (blocking operation)
-        loop = asyncio.get_event_loop()
-        success = await loop.run_in_executor(None, transcode_to_opus, input_path, output_path)
+        success = await transcode_to_opus(
+            input_path,
+            output_path,
+            progress_callback=progress_callback,
+            duration_hint=duration_hint_seconds,
+        )
         
         if not success:
             log_message(f"Transcoding failed for job {job_id}")

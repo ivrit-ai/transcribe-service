@@ -2619,9 +2619,6 @@
         if (progressContainer) {
           progressContainer.style.display = "block"
         }
-        if (progressBar) {
-          progressBar.style.width = "0%"
-        }
         if (progressStatus) {
           progressStatus.style.display = "none"
           progressStatus.textContent = ""
@@ -2645,13 +2642,19 @@
       function startUploadPhaseUI() {
         uploadPhase = "upload"
         showProgressUI()
+        if (progressBar) {
+          progressBar.style.width = "0%"
+        }
         setProgressStatusText("uploading")
       }
 
-      function startTranscodingPhaseUI(statusKey = "uploadTranscodingPending") {
+      function startTranscodingPhaseUI(statusKey = "uploadTranscodingPending", options = {}) {
+        const { resetBar = false } = options
+        const shouldReset = resetBar || uploadPhase !== "transcoding"
         uploadPhase = "transcoding"
-        if (progressBar && parseFloat(progressBar.style.width || "0") < 10) {
-          progressBar.style.width = "10%"
+        showProgressUI()
+        if (progressBar && shouldReset) {
+          progressBar.style.width = "0%"
         }
         setProgressStatusText(statusKey)
       }
@@ -2674,29 +2677,53 @@
         return `${mins}:${String(secs).padStart(2, "0")}`
       }
 
+      function extractProgressPercent(event) {
+        if (!event) return null
+        if (typeof event.progress_percent === "number" && Number.isFinite(event.progress_percent)) {
+          return Math.max(0, Math.min(100, event.progress_percent))
+        }
+        if (
+          typeof event.progress_seconds === "number" &&
+          typeof event.duration_seconds === "number" &&
+          event.duration_seconds > 0
+        ) {
+          const ratio = (event.progress_seconds / event.duration_seconds) * 100
+          return Math.max(0, Math.min(100, ratio))
+        }
+        return null
+      }
+
+      function updateTranscodingProgress(event) {
+        startTranscodingPhaseUI("uploadTranscodingStarted")
+        const percent = extractProgressPercent(event)
+        if (percent !== null && progressBar) {
+          progressBar.style.width = `${percent}%`
+        }
+        if (percent !== null) {
+          setProgressStatusText("uploadTranscodingProgress", { progress: Math.round(percent) })
+        }
+      }
+
       function handleUploadStreamEvent(event) {
         if (!event || !event.type) return
         switch (event.type) {
           case "transcoding_waiting":
-            startTranscodingPhaseUI("uploadTranscodingPending")
-            if (progressBar) progressBar.style.width = "15%"
+            startTranscodingPhaseUI("uploadTranscodingPending", { resetBar: true })
             break
           case "transcoding_started":
             startTranscodingPhaseUI("uploadTranscodingStarted")
-            if (progressBar) progressBar.style.width = "35%"
+            break
+          case "transcoding_progress":
+            updateTranscodingProgress(event)
             break
           case "queue_position": {
-            startTranscodingPhaseUI()
             const position = ((event.queue_depth ?? 0) + 1)
             const jobTypeLabel = getJobTypeLabel(event.job_type)
             setProgressStatusText("uploadQueuePositionDetail", { position, jobType: jobTypeLabel })
-            if (progressBar) progressBar.style.width = "65%"
             break
           }
           case "eta":
-            startTranscodingPhaseUI()
             setProgressStatusText("uploadQueueEtaDetail", { eta: formatEtaDisplay(event) })
-            if (progressBar) progressBar.style.width = "85%"
             break
           case "transcoding_complete":
             if (progressBar) progressBar.style.width = "100%"
@@ -3064,7 +3091,7 @@
           await sendStreamingUpload({
             formData,
             onUploadProgress: handleUploadProgress,
-            onUploadComplete: () => startTranscodingPhaseUI("uploadTranscodingPending"),
+            onUploadComplete: () => startTranscodingPhaseUI("uploadTranscodingPending", { resetBar: true }),
             onStreamEvent: handleUploadStreamEvent,
           })
           uploadSucceeded = true
@@ -3109,8 +3136,7 @@
 
           if (!precheckResult.ok) {
             transcribeBtn.disabled = false
-            progressContainer.style.display = "none"
-            progressBar.style.width = "0%"
+            hideProgressUI()
             return
           }
 
