@@ -11,7 +11,13 @@ from fastapi import (
 )
 from werkzeug.utils import secure_filename
 import aiohttp
-from fastapi.responses import JSONResponse, FileResponse, RedirectResponse, HTMLResponse
+from fastapi.responses import (
+    JSONResponse,
+    FileResponse,
+    RedirectResponse,
+    HTMLResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBearer
@@ -28,7 +34,7 @@ import random
 import tempfile
 import asyncio
 import queue
-import subprocess
+import asyncio.subprocess
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
@@ -347,6 +353,58 @@ max_parallel_jobs = {
 # Keep track of job results
 job_results = {}
 
+# Upload streaming subscribers per job_id
+upload_event_streams = {}
+
+
+async def emit_upload_event(job_id: str, event_type: str, payload: Optional[dict] = None):
+    """Push an event to any streaming client waiting on job_id."""
+    queue = upload_event_streams.get(job_id)
+    if not queue:
+        return
+
+    event = {"type": event_type, "job_id": job_id}
+    if payload:
+        event.update(payload)
+    await queue.put(event)
+
+
+async def emit_upload_error(
+    job_id: str,
+    error_key: str,
+    *,
+    status_code: int = 400,
+    i18n_vars: Optional[dict] = None,
+    details: Optional[str] = None,
+):
+    """Send a terminal error event to the streaming client."""
+    payload = {
+        "error": error_key,
+        "i18n_key": error_key,
+        "status_code": status_code,
+    }
+    if i18n_vars:
+        payload["i18n_vars"] = i18n_vars
+    if details:
+        payload["details"] = details
+    await emit_upload_event(job_id, "error", payload)
+
+
+async def upload_event_generator(job_id: str):
+    """Async generator that streams events for a specific upload job."""
+    queue = upload_event_streams.get(job_id)
+    if queue is None:
+        return
+
+    try:
+        while True:
+            event = await queue.get()
+            yield (json.dumps(event) + "\n").encode("utf-8")
+            if event.get("type") in {"error", "transcoding_complete"}:
+                break
+    finally:
+        upload_event_streams.pop(job_id, None)
+
 # Per-queue locks for thread-safe operations
 queue_locks = {
     SHORT: None,
@@ -487,42 +545,76 @@ def get_media_duration(file_path):
         return None
 
 
-def transcode_to_opus(input_path: str, output_path: str) -> bool:
+async def transcode_to_opus(
+    input_path: str,
+    output_path: str,
+    *,
+    progress_callback=None,
+    duration_hint: Optional[float] = None,
+) -> bool:
     """
-    Transcode audio file to Opus format with specific parameters:
-    - 2 channels
-    - 48kHz sampling rate
-    - CBR (Constant Bitrate)
-    - 64k bitrate
-    - application = audio
-    - Single thread
+    Transcode audio file to Opus format with progress reporting.
     """
+    cmd = [
+        'ffmpeg',
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-nostats',
+        '-progress', 'pipe:1',
+        '-i', input_path,
+        '-ac', '2',
+        '-ar', '48000',
+        '-c:a', 'libopus',
+        '-b:a', '64k',
+        '-vbr', 'off',
+        '-application', 'audio',
+        '-threads', '1',
+        output_path
+    ]
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def emit_progress(out_time_ms: str):
+        if not progress_callback:
+            return
+        try:
+            progress_seconds = int(out_time_ms) / 1_000_000
+        except (ValueError, TypeError):
+            return
+        try:
+            await progress_callback(progress_seconds, duration_hint)
+        except Exception as exc:
+            log_message(f"Progress callback failed: {exc}")
+
     try:
-        # Run ffmpeg command matching the exact specification
-        result = subprocess.run(
-            [
-                'ffmpeg',
-                '-i', input_path,
-                '-ac', '2',
-                '-ar', '48000',
-                '-c:a', 'libopus',
-                '-b:a', '64k',
-                '-vbr', 'off',
-                '-application', 'audio',
-                '-threads', '1',
-                output_path
-            ],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return True
-    except subprocess.CalledProcessError as e:
-        log_message(f"Transcoding error: {e.stderr}")
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            decoded = line.decode(errors="ignore").strip()
+            if not decoded or "=" not in decoded:
+                continue
+            key, value = decoded.split("=", 1)
+            if key == "out_time_ms":
+                await emit_progress(value)
+            elif key == "progress" and value == "end":
+                break
+    except Exception as exc:
+        log_message(f"Transcoding progress loop failed: {exc}")
+
+    stderr_data = await process.stderr.read()
+    return_code = await process.wait()
+
+    if return_code != 0:
+        stderr_text = stderr_data.decode(errors="ignore")
+        log_message(f"Transcoding error (code {return_code}): {stderr_text}")
         return False
-    except Exception as e:
-        log_message(f"Unexpected transcoding error: {str(e)}")
-        return False
+
+    return True
 
 
 def get_user_quota(user_email):
@@ -592,9 +684,27 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
     log_message(f"{user_email}: Queuing job {job_id}...")
     global stats_quota_denied
 
+    def build_error(error_key, *, status_code=400, i18n_vars=None):
+        payload = {"error": error_key, "i18n_key": error_key, "status_code": status_code}
+        if i18n_vars:
+            payload["i18n_vars"] = i18n_vars
+        return False, payload
+
     # Check if user already has a job queued or running
     if user_email in user_jobs:
-        return False, JSONResponse({"error": "errorJobAlreadyActive", "i18n_key": "errorJobAlreadyActive"}, status_code=400)
+        return build_error("errorJobAlreadyActive", status_code=400)
+
+    max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
+    if duration > max_duration_seconds:
+        return build_error(
+            "errorFileTooLong",
+            status_code=400,
+            i18n_vars={
+                "maxHours": MAX_AUDIO_DURATION_IN_HOURS,
+                "maxSeconds": f"{max_duration_seconds/3600:.1f}",
+                "fileHours": f"{duration/3600:.1f}",
+            },
+        )
 
     # Check rate limits only if not using custom RunPod credentials
     custom_runpod_credentials = bool(runpod_token)
@@ -609,16 +719,16 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
             if eta_seconds == float('inf'):
                 async with stats_lock:
                     stats_quota_denied += 1
-                return False, JSONResponse({"error": "errorFileTooLargeForFreeService", "i18n_key": "errorFileTooLargeForFreeService"}, status_code=429)
+                return build_error("errorFileTooLargeForFreeService", status_code=429)
             else:
                 wait_minutes = math.ceil(eta_seconds / 60)
                 async with stats_lock:
                     stats_quota_denied += 1
-                return False, JSONResponse({
-                    "error": "errorRateLimitExceeded",
-                    "i18n_key": "errorRateLimitExceeded",
-                    "i18n_vars": {"minutes": wait_minutes}
-                }, status_code=429)
+                return build_error(
+                    "errorRateLimitExceeded",
+                    status_code=429,
+                    i18n_vars={"minutes": wait_minutes},
+                )
 
     try:
         job_desc = box.Box()
@@ -669,16 +779,20 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
                 f"{user_email}: Job queued successfully: {job_id}, queue depth: {queue_depth}, job type: {job_type}, job desc: {job_desc}"
             )
 
-            return True, (
-                JSONResponse({"job_id": job_id, "queued": queue_depth, "job_type": job_type, "time_ahead": time_ahead_str})
-            )
+            return True, {
+                "job_id": job_id,
+                "queue_depth": queue_depth,
+                "job_type": job_type,
+                "time_ahead_display": time_ahead_str,
+                "time_ahead_seconds": int(time_ahead_seconds),
+            }
     except queue.Full:
         capture_event(job_id, "job-queue-failed", {"queue-depth": queue_depth, "job-type": job_type})
 
         log_message(f"{user_email}: Job queuing failed: {job_id}")
 
         cleanup_temp_file(job_id)
-        return False, JSONResponse({"error": "errorServerBusy", "i18n_key": "errorServerBusy"}, status_code=503)
+        return build_error("errorServerBusy", status_code=503)
 
 
 @app.get("/", dependencies=[Depends(require_google_login)])
@@ -740,69 +854,6 @@ async def get_toc(request: Request):
     
     # Augment with in-memory jobs for this user
     in_memory_entries = []
-    
-    # Check transcoding queue and running jobs for this user
-    async with transcoding_lock:
-        # Check queued transcoding jobs
-        for transcoding_job in list(transcoding_queue.queue):
-            if transcoding_job.user_email == user_email:
-                # Calculate ETA for queued transcoding jobs
-                # Find position of this job in queue
-                queue_list = list(transcoding_queue.queue)
-                job_position = queue_list.index(transcoding_job)
-                
-                # Calculate time for jobs ahead of this one
-                jobs_ahead = queue_list[:job_position]
-                time_ahead = sum(job.duration for job in jobs_ahead)
-                
-                # Add remaining time from running transcoding jobs
-                for running_job_id, running_job in transcoding_running_jobs.items():
-                    # Calculate remaining time based on elapsed time since transcoding started
-                    if hasattr(running_job, 'transcode_start_time') and running_job.transcode_start_time:
-                        elapsed_time = time.time() - running_job.transcode_start_time
-                        # Remaining time = duration - (elapsed_time * TRANSCODING_SPEEDUP)
-                        remaining_duration = max(0, running_job.duration - elapsed_time * TRANSCODING_SPEEDUP)
-                        time_ahead += remaining_duration
-                
-                # Apply transcoding speedup factor to total time ahead
-                eta_seconds = time_ahead / TRANSCODING_SPEEDUP
-                # Add this job's own transcoding time
-                eta_seconds += transcoding_job.duration / TRANSCODING_SPEEDUP
-                
-                entry = {
-                    "job_id": transcoding_job.id,
-                    "source_filename": transcoding_job.filename,
-                    "language": transcoding_job.language,
-                    "duration_seconds": transcoding_job.duration,
-                    "submitted_at": datetime.fromtimestamp(transcoding_job.qtime).isoformat(),
-                    "status": "Transcoding queued",
-                    "toc_version": toc_version,
-                    "eta_seconds": int(eta_seconds),
-                }
-                in_memory_entries.append(entry)
-        
-        # Check running transcoding jobs
-        for job_id, transcoding_job in transcoding_running_jobs.items():
-            if transcoding_job.user_email == user_email:
-                # Calculate ETA for running transcoding jobs
-                # Calculate remaining time based on elapsed time since transcoding started
-                if hasattr(transcoding_job, 'transcode_start_time') and transcoding_job.transcode_start_time:
-                    elapsed_time = time.time() - transcoding_job.transcode_start_time
-                    # Remaining time = duration - (elapsed_time * TRANSCODING_SPEEDUP)
-                    remaining_duration = max(0, transcoding_job.duration - elapsed_time * TRANSCODING_SPEEDUP)
-                    eta_seconds = remaining_duration / TRANSCODING_SPEEDUP
-                    
-                    entry = {
-                        "job_id": transcoding_job.id,
-                        "source_filename": transcoding_job.filename,
-                        "language": transcoding_job.language,
-                        "duration_seconds": transcoding_job.duration,
-                        "submitted_at": datetime.fromtimestamp(transcoding_job.qtime).isoformat(),
-                        "status": "Transcoding...",
-                        "toc_version": toc_version,
-                        "eta_seconds": int(eta_seconds),
-                    }
-                    in_memory_entries.append(entry)
     
     # Check all queues for jobs from this user
     for queue_type in [SHORT, LONG, PRIVATE]:
@@ -1872,9 +1923,23 @@ async def upload_file(
         job_results[job_id] = {"results": [], "completion_time": None}
         
         log_message(f"{user_email}: Transcoding job queued: {job_id}, queue depth: {queue_depth}")
-        
-        # Return success response
-        return JSONResponse({"job_id": job_id, "status": "transcoding_queued", "queue_depth": queue_depth})
+
+        event_queue = asyncio.Queue()
+        upload_event_streams[job_id] = event_queue
+        await event_queue.put(
+            {
+                "type": "transcoding_waiting",
+                "job_id": job_id,
+                "queue_depth": queue_depth,
+                "filename": filename,
+            }
+        )
+
+        return StreamingResponse(
+            upload_event_generator(job_id),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-store"},
+        )
     except queue.Full:
         cleanup_temp_file(job_id)
         log_message(f"{user_email}: Transcoding queue full for job {job_id}")
@@ -1892,20 +1957,52 @@ async def handle_transcoding(job_id: str):
     if job_id not in transcoding_running_jobs:
         log_message(f"Transcoding job {job_id} not found in running jobs")
         return
-    
     transcoding_job = transcoding_running_jobs[job_id]
     input_path = transcoding_job.input_path
     
     # Create output path for transcoded file
     output_path = input_path + ".opus"
+
+    duration_hint_seconds = None
+    try:
+        if transcoding_job.duration:
+            duration_hint_seconds = float(transcoding_job.duration)
+    except Exception:
+        duration_hint_seconds = None
+
+    await emit_upload_event(
+        job_id,
+        "transcoding_started",
+        {
+            "filename": transcoding_job.filename,
+            "file_size_bytes": transcoding_job.get("file_size_bytes"),
+        },
+    )
+
+    async def progress_callback(progress_seconds: float, duration_hint_value: Optional[float] = None):
+        duration_for_percent = duration_hint_value or duration_hint_seconds or transcoding_job.duration or 0
+        percent = None
+        if duration_for_percent and duration_for_percent > 0:
+            percent = max(0.0, min(100.0, (progress_seconds / duration_for_percent) * 100.0))
+        payload = {
+            "progress_seconds": progress_seconds,
+            "duration_seconds": duration_for_percent,
+            "progress_percent": percent,
+            "filename": transcoding_job.filename,
+        }
+        await emit_upload_event(job_id, "transcoding_progress", payload)
     
     try:
-        # Run transcoding in thread pool (blocking operation)
-        loop = asyncio.get_event_loop()
-        success = await loop.run_in_executor(None, transcode_to_opus, input_path, output_path)
+        success = await transcode_to_opus(
+            input_path,
+            output_path,
+            progress_callback=progress_callback,
+            duration_hint=duration_hint_seconds,
+        )
         
         if not success:
             log_message(f"Transcoding failed for job {job_id}")
+            await emit_upload_error(job_id, "errorInternalServer", details="transcoding_failed")
             # Clean up
             if job_id in transcoding_running_jobs:
                 del transcoding_running_jobs[job_id]
@@ -1914,57 +2011,23 @@ async def handle_transcoding(job_id: str):
                 os.unlink(output_path)
             return
         
+        # Get duration from the generated Opus file before replacing the original
+        duration = get_media_duration(output_path)
+
         # Replace original file with transcoded file
         try:
-            # Remove original file
             if os.path.exists(input_path):
                 os.unlink(input_path)
-            # Rename transcoded file to original path
             os.rename(output_path, input_path)
-            # Update temp_files to point to the transcoded file
             temp_files[job_id] = input_path
         except Exception as e:
             log_message(f"Error replacing file after transcoding for job {job_id}: {str(e)}")
-            # Clean up
+            await emit_upload_error(job_id, "errorInternalServer", details="transcoding_replace_failed")
             if job_id in transcoding_running_jobs:
                 del transcoding_running_jobs[job_id]
             cleanup_temp_file(job_id)
             if os.path.exists(output_path):
                 os.unlink(output_path)
-            return
-        
-        # Get duration of transcoded file
-        duration = get_media_duration(input_path)
-        
-        if duration is None:
-            log_message(f"Cannot read duration of transcoded file for job {job_id}")
-            # Clean up
-            if job_id in transcoding_running_jobs:
-                del transcoding_running_jobs[job_id]
-            cleanup_temp_file(job_id)
-            # Store error in job_results for client to retrieve
-            if job_id in job_results:
-                job_results[job_id]["error"] = "errorCannotReadDuration"
-                job_results[job_id]["i18n_key"] = "errorCannotReadDuration"
-            return
-        
-        # Check if audio duration exceeds maximum allowed duration
-        max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
-        if duration > max_duration_seconds:
-            log_message(f"Transcoded file exceeds maximum duration for job {job_id}: {duration}s > {max_duration_seconds}s")
-            # Clean up
-            if job_id in transcoding_running_jobs:
-                del transcoding_running_jobs[job_id]
-            cleanup_temp_file(job_id)
-            # Store error in job_results for client to retrieve
-            if job_id in job_results:
-                job_results[job_id]["error"] = "errorFileTooLong"
-                job_results[job_id]["i18n_key"] = "errorFileTooLong"
-                job_results[job_id]["i18n_vars"] = {
-                    "maxHours": MAX_AUDIO_DURATION_IN_HOURS,
-                    "maxSeconds": f"{max_duration_seconds/3600:.1f}",
-                    "fileHours": f"{duration/3600:.1f}"
-                }
             return
         
         # Update the job with actual duration
@@ -1975,7 +2038,7 @@ async def handle_transcoding(job_id: str):
             del transcoding_running_jobs[job_id]
         
         # Queue the job for transcription
-        queued, res = await queue_job(
+        queued, queue_info = await queue_job(
             job_id,
             transcoding_job.user_email,
             transcoding_job.filename,
@@ -1988,8 +2051,36 @@ async def handle_transcoding(job_id: str):
         
         if not queued:
             log_message(f"Failed to queue job {job_id} after transcoding")
+            if isinstance(queue_info, dict):
+                await emit_upload_event(job_id, "error", queue_info)
             cleanup_temp_file(job_id)
         else:
+            await emit_upload_event(
+                job_id,
+                "queue_position",
+                {
+                    "queue_depth": queue_info.get("queue_depth"),
+                    "job_type": queue_info.get("job_type"),
+                    "filename": transcoding_job.filename,
+                },
+            )
+            await emit_upload_event(
+                job_id,
+                "eta",
+                {
+                    "eta_seconds": queue_info.get("time_ahead_seconds"),
+                    "eta_display": queue_info.get("time_ahead_display"),
+                    "job_type": queue_info.get("job_type"),
+                },
+            )
+            await emit_upload_event(
+                job_id,
+                "transcoding_complete",
+                {
+                    "queue_depth": queue_info.get("queue_depth"),
+                    "job_type": queue_info.get("job_type"),
+                },
+            )
             async with stats_lock:
                 stats_transcoding_jobs += 1
                 file_size_gb = 0.0
@@ -2210,6 +2301,7 @@ async def process_segment(job_id, segment, duration):
 
 
 async def transcribe_job(job_desc):
+    global stats_total_jobs_started, stats_total_minutes_processed
     job_id = job_desc.id
     segs = None
 
@@ -2414,6 +2506,7 @@ async def transcribe_job(job_desc):
             logger.error(f"Failed to upload transcription for {job_id}: {e}")
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
+        await emit_upload_error(job_id, "errorInternalServer", details=str(e))
     finally:
         # Close segs if it exists
         #if segs:
