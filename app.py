@@ -694,6 +694,18 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
     if user_email in user_jobs:
         return build_error("errorJobAlreadyActive", status_code=400)
 
+    max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
+    if duration > max_duration_seconds:
+        return build_error(
+            "errorFileTooLong",
+            status_code=400,
+            i18n_vars={
+                "maxHours": MAX_AUDIO_DURATION_IN_HOURS,
+                "maxSeconds": f"{max_duration_seconds/3600:.1f}",
+                "fileHours": f"{duration/3600:.1f}",
+            },
+        )
+
     # Check rate limits only if not using custom RunPod credentials
     custom_runpod_credentials = bool(runpod_token)
     if not custom_runpod_credentials:
@@ -1999,68 +2011,23 @@ async def handle_transcoding(job_id: str):
                 os.unlink(output_path)
             return
         
+        # Get duration from the generated Opus file before replacing the original
+        duration = get_media_duration(output_path)
+
         # Replace original file with transcoded file
         try:
-            # Remove original file
             if os.path.exists(input_path):
                 os.unlink(input_path)
-            # Rename transcoded file to original path
             os.rename(output_path, input_path)
-            # Update temp_files to point to the transcoded file
             temp_files[job_id] = input_path
         except Exception as e:
             log_message(f"Error replacing file after transcoding for job {job_id}: {str(e)}")
             await emit_upload_error(job_id, "errorInternalServer", details="transcoding_replace_failed")
-            # Clean up
             if job_id in transcoding_running_jobs:
                 del transcoding_running_jobs[job_id]
             cleanup_temp_file(job_id)
             if os.path.exists(output_path):
                 os.unlink(output_path)
-            return
-        
-        # Get duration of transcoded file
-        duration = get_media_duration(input_path)
-        
-        if duration is None:
-            log_message(f"Cannot read duration of transcoded file for job {job_id}")
-            await emit_upload_error(job_id, "errorCannotReadDuration")
-            # Clean up
-            if job_id in transcoding_running_jobs:
-                del transcoding_running_jobs[job_id]
-            cleanup_temp_file(job_id)
-            # Store error in job_results for client to retrieve
-            if job_id in job_results:
-                job_results[job_id]["error"] = "errorCannotReadDuration"
-                job_results[job_id]["i18n_key"] = "errorCannotReadDuration"
-            return
-        
-        # Check if audio duration exceeds maximum allowed duration
-        max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
-        if duration > max_duration_seconds:
-            log_message(f"Transcoded file exceeds maximum duration for job {job_id}: {duration}s > {max_duration_seconds}s")
-            await emit_upload_error(
-                job_id,
-                "errorFileTooLong",
-                i18n_vars={
-                    "maxHours": MAX_AUDIO_DURATION_IN_HOURS,
-                    "maxSeconds": f"{max_duration_seconds/3600:.1f}",
-                    "fileHours": f"{duration/3600:.1f}",
-                },
-            )
-            # Clean up
-            if job_id in transcoding_running_jobs:
-                del transcoding_running_jobs[job_id]
-            cleanup_temp_file(job_id)
-            # Store error in job_results for client to retrieve
-            if job_id in job_results:
-                job_results[job_id]["error"] = "errorFileTooLong"
-                job_results[job_id]["i18n_key"] = "errorFileTooLong"
-                job_results[job_id]["i18n_vars"] = {
-                    "maxHours": MAX_AUDIO_DURATION_IN_HOURS,
-                    "maxSeconds": f"{max_duration_seconds/3600:.1f}",
-                    "fileHours": f"{duration/3600:.1f}"
-                }
             return
         
         # Update the job with actual duration
