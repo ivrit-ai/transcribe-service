@@ -994,6 +994,15 @@
         font-weight: 500;
         text-align: center;
       }
+      #cancel-ffmpeg-btn {
+        border-color: #ffffff;
+        color: #ffffff;
+        background: transparent;
+      }
+      #cancel-ffmpeg-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: #ffffff;
+      }
 
       .file-preview {
         display: none;
@@ -1445,11 +1454,11 @@
   </head>
   <body>
     <div class="toast-container" id="toast-container"></div>
-    <div class="spinner-overlay" id="spinner-overlay">
-      <div class="spinner"></div>
-      <div class="spinner-message" id="spinner-message"></div>
-    </div>
-    <div class="info-tooltip" id="save-audio-tooltip" style="display: none;">
+          <div class="spinner-overlay" id="spinner-overlay">
+            <div class="spinner"></div>
+            <div class="spinner-message" id="spinner-message"></div>
+            <button id="cancel-ffmpeg-btn" class="btn btn-secondary" style="display: none; margin-top: 1rem;" data-i18n="cancel">ביטול</button>
+          </div>    <div class="info-tooltip" id="save-audio-tooltip" style="display: none;">
       <div class="tooltip-header">
         <span data-i18n="whatDoesThisMean">מה זה אומר?</span>
         <button type="button" class="tooltip-close" aria-label="Close">&times;</button>
@@ -1589,6 +1598,7 @@
         <div id="progress-bar"></div>
       </div>
       <div id="progress-status" aria-live="polite"></div>
+      <button id="cancel-local-processing-btn" class="btn btn-secondary" style="display: none; margin-top: 1rem;" data-i18n="cancel">ביטול</button>
       </div>
       <!-- End Transcribe Tab -->
 
@@ -1897,7 +1907,34 @@
             </div>
           </div>
 
-          
+          <div class="settings-section">
+            <h3 data-i18n="ffmpegSettingsHeader">עיבוד בדפדפן</h3>
+            <div class="radio-group">
+              <label class="radio-option">
+                <input type="radio" name="ffmpeg-preference" value="auto" />
+                <div class="radio-content">
+                  <span class="radio-text" data-i18n="ffmpegAutoLabel">בחירה אוטומטית</span>
+                  <small data-i18n="ffmpegAutoHelp">המחשב יבחר לבד אם להמיר בדפדפן בהתאם ליכולת שלו.</small>
+                </div>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="ffmpeg-preference" value="local" />
+                <div class="radio-content">
+                  <span class="radio-text" data-i18n="ffmpegLocalOnly">המר בדפדפן</span>
+                  <small data-i18n="ffmpegLocalOnlyHelp">המרת הקובץ ל־Opus לפני העלאה כדי לקצר זמן המתנה ולהקטין נתונים.</small>
+                </div>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="ffmpeg-preference" value="server" />
+                <div class="radio-content">
+                  <span class="radio-text" data-i18n="ffmpegServerOnly">המר בשרת</span>
+                  <small data-i18n="ffmpegServerOnlyHelp">דילוג על המרה בדפדפן ושליחת הקובץ כפי שהוא.</small>
+                </div>
+              </label>
+            </div>
+            <small class="form-help" data-i18n="ffmpegPreferenceNote">ההמרה המקומית נשארת במחשב שלך בלבד ומפחיתה את נפח ההעלאה.</small>
+            <small class="form-help" id="ffmpeg-support-warning" style="display: none;" data-i18n="ffmpegSupportWarning">הדפדפן שלך לא תומך בעיבוד מקומי לכן נשתמש בשרת.</small>
+          </div>
 
           <div class="modal-buttons">
             <button type="submit" class="btn btn-primary" data-i18n="save">שמור</button>
@@ -1916,6 +1953,7 @@
       </div>
     </div>
 
+    <script src="{{ url_for('static', path='ffmpeg-client.js') }}"></script>
     <script src="{{ url_for('static', path='i18n.js') }}"></script>
     <script>
       // Initialize Lucide icons after DOM is parsed
@@ -1943,6 +1981,7 @@
         initTabs()
         // Initialize save audio info tooltip
         initSaveAudioTooltip()
+        initFfmpegPreferenceUI()
       })
 
       // Initialize save audio tooltip
@@ -2025,6 +2064,52 @@
           tooltip.style.visibility = ''
         }
       }
+      
+      function initFfmpegPreferenceUI() {
+        if (!ffmpegPreferenceRadios || ffmpegPreferenceRadios.length === 0) return
+        ffmpegPreferenceRadios.forEach((radio) => {
+          if (radio.dataset.ffmpegBound === "1") return
+          radio.dataset.ffmpegBound = "1"
+          radio.addEventListener("change", () => {
+            if (!radio.checked) return
+            const supported = !!(ffmpegClient && typeof ffmpegClient.isSupported === "function" && ffmpegClient.isSupported())
+            if (!supported && radio.value !== ffmpegPreferenceMap.SERVER) {
+              showToast(window.I18N ? window.I18N.t("ffmpegNotSupported") : "עיבוד מקומי אינו נתמך", "error")
+              syncFfmpegPreferenceUI()
+              return
+            }
+            if (ffmpegClient && typeof ffmpegClient.setPreference === "function") {
+              ffmpegClient.setPreference(radio.value)
+            }
+          })
+        })
+        syncFfmpegPreferenceUI()
+      }
+
+      function syncFfmpegPreferenceUI() {
+        if (!ffmpegPreferenceRadios || ffmpegPreferenceRadios.length === 0) return
+        const supported = !!(ffmpegClient && typeof ffmpegClient.isSupported === "function" && ffmpegClient.isSupported())
+        const preference = ffmpegClient && typeof ffmpegClient.getPreference === "function"
+          ? ffmpegClient.getPreference()
+          : ffmpegPreferenceMap.SERVER
+        let matched = false
+        ffmpegPreferenceRadios.forEach((radio) => {
+          const shouldCheck = radio.value === preference
+          if (shouldCheck) matched = true
+          radio.checked = shouldCheck
+          if (!supported && radio.value !== ffmpegPreferenceMap.SERVER) {
+            radio.disabled = true
+          } else {
+            radio.disabled = false
+          }
+        })
+        if (!matched && ffmpegPreferenceRadios[0]) {
+          ffmpegPreferenceRadios[0].checked = true
+        }
+        if (ffmpegSupportWarning) {
+          ffmpegSupportWarning.style.display = supported ? "none" : "block"
+        }
+      }
       const dropArea = document.getElementById("drop-area")
       const fileInput = document.getElementById("file-input")
       const fileName = document.getElementById("file-name")
@@ -2050,6 +2135,12 @@
       const settingsBtn = document.getElementById("settings-btn")
       const langMenu = document.getElementById("lang-menu")
       const statsTabBtn = document.getElementById("stats-tab-btn")
+      const ffmpegPreferenceRadios = document.querySelectorAll('input[name="ffmpeg-preference"]')
+      const ffmpegSupportWarning = document.getElementById("ffmpeg-support-warning")
+      const ffmpegClient = window.FFmpegClient || null
+      const ffmpegPreferenceMap = ffmpegClient && ffmpegClient.Preference
+        ? ffmpegClient.Preference
+        : { AUTO: "auto", LOCAL: "local", SERVER: "server" }
       // Language selection handlers
       if (langMenu && window.I18N) {
         langMenu.addEventListener('click', (e) => {
@@ -2078,6 +2169,7 @@
       const runpodTokenInput = document.getElementById("runpod-token")
       let savedRunpodToken = ""
       let runpodTokenDirty = false
+      let localProcessingAbortController = null
 
       if (runpodTokenInput) {
         savedRunpodToken = (getCookie("runpod_token") || "").trim()
@@ -2312,6 +2404,7 @@
 
         // Update settings button appearance if credentials are saved
         updateSettingsButtonIndicator()
+        syncFfmpegPreferenceUI()
       }
 
       // Update settings button to show if credentials are saved
@@ -2639,6 +2732,60 @@
         uploadPhase = "idle"
       }
 
+      const cancelLocalProcessingBtn = document.getElementById('cancel-local-processing-btn');
+      if (cancelLocalProcessingBtn) {
+        cancelLocalProcessingBtn.addEventListener('click', () => {
+          if (localProcessingAbortController) {
+            localProcessingAbortController.abort();
+          }
+        });
+      }
+
+      function startLocalProcessingUI() {
+        uploadPhase = "local"
+        showProgressUI()
+        if (progressBar) {
+          progressBar.style.width = "0%"
+        }
+        setProgressStatusText("ffmpegLocalProcessing")
+        if (cancelLocalProcessingBtn) {
+          cancelLocalProcessingBtn.style.display = 'inline-block';
+        }
+      }
+
+      function updateLocalProcessingProgress(ratio) {
+        const percent = Math.max(1, Math.min(100, Math.round((ratio || 0) * 100)))
+        if (progressBar) {
+          progressBar.style.width = `${percent}%`
+        }
+        setProgressStatusText("ffmpegLocalProgress", { progress: percent })
+      }
+
+      function finishLocalProcessingUI(success = true) {
+        if (success) {
+          setProgressStatusText("ffmpegLocalComplete")
+        }
+        if (cancelLocalProcessingBtn) {
+          cancelLocalProcessingBtn.style.display = 'none';
+        }
+      }
+
+      function handleLocalProcessingError(error) {
+        if (!error) {
+          showToast(window.I18N ? window.I18N.t("ffmpegLocalFailed") : "ההמרה המקומית נכשלה", "error")
+          setProgressStatusText("ffmpegRecoveredServer")
+          return
+        }
+        if (error.name === "AbortError") {
+          showToast(window.I18N ? window.I18N.t("ffmpegCancelled") : "ההמרה המקומית בוטלה", "error")
+        } else if (!(ffmpegClient && typeof ffmpegClient.isSupported === "function" && ffmpegClient.isSupported())) {
+          showToast(window.I18N ? window.I18N.t("ffmpegNotSupported") : "עיבוד מקומי אינו נתמך במכשיר זה", "error")
+        } else {
+          showToast(window.I18N ? window.I18N.t("ffmpegLocalFailed") : "ההמרה המקומית נכשלה", "error")
+        }
+        setProgressStatusText("ffmpegRecoveredServer")
+      }
+
       function startUploadPhaseUI() {
         uploadPhase = "upload"
         showProgressUI()
@@ -2657,6 +2804,54 @@
           progressBar.style.width = "0%"
         }
         setProgressStatusText(statusKey)
+      }
+
+      async function prepareFileForUpload(file, { reason = "upload" } = {}) {
+        if (!file) {
+          return { file, clientTranscoded: false, cleanup: () => {} }
+        }
+        if (!ffmpegClient || typeof ffmpegClient.shouldUseLocalProcessing !== "function") {
+          return { file, clientTranscoded: false, cleanup: () => {} }
+        }
+        const supported = typeof ffmpegClient.isSupported === "function" ? ffmpegClient.isSupported() : false
+        const preference = typeof ffmpegClient.getPreference === "function"
+          ? ffmpegClient.getPreference()
+          : ffmpegPreferenceMap.AUTO
+        if (!supported) {
+          if (preference === ffmpegPreferenceMap.LOCAL) {
+            showToast(window.I18N ? window.I18N.t("ffmpegNotSupported") : "עיבוד מקומי אינו נתמך", "error")
+          }
+          return { file, clientTranscoded: false, cleanup: () => {} }
+        }
+        const reasonHint = file && file._origin === "recording" ? "recording" : reason
+        const shouldUse = ffmpegClient.shouldUseLocalProcessing({
+          fileSizeBytes: file.size || 0,
+          preference,
+          isRecording: reasonHint === "recording",
+        })
+        if (!shouldUse) {
+          return { file, clientTranscoded: false, cleanup: () => {} }
+        }
+        try {
+          startLocalProcessingUI()
+          localProcessingAbortController = new AbortController()
+          const result = await ffmpegClient.convertToOpus(file, {
+            signal: localProcessingAbortController.signal,
+            onProgress: updateLocalProcessingProgress,
+          })
+          finishLocalProcessingUI(true)
+          localProcessingAbortController = null
+          return {
+            file: result.file || file,
+            clientTranscoded: !!result.clientTranscoded,
+            cleanup: typeof result.cleanup === "function" ? result.cleanup : () => {},
+          }
+        } catch (error) {
+          localProcessingAbortController = null
+          handleLocalProcessingError(error)
+          finishLocalProcessingUI(false)
+          return { file, clientTranscoded: false, cleanup: () => {} }
+        }
       }
 
       function getJobTypeLabel(jobType) {
@@ -3064,14 +3259,19 @@
           return
         }
 
+        const prepResult = await prepareFileForUpload(selectedFile, { reason: "upload" })
+        const fileForUpload = prepResult.file || selectedFile
         const formData = new FormData()
-        formData.append("file", selectedFile)
+        formData.append("file", fileForUpload)
 
         if (token) {
           formData.append("runpod_token", token)
         }
         formData.append("language", selectedLang)
         formData.append("save_audio", saveAudioValue)
+        if (prepResult.clientTranscoded) {
+          formData.append("client_transcoded", "opus")
+        }
 
         transcribeBtn.disabled = true
         transcriptionSegments = []
@@ -3102,6 +3302,11 @@
         } catch (error) {
           showError(error)
         } finally {
+          try {
+            if (prepResult.cleanup) {
+              prepResult.cleanup()
+            }
+          } catch {}
           streamingUploadActive = false
           if (!uploadSucceeded) {
             transcribeBtn.disabled = false
@@ -3140,13 +3345,19 @@
             return
           }
 
+          const prepResult = await prepareFileForUpload(file, { reason: "batch" })
+          const fileForUpload = prepResult.file || file
+
           const formData = new FormData()
-          formData.append("file", file)
+          formData.append("file", fileForUpload)
           formData.append('language', selectedLang)
           if (token) formData.append("runpod_token", token)
           
           // Include save_audio checkbox value
           formData.append('save_audio', saveAudioValue)
+          if (prepResult.clientTranscoded) {
+            formData.append("client_transcoded", "opus")
+          }
 
           setProgressStatusText("batchUploading", {
             index: i + 1,
@@ -3165,6 +3376,11 @@
             showToast(`${file.name}: ${translated}`, "error")
             continue
           } finally {
+            try {
+              if (prepResult.cleanup) {
+                prepResult.cleanup()
+              }
+            } catch {}
             if (progressBar) {
               progressBar.style.width = `${Math.min(100, ((i + 1) / selectedFiles.length) * 100)}%`
             }
@@ -4659,6 +4875,7 @@
             // Convert blob to file and add to file list
             const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
             const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
+            file._origin = 'recording'
             
             selectedFile = file
             selectedFiles = []
@@ -4783,6 +5000,7 @@
             // Convert blob to file and add to file list
             const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
             const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
+            file._origin = 'recording'
             
             selectedFile = file
             selectedFiles = []
@@ -4947,6 +5165,7 @@
             // Convert blob to file and add to file list
             const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
             const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
+            file._origin = 'recording'
             
             selectedFile = file
             selectedFiles = []
