@@ -9,7 +9,7 @@ from fastapi import (
     UploadFile,
     status
 )
-from werkzeug.utils import secure_filename
+
 import aiohttp
 from fastapi.responses import (
     JSONResponse,
@@ -1819,7 +1819,9 @@ async def upload_file(
     if file.filename == "":
         return JSONResponse({"error": "errorEmptyFilename", "i18n_key": "errorEmptyFilename"}, status_code=200)
 
-    filename = secure_filename(file.filename)
+    # Use original filename directly - it's only used for display in TOC, never for filesystem operations
+    # Actual files use system-generated temp names and UUID-based names on Google Drive
+    filename = file.filename
 
     content_length = None
     if "content-length" in request.headers:
