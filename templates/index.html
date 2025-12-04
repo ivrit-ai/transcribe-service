@@ -814,6 +814,26 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
+      
+      /* Fixed audio player for viewer tab */
+      #viewer-audio-player-container {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        background-color: var(--container-bg);
+        padding: 1rem 0;
+        margin-bottom: 1rem;
+        border-bottom: 1px solid var(--border-color);
+        display: none;
+      }
+      #viewer-audio-player-container.visible {
+        display: block;
+      }
+      #viewer-audio-player {
+        width: 100%;
+        max-width: 100%;
+        outline: none;
+      }
       #download-docx-btn svg {
         width: 20px;
         height: 20px;
@@ -1640,6 +1660,13 @@
             <span data-i18n="backToFiles">חזרה לרשימה</span>
           </button>
           <h2 id="viewer-file-name" style="margin: 0; font-size: 1.2rem; color: var(--text-color);"></h2>
+        </div>
+
+        <!-- Audio Player (hidden by default, shown when audio available) -->
+        <div id="viewer-audio-player-container">
+          <audio id="viewer-audio-player" controls preload="metadata">
+            <source id="viewer-audio-source" type="audio/ogg">
+          </audio>
         </div>
 
         <div class="action-buttons">
@@ -4273,6 +4300,9 @@
           updateViewerTimestampsToggleUI()
           updateViewerDiarizationToggleUI()
 
+          // Load audio player if audio file exists
+          await loadViewerAudioPlayer(entry.results_id)
+
           // Show viewer tab
           document.getElementById('viewer-tab-btn').style.display = 'block'
           switchTab('viewer')
@@ -4288,6 +4318,33 @@
         } finally {
           // Always hide spinner when done
           hideSpinner()
+        }
+      }
+
+      // Load audio player for viewer tab
+      async function loadViewerAudioPlayer(resultsId) {
+        const playerContainer = document.getElementById('viewer-audio-player-container')
+        const audioPlayer = document.getElementById('viewer-audio-player')
+        const audioSource = document.getElementById('viewer-audio-source')
+        
+        // Hide player by default
+        playerContainer.classList.remove('visible')
+        
+        try {
+          // Check if audio file exists by making a HEAD request
+          const checkResponse = await fetch(`/appdata/audio/stream/${resultsId}`, {
+            method: 'HEAD'
+          })
+          
+          if (checkResponse.ok) {
+            // Audio file exists, set up player
+            audioSource.src = `/appdata/audio/stream/${resultsId}`
+            audioPlayer.load()
+            playerContainer.classList.add('visible')
+          }
+        } catch (error) {
+          // Audio file doesn't exist or error occurred, keep player hidden
+          console.log('Audio file not available for this transcription')
         }
       }
 
@@ -4471,6 +4528,12 @@
       // Wire up viewer controls
       document.getElementById('back-to-files-btn').addEventListener('click', () => {
         document.getElementById('viewer-tab-btn').style.display = 'none'
+        // Hide and reset audio player
+        const playerContainer = document.getElementById('viewer-audio-player-container')
+        const audioPlayer = document.getElementById('viewer-audio-player')
+        playerContainer.classList.remove('visible')
+        audioPlayer.pause()
+        audioPlayer.currentTime = 0
         switchTab('files')
       })
 

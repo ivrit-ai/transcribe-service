@@ -435,6 +435,116 @@ async def find_drive_file_by_name(refresh_token: Optional[str], filename: str) -
         raise GoogleDriveError("Exception finding Drive file by name") from exc
 
 
+async def get_drive_file_metadata(refresh_token: Optional[str], file_id: str) -> Optional[Dict[str, Any]]:
+    """Get metadata for a file in Google Drive, including size."""
+    access_token = await get_access_token_from_refresh(refresh_token)
+    if not access_token:
+        logger.warning("No Google access token available for getting file metadata")
+        return None
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}",
+                params={"fields": "id,name,size,mimeType"},
+                headers=headers,
+            ) as resp:
+                if 200 <= resp.status < 300:
+                    return await resp.json()
+                err = await resp.text()
+                logger.error(
+                    "Failed to get Drive file metadata %s: %s %s",
+                    file_id,
+                    resp.status,
+                    err,
+                )
+                return None
+    except Exception as exc:
+        logger.exception("Exception getting Drive file metadata %s", file_id)
+        return None
+
+
+async def stream_drive_file_range(
+    refresh_token: Optional[str],
+    file_id: str,
+    range_header: Optional[str] = None
+) -> Optional[tuple[bytes, int, int, int]]:
+    """
+    Stream a file from Google Drive with optional range support.
+    Returns tuple of (content, status_code, start_byte, end_byte, total_size) or None.
+    """
+    access_token = await get_access_token_from_refresh(refresh_token)
+    if not access_token:
+        logger.warning("No Google access token available for streaming Drive file")
+        return None
+    
+    # First get file metadata to know the total size
+    metadata = await get_drive_file_metadata(refresh_token, file_id)
+    if not metadata or "size" not in metadata:
+        logger.error(f"Could not get size for file {file_id}")
+        return None
+    
+    total_size = int(metadata["size"])
+    
+    # Parse range header if provided
+    start_byte = 0
+    end_byte = total_size - 1
+    
+    if range_header:
+        # Format: "bytes=start-end" or "bytes=start-"
+        try:
+            range_str = range_header.replace("bytes=", "").strip()
+            if "-" in range_str:
+                parts = range_str.split("-")
+                if parts[0]:
+                    start_byte = int(parts[0])
+                if parts[1]:
+                    end_byte = int(parts[1])
+                else:
+                    end_byte = total_size - 1
+                    
+                # Validate range
+                if start_byte >= total_size:
+                    start_byte = 0
+                if end_byte >= total_size:
+                    end_byte = total_size - 1
+        except ValueError:
+            logger.warning(f"Invalid range header: {range_header}")
+            start_byte = 0
+            end_byte = total_size - 1
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Range": f"bytes={start_byte}-{end_byte}",
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}",
+                params={"alt": "media"},
+                headers=headers,
+            ) as resp:
+                if resp.status in (200, 206):
+                    content = await resp.read()
+                    return (content, resp.status, start_byte, end_byte, total_size)
+                err = await resp.text()
+                logger.error(
+                    "Failed to stream Drive file %s: %s %s",
+                    file_id,
+                    resp.status,
+                    err,
+                )
+                return None
+    except Exception as exc:
+        logger.exception("Exception streaming Drive file %s", file_id)
+        return None
+
+
 async def delete_drive_file(refresh_token: Optional[str], file_id: str, user_email: Optional[str] = None) -> bool:
     """Delete a file from Google Drive by its file ID."""
     access_token = await get_access_token_from_refresh(refresh_token)

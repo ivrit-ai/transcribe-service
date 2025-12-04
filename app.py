@@ -211,6 +211,7 @@ from gdrive_utils import (
     find_drive_file_by_name,
     delete_drive_file,
     ensure_drive_folder,
+    stream_drive_file_range,
     GoogleDriveError,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
@@ -1022,6 +1023,55 @@ async def get_audio_file(results_id: str, request: Request):
         headers={
             "Cache-Control": "max-age=864000",
         },
+    )
+
+
+@app.get("/appdata/audio/stream/{results_id}", dependencies=[Depends(require_google_login)])
+async def stream_audio_file(results_id: str, request: Request):
+    """Stream opus audio file with range support for seeking."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    
+    if not refresh_token:
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
+    
+    # Find the opus file
+    filename = f"{results_id}.opus"
+    file_id = await find_drive_file_by_name(refresh_token, filename)
+    
+    if not file_id:
+        return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
+    
+    # Get range header from request
+    range_header = request.headers.get("range")
+    
+    # Stream file with range support
+    result = await stream_drive_file_range(refresh_token, file_id, range_header)
+    
+    if result is None:
+        async with stats_lock:
+            stats_gdrive_errors["audio_download"] += 1
+        return JSONResponse({"error": "errorAudioStreamFailed", "i18n_key": "errorAudioStreamFailed"}, status_code=500)
+    
+    content, status_code, start_byte, end_byte, total_size = result
+    
+    # Build response headers
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "max-age=864000",
+    }
+    
+    if status_code == 206:
+        # Partial content response
+        headers["Content-Range"] = f"bytes {start_byte}-{end_byte}/{total_size}"
+        headers["Content-Length"] = str(len(content))
+    
+    from fastapi.responses import Response
+    return Response(
+        content=content,
+        status_code=status_code,
+        media_type="audio/ogg",
+        headers=headers,
     )
 
 
