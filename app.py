@@ -461,11 +461,41 @@ TOC_CACHE_MAX_SIZE = int(os.environ.get("TOC_CACHE_MAX_SIZE", "100"))
 toc_cache = LRUCache(maxsize=TOC_CACHE_MAX_SIZE)
 TOC_CACHE_ENABLED = False
 
+# LRU cache for Drive file IDs to avoid repeated lookups during streaming
+# Key: (refresh_token_hash_prefix, filename) -> file_id
+DRIVE_FILE_ID_CACHE_SIZE = 1000
+drive_file_id_cache = LRUCache(maxsize=DRIVE_FILE_ID_CACHE_SIZE)
+
 def get_toc_cache_key(refresh_token: Optional[str]) -> Optional[str]:
     """Generate cache key from refresh_token."""
     if not refresh_token:
         return None
     return hashlib.sha256(refresh_token.encode()).hexdigest()
+
+
+def get_drive_file_id_cache_key(refresh_token: str, filename: str) -> str:
+    """Generate cache key for drive file ID lookup."""
+    token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()[:16]
+    return f"{token_hash}:{filename}"
+
+
+async def find_drive_file_by_name_cached(refresh_token: str, filename: str) -> Optional[str]:
+    """Find drive file by name with caching to reduce Google Drive API calls."""
+    cache_key = get_drive_file_id_cache_key(refresh_token, filename)
+    
+    # Try cache first
+    cached_file_id = drive_file_id_cache.get(cache_key)
+    if cached_file_id is not None:
+        return cached_file_id
+    
+    # Cache miss - do the lookup
+    file_id = await find_drive_file_by_name(refresh_token, filename)
+    
+    # Cache the result if found
+    if file_id:
+        drive_file_id_cache[cache_key] = file_id
+    
+    return file_id
 
 
 
@@ -1036,9 +1066,9 @@ async def stream_audio_file(results_id: str, request: Request):
     if not refresh_token:
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
-    # Find the opus file
+    # Find the opus file (using cache to avoid repeated lookups for range requests)
     filename = f"{results_id}.opus"
-    file_id = await find_drive_file_by_name(refresh_token, filename)
+    file_id = await find_drive_file_by_name_cached(refresh_token, filename)
     
     if not file_id:
         return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
@@ -1219,6 +1249,9 @@ async def delete_file(request: Request):
             if not delete_success:
                 async with stats_lock:
                     stats_gdrive_errors["delete"] += 1
+            # Invalidate file ID cache for deleted file
+            cache_key = get_drive_file_id_cache_key(refresh_token, opus_filename)
+            drive_file_id_cache.pop(cache_key, None)
 
         # Delete json.gz results file
         json_filename = f"{results_id}.json.gz"

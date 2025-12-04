@@ -4701,10 +4701,10 @@
         segments.forEach(segment => {
           segment.addEventListener('click', () => {
             const start = parseFloat(segment.dataset.start)
-            if (!isNaN(start) && audioPlayer && audioPlayer.src) {
+            if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
               audioPlayer.currentTime = start
-              audioPlayer.play().catch(() => {
-                // Ignore play errors (e.g., if user hasn't interacted with page yet)
+              audioPlayer.play().catch(err => {
+                console.log('Play failed:', err)
               })
             }
           })
