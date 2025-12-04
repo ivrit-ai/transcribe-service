@@ -86,14 +86,14 @@ verbose = args.verbose
 
 # Load language/model configuration (mandatory, after args are parsed)
 CONFIG_PATH = args.config_path
-LANG_CONFIG = {}
+APP_CONFIG = {}
 with open(CONFIG_PATH, "r", encoding="utf-8") as _cfg_f:
-    LANG_CONFIG = _json.load(_cfg_f)
+    APP_CONFIG = _json.load(_cfg_f)
 
 # Basic validation of configuration
-if "languages" not in LANG_CONFIG or not isinstance(LANG_CONFIG["languages"], dict):
+if "languages" not in APP_CONFIG or not isinstance(APP_CONFIG["languages"], dict):
     raise RuntimeError("Invalid configuration: missing 'languages' dictionary")
-for lang_key, lang_cfg in LANG_CONFIG["languages"].items():
+for lang_key, lang_cfg in APP_CONFIG["languages"].items():
     if not isinstance(lang_cfg, dict):
         raise RuntimeError(f"Invalid configuration for language '{lang_key}': must be an object")
     if "model" not in lang_cfg or not isinstance(lang_cfg["model"], str) or not lang_cfg["model"].strip():
@@ -102,6 +102,13 @@ for lang_key, lang_cfg in LANG_CONFIG["languages"].items():
         raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'general_availability' (bool)")
     if "enabled" not in lang_cfg or not isinstance(lang_cfg["enabled"], bool):
         raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'enabled' (bool)")
+
+# Extract quota increase URL from config (mandatory)
+if "quota_increase_url" not in APP_CONFIG:
+    raise RuntimeError("Invalid configuration: missing 'quota_increase_url' field")
+if not isinstance(APP_CONFIG["quota_increase_url"], str) or not APP_CONFIG["quota_increase_url"].strip():
+    raise RuntimeError("Invalid configuration: 'quota_increase_url' must be a non-empty string")
+QUOTA_INCREASE_URL = APP_CONFIG["quota_increase_url"]
 
 # Configure logging EARLY - before any other imports that might create loggers
 LOG_FORMAT = "[%(asctime)s] %(message)s"
@@ -800,7 +807,10 @@ async def index(request: Request):
     if in_dev:
         user_email = args.dev_user_email or os.environ.get("TS_USER_EMAIL", "dev@example.com")
         session_id = set_user_email(request, user_email)
-        response = templates.TemplateResponse("index.html", {"request": request})
+        response = templates.TemplateResponse("index.html", {
+            "request": request,
+            "quota_increase_url": QUOTA_INCREASE_URL
+        })
         response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
         return response
 
@@ -811,7 +821,10 @@ async def index(request: Request):
     if in_hiatus_mode:
         return templates.TemplateResponse("server-down.html", {"request": request})
     
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {
+        "request": request,
+        "quota_increase_url": QUOTA_INCREASE_URL
+    })
 
 
 @app.get("/languages", dependencies=[Depends(require_google_login)])
@@ -822,7 +835,7 @@ async def list_languages():
             "enabled": cfg.get("enabled", False),
             "general_availability": cfg.get("general_availability", False),
         }
-        for key, cfg in LANG_CONFIG.get("languages", {}).items()
+        for key, cfg in APP_CONFIG.get("languages", {}).items()
     }
     return JSONResponse({"languages": langs})
 
@@ -1503,6 +1516,22 @@ async def get_balance(request: Request, runpod_token: str = None):
     
     return JSONResponse(balance_info)
 
+@app.get("/quota", dependencies=[Depends(require_google_login)])
+async def get_quota(request: Request):
+    """Get user's remaining quota"""
+    user_email = get_user_email(request)
+    
+    if not user_email:
+        return JSONResponse({"error": "errorUserNotFound", "i18n_key": "errorUserNotFound"}, status_code=400)
+    
+    user_bucket = get_user_quota(user_email)
+    remaining_minutes = user_bucket.get_remaining_minutes()
+    
+    return JSONResponse({
+        "remainingMinutes": remaining_minutes,
+        "maxMinutesPerWeek": MAX_MINUTES_PER_WEEK
+    })
+
 @app.get("/stats", dependencies=[Depends(require_google_login)])
 async def get_stats(request: Request):
     """Get application statistics"""
@@ -2167,7 +2196,7 @@ async def validate_upload_request_metadata(
     if not language:
         return None, JSONResponse({"error": "errorMissingLanguage", "i18n_key": "errorMissingLanguage"}, status_code=400)
 
-    languages_cfg = LANG_CONFIG["languages"]
+    languages_cfg = APP_CONFIG["languages"]
     if language not in languages_cfg:
         return None, JSONResponse({"error": "errorUnsupportedLanguage", "i18n_key": "errorUnsupportedLanguage"}, status_code=400)
 
@@ -2350,7 +2379,7 @@ async def transcribe_job(job_desc):
             log_message(f"{job_desc.user_email}: using default RunPod credentials")
         
         # Resolve model by language from config
-        lang_cfg = LANG_CONFIG["languages"][job_desc.language]
+        lang_cfg = APP_CONFIG["languages"][job_desc.language]
         selected_model = lang_cfg["model"]
         m = ivrit.load_model(engine='runpod', model=selected_model, api_key=api_key, endpoint_id=endpoint_id, core_engine='stable-whisper')
         
