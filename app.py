@@ -211,6 +211,8 @@ from gdrive_utils import (
     find_drive_file_by_name,
     delete_drive_file,
     ensure_drive_folder,
+    stream_drive_file_range,
+    get_drive_file_metadata,
     GoogleDriveError,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
@@ -459,11 +461,41 @@ TOC_CACHE_MAX_SIZE = int(os.environ.get("TOC_CACHE_MAX_SIZE", "100"))
 toc_cache = LRUCache(maxsize=TOC_CACHE_MAX_SIZE)
 TOC_CACHE_ENABLED = False
 
+# LRU cache for Drive file IDs to avoid repeated lookups during streaming
+# Key: (refresh_token_hash_prefix, filename) -> file_id
+DRIVE_FILE_ID_CACHE_SIZE = 1000
+drive_file_id_cache = LRUCache(maxsize=DRIVE_FILE_ID_CACHE_SIZE)
+
 def get_toc_cache_key(refresh_token: Optional[str]) -> Optional[str]:
     """Generate cache key from refresh_token."""
     if not refresh_token:
         return None
     return hashlib.sha256(refresh_token.encode()).hexdigest()
+
+
+def get_drive_file_id_cache_key(refresh_token: str, filename: str) -> str:
+    """Generate cache key for drive file ID lookup."""
+    token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()[:16]
+    return f"{token_hash}:{filename}"
+
+
+async def find_drive_file_by_name_cached(refresh_token: str, filename: str) -> Optional[str]:
+    """Find drive file by name with caching to reduce Google Drive API calls."""
+    cache_key = get_drive_file_id_cache_key(refresh_token, filename)
+    
+    # Try cache first
+    cached_file_id = drive_file_id_cache.get(cache_key)
+    if cached_file_id is not None:
+        return cached_file_id
+    
+    # Cache miss - do the lookup
+    file_id = await find_drive_file_by_name(refresh_token, filename)
+    
+    # Cache the result if found
+    if file_id:
+        drive_file_id_cache[cache_key] = file_id
+    
+    return file_id
 
 
 
@@ -1025,6 +1057,70 @@ async def get_audio_file(results_id: str, request: Request):
     )
 
 
+@app.api_route("/appdata/audio/stream/{results_id}", methods=["GET", "HEAD"], dependencies=[Depends(require_google_login)])
+async def stream_audio_file(results_id: str, request: Request):
+    """Stream opus audio file with range support for seeking."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    
+    if not refresh_token:
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
+    
+    # Find the opus file (using cache to avoid repeated lookups for range requests)
+    filename = f"{results_id}.opus"
+    file_id = await find_drive_file_by_name_cached(refresh_token, filename)
+    
+    if not file_id:
+        return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
+    
+    # For HEAD requests, verify file exists and return headers without content
+    if request.method == "HEAD":
+        metadata = await get_drive_file_metadata(refresh_token, file_id)
+        
+        from fastapi.responses import Response
+        return Response(
+            status_code=200,
+            media_type="audio/ogg",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "max-age=864000",
+                "Content-Length": str(metadata.get("size", 0) if metadata else 0),
+            },
+        )
+    
+    # Get range header from request
+    range_header = request.headers.get("range")
+    
+    # Stream file with range support
+    result = await stream_drive_file_range(refresh_token, file_id, range_header)
+    
+    if result is None:
+        async with stats_lock:
+            stats_gdrive_errors["audio_download"] += 1
+        return JSONResponse({"error": "errorAudioStreamFailed", "i18n_key": "errorAudioStreamFailed"}, status_code=500)
+    
+    content, status_code, start_byte, end_byte, total_size = result
+    
+    # Build response headers
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "max-age=864000",
+    }
+    
+    if status_code == 206:
+        # Partial content response
+        headers["Content-Range"] = f"bytes {start_byte}-{end_byte}/{total_size}"
+        headers["Content-Length"] = str(len(content))
+    
+    from fastapi.responses import Response
+    return Response(
+        content=content,
+        status_code=status_code,
+        media_type="audio/ogg",
+        headers=headers,
+    )
+
+
 @app.post("/appdata/rename", dependencies=[Depends(require_google_login)])
 async def rename_file(request: Request):
     """Rename a file in the TOC by updating its source_filename."""
@@ -1153,6 +1249,9 @@ async def delete_file(request: Request):
             if not delete_success:
                 async with stats_lock:
                     stats_gdrive_errors["delete"] += 1
+            # Invalidate file ID cache for deleted file
+            cache_key = get_drive_file_id_cache_key(refresh_token, opus_filename)
+            drive_file_id_cache.pop(cache_key, None)
 
         # Delete json.gz results file
         json_filename = f"{results_id}.json.gz"

@@ -612,23 +612,26 @@
       [data-theme="dark"] .speaker-9 { color: #FFD54F; }
       [data-theme="dark"] .speaker-10 { color: #90A4AE; }
       .transcript-segment {
-        transition: background-color 0.2s ease;
+        transition: all 0.2s ease;
+        cursor: pointer;
+      }
+      .transcript-segment:hover {
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
       }
       .transcript-segment.playing {
-        background-color: rgba(76, 175, 80, 0.3);
-        border-radius: 3px;
-        padding: 2px 4px;
-      }
-      [data-theme="dark"] .transcript-segment.playing {
-        background-color: rgba(102, 187, 106, 0.3);
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
+        text-decoration-color: var(--primary-color);
+        text-underline-offset: 2px;
       }
       .action-buttons {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 10px;
-        margin-top: 1rem;
-        margin-bottom: 0.5rem;
+        margin-top: 0.5rem;
+        margin-bottom: 0;
       }
       .actions-right,
       .actions-left {
@@ -814,6 +817,76 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
+      
+      /* Sticky header for viewer tab (audio player + controls) */
+      #viewer-sticky-header {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        background-color: var(--container-bg);
+        padding: 1rem 0;
+        margin-bottom: 1rem;
+        border-bottom: 1px solid var(--border-color);
+      }
+      
+      /* Audio player in viewer tab */
+      #viewer-audio-player-container {
+        margin-bottom: 0.75rem;
+        display: none;
+      }
+      #viewer-audio-player-container.visible {
+        display: block;
+      }
+      #viewer-audio-player {
+        width: 100%;
+        max-width: 100%;
+        outline: none;
+      }
+      
+      /* Viewer processing state */
+      #viewer-processing-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4rem 2rem;
+        text-align: center;
+      }
+      .processing-state-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+      }
+      .processing-spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid var(--border-color);
+        border-top-color: var(--primary-color);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      #viewer-processing-title {
+        color: var(--text-color);
+        margin: 0;
+        font-size: 1.5rem;
+      }
+      .processing-status {
+        color: var(--text-color);
+        opacity: 0.8;
+        margin: 0;
+        font-size: 1rem;
+      }
+      .processing-eta {
+        color: var(--primary-color);
+        font-weight: 600;
+        margin: 0;
+        font-size: 1.1rem;
+      }
+      
       #download-docx-btn svg {
         width: 20px;
         height: 20px;
@@ -1642,34 +1715,44 @@
           <h2 id="viewer-file-name" style="margin: 0; font-size: 1.2rem; color: var(--text-color);"></h2>
         </div>
 
-        <div class="action-buttons">
-          <div class="actions-right">
-            <button id="viewer-text-format-toggle" title="פורמט הטקסט" aria-label="פורמט הטקסט">
-              <svg id="viewer-text-format-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M4 6h16M10 12h10M4 18h16"/>
-              </svg>
-            </button>
-            <button id="viewer-timestamps-toggle" title="קודי זמן" aria-label="קודי זמן">🕒</button>
-            <button id="viewer-diarization-toggle" title="דוברים" aria-label="דוברים">🗣️</button>
+        <!-- Sticky header with audio player and controls -->
+        <div id="viewer-sticky-header">
+          <!-- Audio Player (hidden by default, shown when audio available) -->
+          <div id="viewer-audio-player-container">
+            <audio id="viewer-audio-player" controls preload="metadata">
+              <source id="viewer-audio-source" type="audio/ogg">
+            </audio>
           </div>
 
-          <div class="actions-left">
-            <button id="viewer-copy-btn" data-i18n-title="copyText">
-              <i data-lucide="copy"></i>
-            </button>
-
-            <div class="download-menu">
-              <button id="viewer-download-menu-btn" data-i18n-title="downloads">
-                <i data-lucide="download"></i>
+          <div class="action-buttons">
+            <div class="actions-right">
+              <button id="viewer-text-format-toggle" title="פורמט הטקסט" aria-label="פורמט הטקסט">
+                <svg id="viewer-text-format-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 6h16M10 12h10M4 18h16"/>
+                </svg>
               </button>
-              <div class="download-dropdown">
-                <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
-                <button type="button" data-action="vtt" id="viewer-menu-vtt">VTT</button>
-                <button type="button" data-action="srt" id="viewer-menu-srt">SRT</button>
-                <button type="button" data-action="docx" id="viewer-menu-docx">
-                  <span data-i18n="wordDocx">Word DOCX</span>
+              <button id="viewer-timestamps-toggle" title="קודי זמן" aria-label="קודי זמן">🕒</button>
+              <button id="viewer-diarization-toggle" title="דוברים" aria-label="דוברים">🗣️</button>
+            </div>
+
+            <div class="actions-left">
+              <button id="viewer-copy-btn" data-i18n-title="copyText">
+                <i data-lucide="copy"></i>
+              </button>
+
+              <div class="download-menu">
+                <button id="viewer-download-menu-btn" data-i18n-title="downloads">
+                  <i data-lucide="download"></i>
                 </button>
-                <button type="button" data-action="json" id="viewer-menu-json">JSON</button>
+                <div class="download-dropdown">
+                  <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
+                  <button type="button" data-action="vtt" id="viewer-menu-vtt">VTT</button>
+                  <button type="button" data-action="srt" id="viewer-menu-srt">SRT</button>
+                  <button type="button" data-action="docx" id="viewer-menu-docx">
+                    <span data-i18n="wordDocx">Word DOCX</span>
+                  </button>
+                  <button type="button" data-action="json" id="viewer-menu-json">JSON</button>
+                </div>
               </div>
             </div>
           </div>
@@ -1677,6 +1760,16 @@
 
         <div id="viewer-transcription-container">
           <div id="viewer-transcription" contenteditable="false"></div>
+        </div>
+        
+        <!-- Processing state overlay -->
+        <div id="viewer-processing-state" style="display: none;">
+          <div class="processing-state-content">
+            <div class="processing-spinner"></div>
+            <h3 id="viewer-processing-title" data-i18n="transcriptionInProgress">תמלול בתהליך</h3>
+            <p id="viewer-processing-status" class="processing-status"></p>
+            <p id="viewer-processing-eta" class="processing-eta"></p>
+          </div>
         </div>
       </div>
       <!-- End Viewer Tab -->
@@ -3152,6 +3245,7 @@
         }
 
         let uploadSucceeded = false
+        const uploadedFilename = selectedFile.name
         try {
           await sendStreamingUpload({
             formData,
@@ -3162,8 +3256,9 @@
           uploadSucceeded = true
           resetUploadState()
           activeTranscription = false
-          showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.'), 'success')
-          switchTab('files')
+          showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה.'), 'success')
+          // Switch to viewer tab with processing state
+          showViewerProcessingState(uploadedFilename, selectedLang)
         } catch (error) {
           showError(error)
         } finally {
@@ -3756,6 +3851,16 @@
             filesRefreshTimeout = null
           }
         }
+        
+        // Stop viewer processing poll when leaving viewer tab
+        if (tabName !== 'viewer' && viewerProcessingPollTimeout) {
+          stopViewerProcessingPoll()
+        }
+        
+        // Restart viewer processing poll when returning to viewer tab with pending file
+        if (tabName === 'viewer' && pendingViewerFilename && !viewerProcessingPollTimeout) {
+          startViewerProcessingPoll()
+        }
 
         // Refresh Lucide icons after tab switch
         if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -3952,6 +4057,127 @@
       let currentViewerData = null
       let currentViewerLanguage = 'he'
       let currentViewerEntry = null
+      
+      // Pending file tracking for viewer processing state
+      let pendingViewerFilename = null
+      let pendingViewerLanguage = 'he'
+      let viewerProcessingPollTimeout = null
+      
+      // Show viewer in processing state for a pending file
+      function showViewerProcessingState(filename, language) {
+        pendingViewerFilename = filename
+        pendingViewerLanguage = language || 'he'
+        currentViewerData = null
+        currentViewerEntry = null
+        
+        // Set filename
+        document.getElementById('viewer-file-name').textContent = filename
+        
+        // Hide regular viewer elements
+        document.getElementById('viewer-sticky-header').style.display = 'none'
+        document.getElementById('viewer-transcription-container').style.display = 'none'
+        
+        // Show processing state
+        const processingState = document.getElementById('viewer-processing-state')
+        processingState.style.display = 'flex'
+        
+        // Set initial text
+        const title = document.getElementById('viewer-processing-title')
+        const status = document.getElementById('viewer-processing-status')
+        const eta = document.getElementById('viewer-processing-eta')
+        
+        title.textContent = window.I18N ? window.I18N.t('transcriptionInProgress') : 'תמלול בתהליך'
+        status.textContent = ''
+        eta.textContent = ''
+        
+        // Show viewer tab and switch to it
+        document.getElementById('viewer-tab-btn').style.display = 'block'
+        switchTab('viewer')
+        
+        // Start polling for completion
+        startViewerProcessingPoll()
+      }
+      
+      // Poll TOC for pending file status
+      async function pollViewerProcessingStatus() {
+        if (!pendingViewerFilename) return
+        
+        try {
+          const response = await fetch('/appdata/toc')
+          if (!response.ok) return
+          
+          const data = await response.json()
+          const entries = data.entries || []
+          
+          // Find entry matching our pending file
+          const entry = entries.find(e => e.source_filename === pendingViewerFilename)
+          
+          if (!entry) {
+            // File not yet in TOC, continue polling
+            scheduleViewerProcessingPoll()
+            return
+          }
+          
+          // Update status display
+          const statusEl = document.getElementById('viewer-processing-status')
+          const etaEl = document.getElementById('viewer-processing-eta')
+          
+          const statusText = getStatusText(entry.status)
+          statusEl.textContent = statusText
+          
+          if (entry.eta_seconds !== undefined && entry.eta_seconds !== null) {
+            const etaFormatted = formatETA(entry.eta_seconds)
+            if (etaFormatted) {
+              const lang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
+              const etaLabel = lang === 'he' || lang === 'yi' ? 'ETA: ' : 'ETA: '
+              etaEl.textContent = `${etaLabel}${etaFormatted}`
+            } else {
+              etaEl.textContent = ''
+            }
+          } else {
+            etaEl.textContent = ''
+          }
+          
+          // Check if ready
+          if (entry.status === 'Ready' && entry.results_id) {
+            // File is ready, load it
+            stopViewerProcessingPoll()
+            pendingViewerFilename = null
+            await viewSavedFileFromTOC(entry)
+          } else {
+            // Continue polling
+            scheduleViewerProcessingPoll()
+          }
+        } catch (error) {
+          console.error('Error polling viewer status:', error)
+          scheduleViewerProcessingPoll()
+        }
+      }
+      
+      function startViewerProcessingPoll() {
+        stopViewerProcessingPoll()
+        pollViewerProcessingStatus()
+      }
+      
+      function scheduleViewerProcessingPoll() {
+        stopViewerProcessingPoll()
+        viewerProcessingPollTimeout = setTimeout(pollViewerProcessingStatus, 3000)
+      }
+      
+      function stopViewerProcessingPoll() {
+        if (viewerProcessingPollTimeout) {
+          clearTimeout(viewerProcessingPollTimeout)
+          viewerProcessingPollTimeout = null
+        }
+      }
+      
+      // Reset viewer processing state (called when loading completed file)
+      function hideViewerProcessingState() {
+        const processingState = document.getElementById('viewer-processing-state')
+        processingState.style.display = 'none'
+        document.getElementById('viewer-sticky-header').style.display = ''
+        document.getElementById('viewer-transcription-container').style.display = ''
+      }
 
       // Create file item element from TOC entry
       function createFileItemFromTOC(entry) {
@@ -4261,6 +4487,10 @@
           currentViewerData = { results: data.results || [] }
           currentViewerLanguage = data.language || entry.language || 'he'
           currentViewerEntry = entry
+          
+          // Hide processing state if it was showing
+          hideViewerProcessingState()
+          pendingViewerFilename = null
 
           // Set filename in viewer
           document.getElementById('viewer-file-name').textContent = entry.source_filename
@@ -4272,6 +4502,9 @@
           updateViewerTextFormatToggleUI()
           updateViewerTimestampsToggleUI()
           updateViewerDiarizationToggleUI()
+
+          // Load audio player if audio file exists
+          await loadViewerAudioPlayer(entry.results_id)
 
           // Show viewer tab
           document.getElementById('viewer-tab-btn').style.display = 'block'
@@ -4289,6 +4522,97 @@
           // Always hide spinner when done
           hideSpinner()
         }
+      }
+
+      // Load audio player for viewer tab
+      async function loadViewerAudioPlayer(resultsId) {
+        const playerContainer = document.getElementById('viewer-audio-player-container')
+        const audioPlayer = document.getElementById('viewer-audio-player')
+        const audioSource = document.getElementById('viewer-audio-source')
+        
+        // Hide player by default
+        playerContainer.classList.remove('visible')
+        
+        // Remove existing timeupdate listener if any
+        audioPlayer.removeEventListener('timeupdate', handleAudioTimeUpdate)
+        
+        // Reset playing segment index
+        currentPlayingSegmentIndex = -1
+        
+        try {
+          // Check if audio file exists by making a HEAD request
+          const checkResponse = await fetch(`/appdata/audio/stream/${resultsId}`, {
+            method: 'HEAD'
+          })
+          
+          if (checkResponse.ok) {
+            // Audio file exists, set up player
+            audioSource.src = `/appdata/audio/stream/${resultsId}`
+            audioPlayer.load()
+            playerContainer.classList.add('visible')
+            
+            // Add timeupdate listener to sync text with audio
+            audioPlayer.addEventListener('timeupdate', handleAudioTimeUpdate)
+          }
+        } catch (error) {
+          // Audio file doesn't exist or error occurred, keep player hidden
+          console.log('Audio file not available for this transcription')
+        }
+      }
+      
+      // Store current playing segment index for efficient lookup
+      let currentPlayingSegmentIndex = -1
+      
+      // Handle audio time update to highlight current segment
+      function handleAudioTimeUpdate(event) {
+        const currentTime = event.target.currentTime
+        
+        // Use viewer data segments for efficient lookup
+        if (!currentViewerData || !currentViewerData.results) return
+        
+        const segments = currentViewerData.results
+        
+        // Find the segment containing currentTime
+        const segmentIndex = segments.findIndex(seg => currentTime >= seg.start && currentTime <= seg.end)
+        
+        // If we're in the same segment as before, no need to update
+        if (segmentIndex === currentPlayingSegmentIndex) {
+          return
+        }
+        
+        // Clear previous playing segment
+        if (currentPlayingSegmentIndex !== -1) {
+          const prevElement = document.querySelector(`.transcript-segment[data-segment-index="${currentPlayingSegmentIndex}"]`)
+          if (prevElement) {
+            prevElement.classList.remove('playing')
+          }
+        }
+        
+        // Update current playing segment
+        currentPlayingSegmentIndex = segmentIndex
+        
+        if (segmentIndex !== -1) {
+          const currentElement = document.querySelector(`.transcript-segment[data-segment-index="${segmentIndex}"]`)
+          if (currentElement) {
+            currentElement.classList.add('playing')
+            
+            // Optionally scroll to the playing segment
+            if (!isElementInViewport(currentElement)) {
+              currentElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }
+          }
+        }
+      }
+      
+      // Check if element is in viewport
+      function isElementInViewport(el) {
+        const rect = el.getBoundingClientRect()
+        return (
+          rect.top >= 0 &&
+          rect.left >= 0 &&
+          rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+          rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+        )
       }
 
       // Download in specified format
@@ -4361,6 +4685,30 @@
 
         viewerTranscription.innerHTML = result
         updateViewerTranscriptionDirectionUI()
+        
+        // Reset playing segment index when regenerating display
+        currentPlayingSegmentIndex = -1
+        
+        // Add click handlers to segments for seeking audio
+        addSegmentClickHandlers()
+      }
+      
+      // Add click handlers to transcript segments for audio seeking
+      function addSegmentClickHandlers() {
+        const segments = document.querySelectorAll('.transcript-segment')
+        const audioPlayer = document.getElementById('viewer-audio-player')
+        
+        segments.forEach(segment => {
+          segment.addEventListener('click', () => {
+            const start = parseFloat(segment.dataset.start)
+            if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
+              audioPlayer.currentTime = start
+              audioPlayer.play().catch(err => {
+                console.log('Play failed:', err)
+              })
+            }
+          })
+        })
       }
 
       function formatWithTimecodesForSegments(segments) {
@@ -4384,9 +4732,16 @@
             const startTime = currentGroup[0].start
             const endTime = currentGroup[currentGroup.length - 1].end
 
-            const groupText = displaySettings.diarizationDisplay === "enabled"
-              ? joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "<br>", true)
-              : currentGroup.map((seg) => seg.text.trim()).join(separator)
+            let groupText
+            if (displaySettings.diarizationDisplay === "enabled") {
+              groupText = joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "<br>", true)
+            } else {
+              // Wrap each segment with timing data
+              groupText = currentGroup.map((seg, idx) => {
+                const actualIndex = segments.indexOf(seg)
+                return `<span class="transcript-segment" data-start="${seg.start}" data-end="${seg.end}" data-segment-index="${actualIndex}">${seg.text.trim()}</span>`
+              }).join(separator)
+            }
 
             const formattedStartTime = formatTimeForDisplay(startTime)
             const formattedEndTime = formatTimeForDisplay(endTime)
@@ -4418,9 +4773,17 @@
           
           const showSpeakerLabel = diarizationEnabled && segmentSpeaker !== currentSpeaker
           
-          const segmentText = showSpeakerLabel 
-            ? (isHTML ? getSpeakerLabelForLanguage(segment, currentViewerLanguage) + segment.text.trim() : getSpeakerLabelPlainForLanguage(segment, currentViewerLanguage) + segment.text.trim())
-            : segment.text.trim()
+          let segmentText
+          if (isHTML) {
+            const labelHTML = showSpeakerLabel ? getSpeakerLabelForLanguage(segment, currentViewerLanguage) : ''
+            const textContent = segment.text.trim()
+            // Wrap in span with timing data for audio sync
+            segmentText = labelHTML + `<span class="transcript-segment" data-start="${segment.start}" data-end="${segment.end}" data-segment-index="${i}">${textContent}</span>`
+          } else {
+            segmentText = showSpeakerLabel 
+              ? getSpeakerLabelPlainForLanguage(segment, currentViewerLanguage) + segment.text.trim()
+              : segment.text.trim()
+          }
           
           if (i === 0) {
             result.push(segmentText)
@@ -4471,6 +4834,24 @@
       // Wire up viewer controls
       document.getElementById('back-to-files-btn').addEventListener('click', () => {
         document.getElementById('viewer-tab-btn').style.display = 'none'
+        // Stop processing poll if active
+        stopViewerProcessingPoll()
+        pendingViewerFilename = null
+        hideViewerProcessingState()
+        // Hide and reset audio player
+        const playerContainer = document.getElementById('viewer-audio-player-container')
+        const audioPlayer = document.getElementById('viewer-audio-player')
+        playerContainer.classList.remove('visible')
+        audioPlayer.pause()
+        audioPlayer.currentTime = 0
+        // Remove timeupdate listener
+        audioPlayer.removeEventListener('timeupdate', handleAudioTimeUpdate)
+        // Clear any playing segments
+        document.querySelectorAll('.transcript-segment.playing').forEach(seg => {
+          seg.classList.remove('playing')
+        })
+        // Reset playing segment index
+        currentPlayingSegmentIndex = -1
         switchTab('files')
       })
 
