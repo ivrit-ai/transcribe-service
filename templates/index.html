@@ -842,6 +842,51 @@
         max-width: 100%;
         outline: none;
       }
+      
+      /* Viewer processing state */
+      #viewer-processing-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4rem 2rem;
+        text-align: center;
+      }
+      .processing-state-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+      }
+      .processing-spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid var(--border-color);
+        border-top-color: var(--primary-color);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      #viewer-processing-title {
+        color: var(--text-color);
+        margin: 0;
+        font-size: 1.5rem;
+      }
+      .processing-status {
+        color: var(--text-color);
+        opacity: 0.8;
+        margin: 0;
+        font-size: 1rem;
+      }
+      .processing-eta {
+        color: var(--primary-color);
+        font-weight: 600;
+        margin: 0;
+        font-size: 1.1rem;
+      }
+      
       #download-docx-btn svg {
         width: 20px;
         height: 20px;
@@ -1715,6 +1760,16 @@
 
         <div id="viewer-transcription-container">
           <div id="viewer-transcription" contenteditable="false"></div>
+        </div>
+        
+        <!-- Processing state overlay -->
+        <div id="viewer-processing-state" style="display: none;">
+          <div class="processing-state-content">
+            <div class="processing-spinner"></div>
+            <h3 id="viewer-processing-title" data-i18n="transcriptionInProgress">תמלול בתהליך</h3>
+            <p id="viewer-processing-status" class="processing-status"></p>
+            <p id="viewer-processing-eta" class="processing-eta"></p>
+          </div>
         </div>
       </div>
       <!-- End Viewer Tab -->
@@ -3190,6 +3245,7 @@
         }
 
         let uploadSucceeded = false
+        const uploadedFilename = selectedFile.name
         try {
           await sendStreamingUpload({
             formData,
@@ -3200,8 +3256,9 @@
           uploadSucceeded = true
           resetUploadState()
           activeTranscription = false
-          showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.'), 'success')
-          switchTab('files')
+          showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה.'), 'success')
+          // Switch to viewer tab with processing state
+          showViewerProcessingState(uploadedFilename, selectedLang)
         } catch (error) {
           showError(error)
         } finally {
@@ -3794,6 +3851,16 @@
             filesRefreshTimeout = null
           }
         }
+        
+        // Stop viewer processing poll when leaving viewer tab
+        if (tabName !== 'viewer' && viewerProcessingPollTimeout) {
+          stopViewerProcessingPoll()
+        }
+        
+        // Restart viewer processing poll when returning to viewer tab with pending file
+        if (tabName === 'viewer' && pendingViewerFilename && !viewerProcessingPollTimeout) {
+          startViewerProcessingPoll()
+        }
 
         // Refresh Lucide icons after tab switch
         if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -3990,6 +4057,127 @@
       let currentViewerData = null
       let currentViewerLanguage = 'he'
       let currentViewerEntry = null
+      
+      // Pending file tracking for viewer processing state
+      let pendingViewerFilename = null
+      let pendingViewerLanguage = 'he'
+      let viewerProcessingPollTimeout = null
+      
+      // Show viewer in processing state for a pending file
+      function showViewerProcessingState(filename, language) {
+        pendingViewerFilename = filename
+        pendingViewerLanguage = language || 'he'
+        currentViewerData = null
+        currentViewerEntry = null
+        
+        // Set filename
+        document.getElementById('viewer-file-name').textContent = filename
+        
+        // Hide regular viewer elements
+        document.getElementById('viewer-sticky-header').style.display = 'none'
+        document.getElementById('viewer-transcription-container').style.display = 'none'
+        
+        // Show processing state
+        const processingState = document.getElementById('viewer-processing-state')
+        processingState.style.display = 'flex'
+        
+        // Set initial text
+        const title = document.getElementById('viewer-processing-title')
+        const status = document.getElementById('viewer-processing-status')
+        const eta = document.getElementById('viewer-processing-eta')
+        
+        title.textContent = window.I18N ? window.I18N.t('transcriptionInProgress') : 'תמלול בתהליך'
+        status.textContent = ''
+        eta.textContent = ''
+        
+        // Show viewer tab and switch to it
+        document.getElementById('viewer-tab-btn').style.display = 'block'
+        switchTab('viewer')
+        
+        // Start polling for completion
+        startViewerProcessingPoll()
+      }
+      
+      // Poll TOC for pending file status
+      async function pollViewerProcessingStatus() {
+        if (!pendingViewerFilename) return
+        
+        try {
+          const response = await fetch('/appdata/toc')
+          if (!response.ok) return
+          
+          const data = await response.json()
+          const entries = data.entries || []
+          
+          // Find entry matching our pending file
+          const entry = entries.find(e => e.source_filename === pendingViewerFilename)
+          
+          if (!entry) {
+            // File not yet in TOC, continue polling
+            scheduleViewerProcessingPoll()
+            return
+          }
+          
+          // Update status display
+          const statusEl = document.getElementById('viewer-processing-status')
+          const etaEl = document.getElementById('viewer-processing-eta')
+          
+          const statusText = getStatusText(entry.status)
+          statusEl.textContent = statusText
+          
+          if (entry.eta_seconds !== undefined && entry.eta_seconds !== null) {
+            const etaFormatted = formatETA(entry.eta_seconds)
+            if (etaFormatted) {
+              const lang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
+              const etaLabel = lang === 'he' || lang === 'yi' ? 'ETA: ' : 'ETA: '
+              etaEl.textContent = `${etaLabel}${etaFormatted}`
+            } else {
+              etaEl.textContent = ''
+            }
+          } else {
+            etaEl.textContent = ''
+          }
+          
+          // Check if ready
+          if (entry.status === 'Ready' && entry.results_id) {
+            // File is ready, load it
+            stopViewerProcessingPoll()
+            pendingViewerFilename = null
+            await viewSavedFileFromTOC(entry)
+          } else {
+            // Continue polling
+            scheduleViewerProcessingPoll()
+          }
+        } catch (error) {
+          console.error('Error polling viewer status:', error)
+          scheduleViewerProcessingPoll()
+        }
+      }
+      
+      function startViewerProcessingPoll() {
+        stopViewerProcessingPoll()
+        pollViewerProcessingStatus()
+      }
+      
+      function scheduleViewerProcessingPoll() {
+        stopViewerProcessingPoll()
+        viewerProcessingPollTimeout = setTimeout(pollViewerProcessingStatus, 3000)
+      }
+      
+      function stopViewerProcessingPoll() {
+        if (viewerProcessingPollTimeout) {
+          clearTimeout(viewerProcessingPollTimeout)
+          viewerProcessingPollTimeout = null
+        }
+      }
+      
+      // Reset viewer processing state (called when loading completed file)
+      function hideViewerProcessingState() {
+        const processingState = document.getElementById('viewer-processing-state')
+        processingState.style.display = 'none'
+        document.getElementById('viewer-sticky-header').style.display = ''
+        document.getElementById('viewer-transcription-container').style.display = ''
+      }
 
       // Create file item element from TOC entry
       function createFileItemFromTOC(entry) {
@@ -4299,6 +4487,10 @@
           currentViewerData = { results: data.results || [] }
           currentViewerLanguage = data.language || entry.language || 'he'
           currentViewerEntry = entry
+          
+          // Hide processing state if it was showing
+          hideViewerProcessingState()
+          pendingViewerFilename = null
 
           // Set filename in viewer
           document.getElementById('viewer-file-name').textContent = entry.source_filename
@@ -4642,6 +4834,10 @@
       // Wire up viewer controls
       document.getElementById('back-to-files-btn').addEventListener('click', () => {
         document.getElementById('viewer-tab-btn').style.display = 'none'
+        // Stop processing poll if active
+        stopViewerProcessingPoll()
+        pendingViewerFilename = null
+        hideViewerProcessingState()
         // Hide and reset audio player
         const playerContainer = document.getElementById('viewer-audio-player-container')
         const audioPlayer = document.getElementById('viewer-audio-player')
