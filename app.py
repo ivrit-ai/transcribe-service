@@ -212,6 +212,7 @@ from gdrive_utils import (
     delete_drive_file,
     ensure_drive_folder,
     stream_drive_file_range,
+    get_drive_file_metadata,
     GoogleDriveError,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
@@ -1026,7 +1027,7 @@ async def get_audio_file(results_id: str, request: Request):
     )
 
 
-@app.get("/appdata/audio/stream/{results_id}", dependencies=[Depends(require_google_login)])
+@app.api_route("/appdata/audio/stream/{results_id}", methods=["GET", "HEAD"], dependencies=[Depends(require_google_login)])
 async def stream_audio_file(results_id: str, request: Request):
     """Stream opus audio file with range support for seeking."""
     session_id = get_session_id(request)
@@ -1041,6 +1042,24 @@ async def stream_audio_file(results_id: str, request: Request):
     
     if not file_id:
         return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
+    
+    # For HEAD requests, verify file exists and return headers without content
+    if request.method == "HEAD":
+        metadata = await get_drive_file_metadata(refresh_token, file_id)
+        
+        if not metadata:
+            return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
+        
+        from fastapi.responses import Response
+        return Response(
+            status_code=200,
+            media_type="audio/ogg",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "max-age=864000",
+                "Content-Length": str(metadata.get("size", 0)),
+            },
+        )
     
     # Get range header from request
     range_header = request.headers.get("range")
