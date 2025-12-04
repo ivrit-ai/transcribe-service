@@ -1032,28 +1032,20 @@ async def stream_audio_file(results_id: str, request: Request):
     """Stream opus audio file with range support for seeking."""
     session_id = get_session_id(request)
     refresh_token = sessions.get(session_id, {}).get("refresh_token")
-    user_email = get_user_email(request)
     
     if not refresh_token:
-        logger.warning(f"{user_email}: Audio stream failed - no refresh token for results_id={results_id}")
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     # Find the opus file
     filename = f"{results_id}.opus"
-    logger.info(f"{user_email}: Audio stream request for results_id={results_id}, method={request.method}, range={request.headers.get('range', 'none')}")
-    
     file_id = await find_drive_file_by_name(refresh_token, filename)
     
     if not file_id:
-        logger.warning(f"{user_email}: Audio stream failed - file not found for results_id={results_id}")
         return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
-    
-    logger.info(f"{user_email}: Found audio file_id={file_id} for results_id={results_id}")
     
     # For HEAD requests, verify file exists and return headers without content
     if request.method == "HEAD":
         metadata = await get_drive_file_metadata(refresh_token, file_id)
-        logger.info(f"{user_email}: HEAD request metadata for file_id={file_id}, size={metadata.get('size', 'unknown') if metadata else 'none'}")
         
         from fastapi.responses import Response
         return Response(
@@ -1073,13 +1065,11 @@ async def stream_audio_file(results_id: str, request: Request):
     result = await stream_drive_file_range(refresh_token, file_id, range_header)
     
     if result is None:
-        logger.error(f"{user_email}: Audio stream failed for file_id={file_id}, results_id={results_id}, range={range_header}")
         async with stats_lock:
             stats_gdrive_errors["audio_download"] += 1
         return JSONResponse({"error": "errorAudioStreamFailed", "i18n_key": "errorAudioStreamFailed"}, status_code=500)
     
     content, status_code, start_byte, end_byte, total_size = result
-    logger.info(f"{user_email}: Audio stream success for file_id={file_id}, status={status_code}, bytes={start_byte}-{end_byte}/{total_size}")
     
     # Build response headers
     headers = {

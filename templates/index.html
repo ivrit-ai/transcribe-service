@@ -612,23 +612,26 @@
       [data-theme="dark"] .speaker-9 { color: #FFD54F; }
       [data-theme="dark"] .speaker-10 { color: #90A4AE; }
       .transcript-segment {
-        transition: background-color 0.2s ease;
+        transition: all 0.2s ease;
+        cursor: pointer;
+      }
+      .transcript-segment:hover {
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
       }
       .transcript-segment.playing {
-        background-color: rgba(76, 175, 80, 0.3);
-        border-radius: 3px;
-        padding: 2px 4px;
-      }
-      [data-theme="dark"] .transcript-segment.playing {
-        background-color: rgba(102, 187, 106, 0.3);
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
+        text-decoration-color: var(--primary-color);
+        text-underline-offset: 2px;
       }
       .action-buttons {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 10px;
-        margin-top: 1rem;
-        margin-bottom: 0.5rem;
+        margin-top: 0.5rem;
+        margin-bottom: 0;
       }
       .actions-right,
       .actions-left {
@@ -815,8 +818,8 @@
         cursor: not-allowed;
       }
       
-      /* Fixed audio player for viewer tab */
-      #viewer-audio-player-container {
+      /* Sticky header for viewer tab (audio player + controls) */
+      #viewer-sticky-header {
         position: sticky;
         top: 0;
         z-index: 100;
@@ -824,6 +827,11 @@
         padding: 1rem 0;
         margin-bottom: 1rem;
         border-bottom: 1px solid var(--border-color);
+      }
+      
+      /* Audio player in viewer tab */
+      #viewer-audio-player-container {
+        margin-bottom: 0.75rem;
         display: none;
       }
       #viewer-audio-player-container.visible {
@@ -1662,41 +1670,44 @@
           <h2 id="viewer-file-name" style="margin: 0; font-size: 1.2rem; color: var(--text-color);"></h2>
         </div>
 
-        <!-- Audio Player (hidden by default, shown when audio available) -->
-        <div id="viewer-audio-player-container">
-          <audio id="viewer-audio-player" controls preload="metadata">
-            <source id="viewer-audio-source" type="audio/ogg">
-          </audio>
-        </div>
-
-        <div class="action-buttons">
-          <div class="actions-right">
-            <button id="viewer-text-format-toggle" title="פורמט הטקסט" aria-label="פורמט הטקסט">
-              <svg id="viewer-text-format-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M4 6h16M10 12h10M4 18h16"/>
-              </svg>
-            </button>
-            <button id="viewer-timestamps-toggle" title="קודי זמן" aria-label="קודי זמן">🕒</button>
-            <button id="viewer-diarization-toggle" title="דוברים" aria-label="דוברים">🗣️</button>
+        <!-- Sticky header with audio player and controls -->
+        <div id="viewer-sticky-header">
+          <!-- Audio Player (hidden by default, shown when audio available) -->
+          <div id="viewer-audio-player-container">
+            <audio id="viewer-audio-player" controls preload="metadata">
+              <source id="viewer-audio-source" type="audio/ogg">
+            </audio>
           </div>
 
-          <div class="actions-left">
-            <button id="viewer-copy-btn" data-i18n-title="copyText">
-              <i data-lucide="copy"></i>
-            </button>
-
-            <div class="download-menu">
-              <button id="viewer-download-menu-btn" data-i18n-title="downloads">
-                <i data-lucide="download"></i>
+          <div class="action-buttons">
+            <div class="actions-right">
+              <button id="viewer-text-format-toggle" title="פורמט הטקסט" aria-label="פורמט הטקסט">
+                <svg id="viewer-text-format-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 6h16M10 12h10M4 18h16"/>
+                </svg>
               </button>
-              <div class="download-dropdown">
-                <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
-                <button type="button" data-action="vtt" id="viewer-menu-vtt">VTT</button>
-                <button type="button" data-action="srt" id="viewer-menu-srt">SRT</button>
-                <button type="button" data-action="docx" id="viewer-menu-docx">
-                  <span data-i18n="wordDocx">Word DOCX</span>
+              <button id="viewer-timestamps-toggle" title="קודי זמן" aria-label="קודי זמן">🕒</button>
+              <button id="viewer-diarization-toggle" title="דוברים" aria-label="דוברים">🗣️</button>
+            </div>
+
+            <div class="actions-left">
+              <button id="viewer-copy-btn" data-i18n-title="copyText">
+                <i data-lucide="copy"></i>
+              </button>
+
+              <div class="download-menu">
+                <button id="viewer-download-menu-btn" data-i18n-title="downloads">
+                  <i data-lucide="download"></i>
                 </button>
-                <button type="button" data-action="json" id="viewer-menu-json">JSON</button>
+                <div class="download-dropdown">
+                  <div class="download-dropdown-header" data-i18n="downloadAs">הורד כ...</div>
+                  <button type="button" data-action="vtt" id="viewer-menu-vtt">VTT</button>
+                  <button type="button" data-action="srt" id="viewer-menu-srt">SRT</button>
+                  <button type="button" data-action="docx" id="viewer-menu-docx">
+                    <span data-i18n="wordDocx">Word DOCX</span>
+                  </button>
+                  <button type="button" data-action="json" id="viewer-menu-json">JSON</button>
+                </div>
               </div>
             </div>
           </div>
@@ -4330,6 +4341,12 @@
         // Hide player by default
         playerContainer.classList.remove('visible')
         
+        // Remove existing timeupdate listener if any
+        audioPlayer.removeEventListener('timeupdate', handleAudioTimeUpdate)
+        
+        // Reset playing segment index
+        currentPlayingSegmentIndex = -1
+        
         try {
           // Check if audio file exists by making a HEAD request
           const checkResponse = await fetch(`/appdata/audio/stream/${resultsId}`, {
@@ -4341,11 +4358,69 @@
             audioSource.src = `/appdata/audio/stream/${resultsId}`
             audioPlayer.load()
             playerContainer.classList.add('visible')
+            
+            // Add timeupdate listener to sync text with audio
+            audioPlayer.addEventListener('timeupdate', handleAudioTimeUpdate)
           }
         } catch (error) {
           // Audio file doesn't exist or error occurred, keep player hidden
           console.log('Audio file not available for this transcription')
         }
+      }
+      
+      // Store current playing segment index for efficient lookup
+      let currentPlayingSegmentIndex = -1
+      
+      // Handle audio time update to highlight current segment
+      function handleAudioTimeUpdate(event) {
+        const currentTime = event.target.currentTime
+        
+        // Use viewer data segments for efficient lookup
+        if (!currentViewerData || !currentViewerData.results) return
+        
+        const segments = currentViewerData.results
+        
+        // Find the segment containing currentTime
+        const segmentIndex = segments.findIndex(seg => currentTime >= seg.start && currentTime <= seg.end)
+        
+        // If we're in the same segment as before, no need to update
+        if (segmentIndex === currentPlayingSegmentIndex) {
+          return
+        }
+        
+        // Clear previous playing segment
+        if (currentPlayingSegmentIndex !== -1) {
+          const prevElement = document.querySelector(`.transcript-segment[data-segment-index="${currentPlayingSegmentIndex}"]`)
+          if (prevElement) {
+            prevElement.classList.remove('playing')
+          }
+        }
+        
+        // Update current playing segment
+        currentPlayingSegmentIndex = segmentIndex
+        
+        if (segmentIndex !== -1) {
+          const currentElement = document.querySelector(`.transcript-segment[data-segment-index="${segmentIndex}"]`)
+          if (currentElement) {
+            currentElement.classList.add('playing')
+            
+            // Optionally scroll to the playing segment
+            if (!isElementInViewport(currentElement)) {
+              currentElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }
+          }
+        }
+      }
+      
+      // Check if element is in viewport
+      function isElementInViewport(el) {
+        const rect = el.getBoundingClientRect()
+        return (
+          rect.top >= 0 &&
+          rect.left >= 0 &&
+          rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+          rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+        )
       }
 
       // Download in specified format
@@ -4418,6 +4493,30 @@
 
         viewerTranscription.innerHTML = result
         updateViewerTranscriptionDirectionUI()
+        
+        // Reset playing segment index when regenerating display
+        currentPlayingSegmentIndex = -1
+        
+        // Add click handlers to segments for seeking audio
+        addSegmentClickHandlers()
+      }
+      
+      // Add click handlers to transcript segments for audio seeking
+      function addSegmentClickHandlers() {
+        const segments = document.querySelectorAll('.transcript-segment')
+        const audioPlayer = document.getElementById('viewer-audio-player')
+        
+        segments.forEach(segment => {
+          segment.addEventListener('click', () => {
+            const start = parseFloat(segment.dataset.start)
+            if (!isNaN(start) && audioPlayer && audioPlayer.src) {
+              audioPlayer.currentTime = start
+              audioPlayer.play().catch(() => {
+                // Ignore play errors (e.g., if user hasn't interacted with page yet)
+              })
+            }
+          })
+        })
       }
 
       function formatWithTimecodesForSegments(segments) {
@@ -4441,9 +4540,16 @@
             const startTime = currentGroup[0].start
             const endTime = currentGroup[currentGroup.length - 1].end
 
-            const groupText = displaySettings.diarizationDisplay === "enabled"
-              ? joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "<br>", true)
-              : currentGroup.map((seg) => seg.text.trim()).join(separator)
+            let groupText
+            if (displaySettings.diarizationDisplay === "enabled") {
+              groupText = joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "<br>", true)
+            } else {
+              // Wrap each segment with timing data
+              groupText = currentGroup.map((seg, idx) => {
+                const actualIndex = segments.indexOf(seg)
+                return `<span class="transcript-segment" data-start="${seg.start}" data-end="${seg.end}" data-segment-index="${actualIndex}">${seg.text.trim()}</span>`
+              }).join(separator)
+            }
 
             const formattedStartTime = formatTimeForDisplay(startTime)
             const formattedEndTime = formatTimeForDisplay(endTime)
@@ -4475,9 +4581,17 @@
           
           const showSpeakerLabel = diarizationEnabled && segmentSpeaker !== currentSpeaker
           
-          const segmentText = showSpeakerLabel 
-            ? (isHTML ? getSpeakerLabelForLanguage(segment, currentViewerLanguage) + segment.text.trim() : getSpeakerLabelPlainForLanguage(segment, currentViewerLanguage) + segment.text.trim())
-            : segment.text.trim()
+          let segmentText
+          if (isHTML) {
+            const labelHTML = showSpeakerLabel ? getSpeakerLabelForLanguage(segment, currentViewerLanguage) : ''
+            const textContent = segment.text.trim()
+            // Wrap in span with timing data for audio sync
+            segmentText = labelHTML + `<span class="transcript-segment" data-start="${segment.start}" data-end="${segment.end}" data-segment-index="${i}">${textContent}</span>`
+          } else {
+            segmentText = showSpeakerLabel 
+              ? getSpeakerLabelPlainForLanguage(segment, currentViewerLanguage) + segment.text.trim()
+              : segment.text.trim()
+          }
           
           if (i === 0) {
             result.push(segmentText)
@@ -4534,6 +4648,14 @@
         playerContainer.classList.remove('visible')
         audioPlayer.pause()
         audioPlayer.currentTime = 0
+        // Remove timeupdate listener
+        audioPlayer.removeEventListener('timeupdate', handleAudioTimeUpdate)
+        // Clear any playing segments
+        document.querySelectorAll('.transcript-segment.playing').forEach(seg => {
+          seg.classList.remove('playing')
+        })
+        // Reset playing segment index
+        currentPlayingSegmentIndex = -1
         switchTab('files')
       })
 
