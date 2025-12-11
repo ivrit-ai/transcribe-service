@@ -3660,6 +3660,11 @@
           const i18nKey = errorData.i18n_key
           const i18nVars = errorData.i18n_vars || {}
           
+          // Include details field in translation variables if present
+          if (errorData.details) {
+            i18nVars.details = errorData.details
+          }
+          
           // If we have an i18n_key field, use it for translation
           if (i18nKey && window.I18N) {
             return window.I18N.t(i18nKey, i18nVars)
