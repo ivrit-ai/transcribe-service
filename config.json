@@ -1,7 +1,7 @@
 {
   "languages": {
     "he": {
-      "model": "ivrit-ai/whisper-large-v3-turbo-ct2",
+      "model": "ggml-model.bin",
       "general_availability": true,
       "enabled": true
     },
