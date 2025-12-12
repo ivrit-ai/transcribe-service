@@ -8,3 +8,6 @@ secrets/
 venv/
 **/__pycache__/
 certs/
+node_modules/
+playwright-report/
+test-results/

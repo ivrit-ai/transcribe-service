@@ -10,3 +10,4 @@ posthog==3.4.0
 python-box
 ivrit==0.1.6
 cachetools
+werkzeug

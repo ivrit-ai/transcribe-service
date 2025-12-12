@@ -1,0 +1,11 @@
+{
+  "name": "transcribe-service",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "test:playwright": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.1"
+  }
+}
