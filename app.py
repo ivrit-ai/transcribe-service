@@ -1658,14 +1658,29 @@ async def create_runpod_endpoint(api_key: str, template_id: str) -> Optional[dic
             logger.error(f"No workers available: max={max_concurrency}, current={current_usage}, available={available_workers}")
             return None
         
-        # Use minimum of available workers and a reasonable default (e.g., 3)
-        workers_max = min(available_workers, 3)
+        # Use minimum of available workers and a reasonable default (e.g., 5).
+        # Going with 5 (previously had 3 here) as sometimes workers are unavailable, causing long wait times.
+        # This somewhat improves time-to-start.
+        workers_max = min(available_workers, 5)
         log_message(f"Concurrency calculation: max={max_concurrency}, current={current_usage}, available={available_workers}, setting workersMax={workers_max}")
     
     endpoint_data = {
         "name": endpoint_name,
         "templateId": template_id,
-        "gpuTypeIds": ["NVIDIA GeForce RTX 4090"],
+        "gpuTypeIds": [
+            # 24GB VRAM options (best for performance)
+            "NVIDIA GeForce RTX 4090",
+            "NVIDIA GeForce RTX 3090",
+            "NVIDIA RTX A5000",
+            "NVIDIA L4",
+            "NVIDIA A30",
+            # 48GB VRAM options (highest performance)
+            "NVIDIA RTX A6000",
+            "NVIDIA A40",
+            # 16GB VRAM options (cost-effective)
+            "NVIDIA RTX A4000",
+            "NVIDIA RTX 2000 Ada Generation"
+        ],
         "scalerType": "QUEUE_DELAY",
         "scalerValue": 4,
         "workersMin": 0,
