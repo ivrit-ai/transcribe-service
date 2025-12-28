@@ -4,7 +4,7 @@ aiohttp==3.9.1
 python-multipart
 jinja2==3.1.2
 python-dotenv
-python-magic-bin==0.4.14
+python-magic
 ffmpeg-python==0.2.0
 posthog==3.4.0
 python-box
