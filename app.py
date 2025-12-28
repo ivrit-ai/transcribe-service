@@ -54,6 +54,7 @@ import io
 
 import posthog
 import ffmpeg
+import imageio_ffmpeg
 import base64
 import argparse
 import re
@@ -645,11 +646,21 @@ def is_ffmpeg_supported_mimetype(file_mime):
 
 def get_media_duration(file_path):
     try:
-        probe = ffmpeg.probe(file_path)
+        # Prefer using ffprobe from the same bundle as imageio-ffmpeg's ffmpeg (Windows-friendly)
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        ffprobe_exe = str(Path(ffmpeg_exe).with_name("ffprobe.exe"))
+        if os.name == "nt" and Path(ffprobe_exe).exists():
+            probe = ffmpeg.probe(file_path, cmd=ffprobe_exe)
+        else:
+            probe = ffmpeg.probe(file_path)
         audio_info = next(s for s in probe["streams"] if s["codec_type"] == "audio")
         return float(audio_info["duration"])
     except ffmpeg.Error as e:
-        print(f"Error: {e.stderr}")
+        try:
+            stderr = e.stderr.decode(errors="ignore") if isinstance(e.stderr, (bytes, bytearray)) else str(e.stderr)
+        except Exception:
+            stderr = str(e.stderr)
+        log_message(f"ffmpeg probe error: {stderr}")
         return None
 
 
@@ -663,8 +674,9 @@ async def transcode_to_opus(
     """
     Transcode audio file to Opus format with progress reporting.
     """
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [
-        'ffmpeg',
+        ffmpeg_exe,
         '-hide_banner',
         '-loglevel', 'error',
         '-nostats',

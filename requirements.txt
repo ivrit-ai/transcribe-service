@@ -4,9 +4,10 @@ aiohttp==3.9.1
 python-multipart
 jinja2==3.1.2
 python-dotenv
-python-magic==0.4.27
+python-magic-bin==0.4.14
 ffmpeg-python==0.2.0
 posthog==3.4.0
 python-box
 ivrit==0.1.6
 cachetools
+imageio-ffmpeg==0.6.0
