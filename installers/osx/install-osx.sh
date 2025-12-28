@@ -97,17 +97,30 @@ else
         RELEASE_URL="https://api.github.com/repos/ivrit-ai/transcribe-service/tarball/refs/tags/$TRANSCRIBE_VERSION"
         GITHUB_REF="$TRANSCRIBE_VERSION"
     else
-        # Assume it's a branch
-        echo "Using branch: $TRANSCRIBE_VERSION"
-        RELEASE_URL="https://api.github.com/repos/ivrit-ai/transcribe-service/tarball/$TRANSCRIBE_VERSION"
-        GITHUB_REF="$TRANSCRIBE_VERSION"
+        # Check if it's a valid branch
+        echo "Checking if $TRANSCRIBE_VERSION is a branch..."
+        BRANCH_EXISTS=$(curl -fsSL -o /dev/null -w "%{http_code}" https://api.github.com/repos/ivrit-ai/transcribe-service/branches/$TRANSCRIBE_VERSION)
+        
+        if [ "$BRANCH_EXISTS" = "200" ]; then
+            echo "Using branch: $TRANSCRIBE_VERSION"
+            RELEASE_URL="https://api.github.com/repos/ivrit-ai/transcribe-service/tarball/$TRANSCRIBE_VERSION"
+            GITHUB_REF="$TRANSCRIBE_VERSION"
+        else
+            echo "Error: '$TRANSCRIBE_VERSION' is not a valid release tag or branch"
+            echo "Please check the version/branch name and try again"
+            exit 1
+        fi
     fi
 fi
 
 echo "Downloading from GitHub (ref: $GITHUB_REF)..."
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR"
-curl -fsSL "$RELEASE_URL" | tar -xzf - -C "$APP_DIR" --strip-components=1
+if ! curl -fsSL "$RELEASE_URL" | tar -xzf - -C "$APP_DIR" --strip-components=1; then
+    echo "Error: Failed to download or extract the release"
+    echo "URL attempted: $RELEASE_URL"
+    exit 1
+fi
 echo "✓ transcribe-service downloaded successfully"
 
 # Step 3: Create virtual environment with Python 3.13
@@ -155,7 +168,16 @@ echo ""
 echo "Step 7/7: Downloading launch script..."
 LAUNCH_SCRIPT_URL="https://raw.githubusercontent.com/ivrit-ai/transcribe-service/$GITHUB_REF/installers/osx/launch.sh"
 echo "Downloading from: $LAUNCH_SCRIPT_URL"
-curl -fsSL "$LAUNCH_SCRIPT_URL" -o "$LAUNCH_SCRIPT"
+
+# Try to download the launch script, fall back to main branch if not found
+if ! curl -fsSL "$LAUNCH_SCRIPT_URL" -o "$LAUNCH_SCRIPT" 2>/dev/null; then
+    echo "Launch script not found in ref: $GITHUB_REF"
+    echo "Falling back to main branch..."
+    LAUNCH_SCRIPT_URL="https://raw.githubusercontent.com/ivrit-ai/transcribe-service/main/installers/osx/launch.sh"
+    echo "Downloading from: $LAUNCH_SCRIPT_URL"
+    curl -fsSL "$LAUNCH_SCRIPT_URL" -o "$LAUNCH_SCRIPT"
+fi
+
 chmod +x "$LAUNCH_SCRIPT"
 echo "✓ Launch script downloaded successfully"
 
