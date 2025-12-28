@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Configuration
-INSTALL_DIR="$HOME/.transcribe-service"
+INSTALL_DIR="$(pwd)"
 UV_DIR="$INSTALL_DIR/uv"
 APP_DIR="$INSTALL_DIR/transcribe-service"
 MODELS_DIR="$INSTALL_DIR/models"
@@ -55,10 +55,8 @@ else
     exit 1
 fi
 
-# Create installation directory
-echo "Creating installation directory at $INSTALL_DIR..."
-mkdir -p "$INSTALL_DIR"
-cd "$INSTALL_DIR"
+# Installation directory
+echo "Installing to: $INSTALL_DIR"
 
 # Step 1: Download and install uv
 echo ""
@@ -89,7 +87,10 @@ if [ "$TRANSCRIBE_VERSION" = "latest" ]; then
 else
     # Check if this is a release tag or a branch
     echo "Checking if $TRANSCRIBE_VERSION is a release tag..."
-    TAG_EXISTS=$(curl -fsSL -o /dev/null -w "%{http_code}" https://api.github.com/repos/ivrit-ai/transcribe-service/releases/tags/$TRANSCRIBE_VERSION)
+    # Temporarily disable exit on error for validation checks
+    set +e
+    TAG_EXISTS=$(curl -fsSL -o /dev/null -w "%{http_code}" https://api.github.com/repos/ivrit-ai/transcribe-service/releases/tags/$TRANSCRIBE_VERSION 2>/dev/null)
+    set -e
     
     if [ "$TAG_EXISTS" = "200" ]; then
         # It's a release tag
@@ -99,7 +100,9 @@ else
     else
         # Check if it's a valid branch
         echo "Checking if $TRANSCRIBE_VERSION is a branch..."
-        BRANCH_EXISTS=$(curl -fsSL -o /dev/null -w "%{http_code}" https://api.github.com/repos/ivrit-ai/transcribe-service/branches/$TRANSCRIBE_VERSION)
+        set +e
+        BRANCH_EXISTS=$(curl -fsSL -o /dev/null -w "%{http_code}" https://api.github.com/repos/ivrit-ai/transcribe-service/branches/$TRANSCRIBE_VERSION 2>/dev/null)
+        set -e
         
         if [ "$BRANCH_EXISTS" = "200" ]; then
             echo "Using branch: $TRANSCRIBE_VERSION"
