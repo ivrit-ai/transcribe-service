@@ -40,7 +40,6 @@ UV_DIR="$INSTALL_DIR/uv"
 APP_DIR="$INSTALL_DIR/transcribe-service"
 MODELS_DIR="$INSTALL_DIR/models"
 VENV_DIR="$INSTALL_DIR/venv"
-LAUNCH_SCRIPT="$INSTALL_DIR/launch.sh"
 TRANSCRIBE_VERSION="${TRANSCRIBE_VERSION:-latest}"
 MODEL_URL="https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/main/ggml-model.bin"
 
@@ -166,23 +165,107 @@ else
     echo "✓ Model downloaded successfully"
 fi
 
-# Step 7: Download launch script
+# Step 7: Create ivrit.ai.app in Applications folder
 echo ""
-echo "Step 7/7: Downloading launch script..."
-LAUNCH_SCRIPT_URL="https://raw.githubusercontent.com/ivrit-ai/transcribe-service/$GITHUB_REF/installers/osx/launch.sh"
-echo "Downloading from: $LAUNCH_SCRIPT_URL"
+echo "Step 7/7: Creating ivrit.ai application..."
 
-# Try to download the launch script, fall back to main branch if not found
-if ! curl -fsSL "$LAUNCH_SCRIPT_URL" -o "$LAUNCH_SCRIPT" 2>/dev/null; then
-    echo "Launch script not found in ref: $GITHUB_REF"
-    echo "Falling back to main branch..."
-    LAUNCH_SCRIPT_URL="https://raw.githubusercontent.com/ivrit-ai/transcribe-service/main/installers/osx/launch.sh"
-    echo "Downloading from: $LAUNCH_SCRIPT_URL"
-    curl -fsSL "$LAUNCH_SCRIPT_URL" -o "$LAUNCH_SCRIPT"
+APP_BUNDLE="$HOME/Applications/ivrit.ai.app"
+APP_CONTENTS="$APP_BUNDLE/Contents"
+APP_MACOS="$APP_CONTENTS/MacOS"
+
+# Create the .app bundle structure
+mkdir -p "$APP_MACOS"
+
+# Create Info.plist
+cat > "$APP_CONTENTS/Info.plist" << 'PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>ivrit.ai</string>
+    <key>CFBundleIdentifier</key>
+    <string>ai.ivrit.transcribe</string>
+    <key>CFBundleName</key>
+    <string>ivrit.ai</string>
+    <key>CFBundleDisplayName</key>
+    <string>ivrit.ai Transcribe</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.13</string>
+</dict>
+</plist>
+PLIST_EOF
+
+# Create the launcher script inside the app bundle
+cat > "$APP_MACOS/ivrit.ai" << LAUNCHER_EOF
+#!/bin/bash
+set -e
+
+# Installation directory (embedded at install time)
+INSTALL_DIR="$INSTALL_DIR"
+VENV_DIR="\$INSTALL_DIR/venv"
+APP_DIR="\$INSTALL_DIR/transcribe-service"
+LOG_FILE="\$INSTALL_DIR/app.log"
+PID_FILE="\$INSTALL_DIR/app.pid"
+
+# Check if already running
+if [ -f "\$PID_FILE" ]; then
+    OLD_PID=\$(cat "\$PID_FILE")
+    if ps -p "\$OLD_PID" > /dev/null 2>&1; then
+        echo "Transcribe service is already running (PID: \$OLD_PID)"
+        echo "Opening browser..."
+        sleep 1
+        open "http://localhost:4500"
+        exit 0
+    else
+        rm -f "\$PID_FILE"
+    fi
 fi
 
-chmod +x "$LAUNCH_SCRIPT"
-echo "✓ Launch script downloaded successfully"
+# Activate virtual environment and launch app
+echo "Starting transcribe service..."
+source "\$VENV_DIR/bin/activate"
+cd "\$APP_DIR"
+nohup python app.py --local > "\$LOG_FILE" 2>&1 &
+APP_PID=\$!
+echo \$APP_PID > "\$PID_FILE"
+
+echo "Transcribe service started (PID: \$APP_PID)"
+echo "Log file: \$LOG_FILE"
+
+# Wait a moment for the server to start
+echo "Waiting for server to start..."
+sleep 3
+
+# Launch browser
+echo "Opening browser..."
+open "http://localhost:4500"
+
+echo "Done! The service is running in the background."
+echo "To stop the service, run: kill \$APP_PID"
+LAUNCHER_EOF
+
+chmod +x "$APP_MACOS/ivrit.ai"
+
+# Set the application icon using the favicon.png from the downloaded source
+ICON_PATH="$APP_DIR/static/favicon.png"
+if [ -f "$ICON_PATH" ]; then
+    echo "Setting application icon..."
+    osascript -e "use framework \"AppKit\"" \
+      -e "set img to (current application's NSImage's alloc()'s initWithContentsOfFile:\"$ICON_PATH\")" \
+      -e "(current application's NSWorkspace's sharedWorkspace())'s setIcon:img forFile:\"$APP_BUNDLE\" options:0"
+    echo "✓ Application icon set successfully"
+else
+    echo "Warning: Icon file not found at $ICON_PATH, skipping icon setup"
+fi
+
+echo "✓ ivrit.ai application created successfully"
 
 # Installation complete
 echo ""
@@ -191,12 +274,10 @@ echo "Installation Complete!"
 echo "==================================="
 echo ""
 echo "Installation directory: $INSTALL_DIR"
-echo "Launch script: $LAUNCH_SCRIPT"
+echo "Application: $APP_BUNDLE"
 echo ""
-echo "To start the transcribe service, run:"
-echo "  $LAUNCH_SCRIPT"
-echo ""
-echo "You can also add an alias to your shell profile:"
-echo "  alias transcribe='$LAUNCH_SCRIPT'"
+echo "To start the transcribe service:"
+echo "  - Open ivrit.ai from your Applications folder, or"
+echo "  - Run: open \"$APP_BUNDLE\""
 echo ""
 
