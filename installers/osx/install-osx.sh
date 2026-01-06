@@ -157,12 +157,12 @@ if [ -f "$MODEL_FILE" ]; then
         echo "Skipping model download"
     else
         echo "Downloading model (this may take a while)..."
-        curl -fsSL "$MODEL_URL" -o "$MODEL_FILE"
+        curl -fL --progress-bar "$MODEL_URL" -o "$MODEL_FILE"
         echo "✓ Model downloaded successfully"
     fi
 else
     echo "Downloading model (this may take a while)..."
-    curl -fsSL "$MODEL_URL" -o "$MODEL_FILE"
+    curl -fL --progress-bar "$MODEL_URL" -o "$MODEL_FILE"
     echo "✓ Model downloaded successfully"
 fi
 

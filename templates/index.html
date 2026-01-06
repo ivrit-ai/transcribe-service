@@ -2024,6 +2024,29 @@
 
     <script src="{{ url_for('static', path='i18n.js') }}"></script>
     <script>
+      // Heartbeat interval for local mode auto-shutdown
+      const HEARTBEAT_INTERVAL_MS = 60 * 1000  // 60 seconds
+      let heartbeatInterval = null
+
+      function startHeartbeat() {
+        if (!IN_LOCAL_MODE) return
+        
+        // Send initial heartbeat
+        sendHeartbeat()
+        
+        // Set up periodic heartbeat
+        heartbeatInterval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS)
+      }
+
+      async function sendHeartbeat() {
+        try {
+          await fetch('/client_heartbeat', { method: 'POST' })
+        } catch (e) {
+          // Server might be shutting down, ignore errors
+          console.log('Heartbeat failed:', e.message)
+        }
+      }
+
       // Initialize Lucide icons after DOM is parsed
       document.addEventListener("DOMContentLoaded", () => {
         if (window.lucide && typeof window.lucide.createIcons === "function") {
@@ -2049,6 +2072,8 @@
         initTabs()
         // Initialize save audio info tooltip
         initSaveAudioTooltip()
+        // Start heartbeat for local mode auto-shutdown
+        startHeartbeat()
       })
 
       // Initialize save audio tooltip

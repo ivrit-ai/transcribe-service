@@ -498,6 +498,13 @@ stats_total_jobs_started = 0
 stats_total_minutes_processed = 0.0
 stats_app_start_time = time.time()
 
+# Heartbeat tracking for local mode auto-shutdown
+HEARTBEAT_INTERVAL_SECONDS = 60  # Client sends heartbeat every 60 seconds
+HEARTBEAT_MISSED_THRESHOLD = 3  # Number of consecutive missed heartbeats before shutdown
+missed_heartbeat_count = 0  # Counter for consecutive missed heartbeats
+heartbeat_received_this_period = False  # Flag to track if heartbeat received in current period
+last_heartbeat_check_time = None  # Last time we checked for heartbeat
+
 # Google Drive error tracking
 stats_gdrive_errors = {
     "toc_upload": 0,
@@ -1771,6 +1778,21 @@ async def get_quota(request: Request):
         "maxMinutesPerWeek": MAX_MINUTES_PER_WEEK
     })
 
+
+@app.post("/client_heartbeat")
+async def client_heartbeat():
+    """Receive heartbeat from client to prevent auto-shutdown in local mode."""
+    global missed_heartbeat_count, heartbeat_received_this_period
+    
+    if not in_local_mode:
+        return JSONResponse({"error": "Heartbeat only available in local mode"}, status_code=400)
+    
+    # Reset missed count and mark heartbeat as received
+    missed_heartbeat_count = 0
+    heartbeat_received_this_period = True
+    
+    return JSONResponse({"status": "ok"})
+
 @app.get("/stats", dependencies=[Depends(require_google_login)])
 async def get_stats(request: Request):
     """Get application statistics"""
@@ -2889,6 +2911,44 @@ async def cleanup_old_results():
 
 
 
+async def check_heartbeat_timeout():
+    """Check if heartbeat has timed out in local mode and shutdown if needed."""
+    global missed_heartbeat_count, heartbeat_received_this_period, last_heartbeat_check_time
+    
+    if not in_local_mode:
+        return
+    
+    current_time = time.time()
+    
+    # Initialize last check time on first call
+    if last_heartbeat_check_time is None:
+        last_heartbeat_check_time = current_time
+        return
+    
+    # Only check once per interval
+    if current_time - last_heartbeat_check_time < HEARTBEAT_INTERVAL_SECONDS:
+        return
+    
+    last_heartbeat_check_time = current_time
+    
+    # Check if heartbeat was received during this period
+    if heartbeat_received_this_period:
+        # Heartbeat received, reset counter
+        missed_heartbeat_count = 0
+        heartbeat_received_this_period = False
+    else:
+        # No heartbeat received, increment missed count
+        missed_heartbeat_count += 1
+        log_message(f"Heartbeat missed ({missed_heartbeat_count}/{HEARTBEAT_MISSED_THRESHOLD})")
+    
+    if missed_heartbeat_count >= HEARTBEAT_MISSED_THRESHOLD:
+        log_message(f"Auto-shutdown: {missed_heartbeat_count} consecutive heartbeats missed (threshold: {HEARTBEAT_MISSED_THRESHOLD})")
+        log_message("Shutting down server due to client inactivity...")
+        # Give a moment for the log to be written
+        await asyncio.sleep(0.5)
+        os._exit(0)
+
+
 async def event_loop():
     while True:
         await submit_next_transcoding_task()
@@ -2896,6 +2956,7 @@ async def event_loop():
         await submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG], LONG)
         await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
         await cleanup_old_results()
+        await check_heartbeat_timeout()
         await asyncio.sleep(0.1)
 
 
@@ -2906,8 +2967,29 @@ queue_locks = {
     PRIVATE: None
 }
 
+def check_port_available(port: int) -> bool:
+    """Check if a port is available for binding."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("0.0.0.0", port))
+        sock.close()
+        return True
+    except OSError:
+        return False
+
+
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500
+
+    # Check if port is available before starting
+    if not check_port_available(port):
+        logger.error(f"Port {port} is already in use. Another instance of the server may be running.")
+        logger.error("Please close the other instance or use a different port.")
+        print(f"\n*** ERROR: Port {port} is already in use. ***")
+        print("Another instance of the transcription server may be running.")
+        print("Please close it before starting a new one.\n")
+        sys.exit(1)
 
     # Configure SSL if dev-https is enabled
     ssl_kwargs = {}
