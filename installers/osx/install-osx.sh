@@ -6,12 +6,10 @@ set -e
 #   Install latest release from default repo:
 #     curl -fsSL https://raw.githubusercontent.com/ivrit-ai/transcribe-service/main/installers/osx/install-osx.sh | bash
 #
-#   Install from specific branch:
-#     REPO_PATH=ivrit-ai/transcribe-service/branches/main; curl -fsSL https://raw.githubusercontent.com/$REPO_PATH/installers/osx/install-osx.sh | bash
-#     REPO_PATH=my-org/my-fork/branches/develop; curl -fsSL https://raw.githubusercontent.com/$REPO_PATH/installers/osx/install-osx.sh | bash
-#
-#   Install from specific tag:
-#     REPO_PATH=ivrit-ai/transcribe-service/tags/v1.0.0; curl -fsSL https://raw.githubusercontent.com/$REPO_PATH/installers/osx/install-osx.sh | bash
+#   Install from any branch or tag (specify repo once):
+#     REPO_PATH=ivrit-ai/transcribe-service/main; curl -fsSL https://raw.githubusercontent.com/$REPO_PATH/installers/osx/install-osx.sh | REPO_PATH=$REPO_PATH bash
+#     REPO_PATH=ivrit-ai/transcribe-service/yairl/onprem; curl -fsSL https://raw.githubusercontent.com/$REPO_PATH/installers/osx/install-osx.sh | REPO_PATH=$REPO_PATH bash
+#     REPO_PATH=ivrit-ai/transcribe-service/v1.0.0; curl -fsSL https://raw.githubusercontent.com/$REPO_PATH/installers/osx/install-osx.sh | REPO_PATH=$REPO_PATH bash
 
 echo "==================================="
 echo "Transcribe Service OSX Installer"
@@ -19,25 +17,24 @@ echo "==================================="
 echo ""
 
 # Parse REPO_PATH environment variable
-# Format: org/repo/branches/branch-name or org/repo/tags/tag-name
+# Format: org/repo/ref-name (where ref-name can be a branch or tag)
 # If not specified, defaults to latest release from ivrit-ai/transcribe-service
 if [ -n "$REPO_PATH" ]; then
     # Split REPO_PATH into parts
     IFS='/' read -ra PATH_PARTS <<< "$REPO_PATH"
     
-    if [ ${#PATH_PARTS[@]} -lt 4 ]; then
+    if [ ${#PATH_PARTS[@]} -lt 3 ]; then
         echo "Error: Invalid REPO_PATH format"
-        echo "Expected: org/repo/branches/branch-name or org/repo/tags/tag-name"
+        echo "Expected: org/repo/ref-name (e.g., ivrit-ai/transcribe-service/main)"
         echo "Got: $REPO_PATH"
         exit 1
     fi
     
     GITHUB_REPO="${PATH_PARTS[0]}/${PATH_PARTS[1]}"
-    REF_TYPE="${PATH_PARTS[2]}"  # Should be 'branches' or 'tags'
     
-    # Join remaining parts (in case branch/tag name contains slashes)
+    # Join remaining parts (in case ref name contains slashes like feature/my-branch)
     REF_NAME=""
-    for ((i=3; i<${#PATH_PARTS[@]}; i++)); do
+    for ((i=2; i<${#PATH_PARTS[@]}; i++)); do
         if [ -z "$REF_NAME" ]; then
             REF_NAME="${PATH_PARTS[$i]}"
         else
@@ -45,16 +42,20 @@ if [ -n "$REPO_PATH" ]; then
         fi
     done
     
-    if [ "$REF_TYPE" != "branches" ] && [ "$REF_TYPE" != "tags" ]; then
-        echo "Error: Invalid reference type '$REF_TYPE'"
-        echo "Expected 'branches' or 'tags'"
-        exit 1
-    fi
-    
     GITHUB_REF="$REF_NAME"
-    IS_TAG=false
-    if [ "$REF_TYPE" = "tags" ]; then
+    
+    # Check if this is a tag or branch by querying GitHub API
+    echo "Checking if $GITHUB_REF is a tag or branch..."
+    set +e
+    TAG_EXISTS=$(curl -fsSL -o /dev/null -w "%{http_code}" https://api.github.com/repos/$GITHUB_REPO/git/refs/tags/$GITHUB_REF 2>/dev/null)
+    set -e
+    
+    if [ "$TAG_EXISTS" = "200" ]; then
         IS_TAG=true
+        echo "Detected as tag: $GITHUB_REF"
+    else
+        IS_TAG=false
+        echo "Detected as branch: $GITHUB_REF"
     fi
 else
     # Default to latest release from ivrit-ai/transcribe-service
@@ -194,12 +195,13 @@ fi
 # Create VERSION file
 VERSION_FILE="$INSTALL_DIR/VERSION"
 if [ "$IS_TAG" = true ]; then
-    REF_PREFIX="tags"
+    REF_TYPE="tag"
 else
-    REF_PREFIX="branches"
+    REF_TYPE="branch"
 fi
-echo "${GITHUB_REPO}/${REF_PREFIX}/${GITHUB_REF}@${COMMIT_HASH}" > "$VERSION_FILE"
-echo "✓ Version file created: $VERSION_FILE (${GITHUB_REPO}/${REF_PREFIX}/${GITHUB_REF}@${COMMIT_HASH})"
+echo "${GITHUB_REPO}/${GITHUB_REF}@${COMMIT_HASH} (${REF_TYPE})" > "$VERSION_FILE"
+echo "✓ Version file created: $VERSION_FILE"
+echo "   ${GITHUB_REPO}/${GITHUB_REF}@${COMMIT_HASH} (${REF_TYPE})"
 
 # Step 3: Create virtual environment with Python 3.13
 echo ""
