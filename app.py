@@ -91,6 +91,8 @@ parser.add_argument('--dev-user-email', help='User email for development mode')
 parser.add_argument('--dev-https', action='store_true', help='Enable HTTPS in development mode with self-signed certificates')
 parser.add_argument('--dev-cert-folder', help='Path to folder containing self-signed certificate files (cert.pem and key.pem)')
 parser.add_argument('--local', action='store_true', help='Enable local mode')
+parser.add_argument('--data-dir', dest='data_dir', default=None, help='Directory for storing data files (local storage, etc.)')
+parser.add_argument('--models-dir', dest='models_dir', default=None, help='Directory containing model files for local mode')
 parser.add_argument('--config', dest='config_path', default='config.json', help='Path to configuration JSON defining languages and models (default: config.json)')
 args, unknown = parser.parse_known_args()
 
@@ -111,7 +113,9 @@ if not in_local_mode:
 
 # Initialize file storage backend based on mode
 if in_local_mode:
-    file_storage_backend: FileStorageBackend = LocalFileStorageBackend()
+    # Use custom data directory if provided, otherwise use default
+    local_data_dir = args.data_dir if args.data_dir else os.environ.get("LOCAL_DATA_DIR", "local_data")
+    file_storage_backend: FileStorageBackend = LocalFileStorageBackend(base_dir=local_data_dir)
 else:
     file_storage_backend: FileStorageBackend = GoogleDriveStorageBackend()
 
@@ -131,8 +135,13 @@ if "languages" not in APP_CONFIG or not isinstance(APP_CONFIG["languages"], dict
 for lang_key, lang_cfg in APP_CONFIG["languages"].items():
     if not isinstance(lang_cfg, dict):
         raise RuntimeError(f"Invalid configuration for language '{lang_key}': must be an object")
-    if "model" not in lang_cfg or not isinstance(lang_cfg["model"], str) or not lang_cfg["model"].strip():
-        raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'model'")
+    
+    # Require both ct2_model and ggml_model fields
+    if "ct2_model" not in lang_cfg or not isinstance(lang_cfg["ct2_model"], str) or not lang_cfg["ct2_model"].strip():
+        raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'ct2_model'")
+    if "ggml_model" not in lang_cfg or not isinstance(lang_cfg["ggml_model"], str) or not lang_cfg["ggml_model"].strip():
+        raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'ggml_model'")
+    
     if "general_availability" not in lang_cfg or not isinstance(lang_cfg["general_availability"], bool):
         raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'general_availability' (bool)")
     if "enabled" not in lang_cfg or not isinstance(lang_cfg["enabled"], bool):
@@ -2660,13 +2669,43 @@ async def transcribe_job(job_desc):
 
         # Resolve model by language from config
         lang_cfg = APP_CONFIG["languages"][job_desc.language]
-        selected_model = lang_cfg["model"]
         
+        # Select appropriate model based on mode (local vs server)
         if in_local_mode:
-            m = ivrit.load_model(engine='stable-whisper', model=selected_model)
-            # In local mode, always use local file path and disable diarization
-            segs = m.transcribe_async(path=temp_file_path, diarize=True)
+            # Use ggml_model for local mode
+            selected_model = lang_cfg["ggml_model"]
+            
+            # If model is a relative path, resolve it against models_dir
+            if args.models_dir and not os.path.isabs(selected_model):
+                selected_model = os.path.join(args.models_dir, selected_model)
+            
+            log_message(f"{job_desc.user_email}: using local model: {selected_model}")
+            m = ivrit.load_model(engine='whisper-cpp', model=selected_model)
+            # In local mode, transcribe first without diarization
+            segs = m.transcribe_async(path=temp_file_path, diarize=False)
+            
+            # Collect all segments for diarization
+            all_segments = []
+            async for segment in segs:
+                all_segments.append(segment)
+            
+            # Perform diarization separately after transcription
+            from ivrit.diarization import diarize as diarize_func
+            import torch
+            diarize_device = "cuda" if torch.cuda.is_available() else "cpu"
+            segs = diarize_func(
+                audio=temp_file_path,
+                transcription_segments=all_segments,
+                verbose=True,
+                engine="ivrit",
+                device=diarize_device
+            )
         else:
+            # Use ct2_model for server/RunPod mode
+            selected_model = lang_cfg["ct2_model"]
+            
+            log_message(f"{job_desc.user_email}: using server model: {selected_model}")
+            
             # Load model using ivrit package
             # Pass custom RunPod credentials if provided
             if job_desc.uses_custom_runpod:

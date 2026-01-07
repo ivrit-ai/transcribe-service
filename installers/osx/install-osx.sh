@@ -3,56 +3,119 @@ set -e
 
 # Transcribe Service OSX Installer
 # Usage: 
-#   Install latest release:
+#   Install latest release from default repo:
 #     curl -fsSL https://raw.githubusercontent.com/ivrit-ai/transcribe-service/main/installers/osx/install-osx.sh | bash
-#   Install specific tag:
-#     curl -fsSL https://raw.githubusercontent.com/ivrit-ai/transcribe-service/main/installers/osx/install-osx.sh | TRANSCRIBE_VERSION=v1.0.0 bash
-#   Install from branch:
-#     curl -fsSL https://raw.githubusercontent.com/ivrit-ai/transcribe-service/main/installers/osx/install-osx.sh | TRANSCRIBE_VERSION=develop bash
+#
+#   Install from specific branch:
+#     REPO_PATH=ivrit-ai/transcribe-service/branches/main; curl -fsSL https://raw.githubusercontent.com/$REPO_PATH/installers/osx/install-osx.sh | bash
+#     REPO_PATH=my-org/my-fork/branches/develop; curl -fsSL https://raw.githubusercontent.com/$REPO_PATH/installers/osx/install-osx.sh | bash
+#
+#   Install from specific tag:
+#     REPO_PATH=ivrit-ai/transcribe-service/tags/v1.0.0; curl -fsSL https://raw.githubusercontent.com/$REPO_PATH/installers/osx/install-osx.sh | bash
 
 echo "==================================="
 echo "Transcribe Service OSX Installer"
 echo "==================================="
 echo ""
 
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --version)
-            TRANSCRIBE_VERSION="$2"
-            shift 2
-            ;;
-        --branch)
-            TRANSCRIBE_VERSION="$2"
-            shift 2
-            ;;
-        *)
-            echo "Unknown option: $1"
-            echo "Usage: $0 [--version TAG] [--branch BRANCH]"
-            exit 1
-            ;;
-    esac
-done
+# Parse REPO_PATH environment variable
+# Format: org/repo/branches/branch-name or org/repo/tags/tag-name
+# If not specified, defaults to latest release from ivrit-ai/transcribe-service
+if [ -n "$REPO_PATH" ]; then
+    # Split REPO_PATH into parts
+    IFS='/' read -ra PATH_PARTS <<< "$REPO_PATH"
+    
+    if [ ${#PATH_PARTS[@]} -lt 4 ]; then
+        echo "Error: Invalid REPO_PATH format"
+        echo "Expected: org/repo/branches/branch-name or org/repo/tags/tag-name"
+        echo "Got: $REPO_PATH"
+        exit 1
+    fi
+    
+    GITHUB_REPO="${PATH_PARTS[0]}/${PATH_PARTS[1]}"
+    REF_TYPE="${PATH_PARTS[2]}"  # Should be 'branches' or 'tags'
+    
+    # Join remaining parts (in case branch/tag name contains slashes)
+    REF_NAME=""
+    for ((i=3; i<${#PATH_PARTS[@]}; i++)); do
+        if [ -z "$REF_NAME" ]; then
+            REF_NAME="${PATH_PARTS[$i]}"
+        else
+            REF_NAME="$REF_NAME/${PATH_PARTS[$i]}"
+        fi
+    done
+    
+    if [ "$REF_TYPE" != "branches" ] && [ "$REF_TYPE" != "tags" ]; then
+        echo "Error: Invalid reference type '$REF_TYPE'"
+        echo "Expected 'branches' or 'tags'"
+        exit 1
+    fi
+    
+    GITHUB_REF="$REF_NAME"
+    IS_TAG=false
+    if [ "$REF_TYPE" = "tags" ]; then
+        IS_TAG=true
+    fi
+else
+    # Default to latest release from ivrit-ai/transcribe-service
+    GITHUB_REPO="ivrit-ai/transcribe-service"
+    GITHUB_REF="latest"
+    IS_TAG=true
+fi
+
+echo "Using GitHub repository: $GITHUB_REPO"
+echo "Using reference: $GITHUB_REF"
+echo ""
+
+# Check architecture first - only arm64 (Apple Silicon) is supported
+ARCH=$(uname -m)
+if [ "$ARCH" != "arm64" ]; then
+    echo "Error: This installer only supports Apple Silicon (arm64) Macs."
+    echo "Detected architecture: $ARCH"
+    exit 1
+fi
 
 # Configuration
 INSTALL_DIR="$(pwd)"
 UV_DIR="$INSTALL_DIR/uv"
 APP_DIR="$INSTALL_DIR/transcribe-service"
-MODELS_DIR="$INSTALL_DIR/models"
 VENV_DIR="$INSTALL_DIR/venv"
-TRANSCRIBE_VERSION="${TRANSCRIBE_VERSION:-latest}"
+MODELS_DIR="$INSTALL_DIR/models"
+DATA_DIR="$HOME/Library/ivrit.ai/transcribe-service"
 MODEL_URL="https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/main/ggml-model.bin"
 
-# Detect architecture
-ARCH=$(uname -m)
-if [ "$ARCH" = "arm64" ]; then
-    UV_ARCH="aarch64"
-elif [ "$ARCH" = "x86_64" ]; then
-    UV_ARCH="x86_64"
-else
-    echo "Error: Unsupported architecture: $ARCH"
-    exit 1
+# Check if installation already exists
+if [ -d "$APP_DIR" ] || [ -d "$UV_DIR" ] || [ -d "$VENV_DIR" ]; then
+    echo ""
+    echo "==================================="
+    echo "Existing Installation Detected"
+    echo "==================================="
+    echo ""
+    echo "An installation already exists in this directory:"
+    echo "  $INSTALL_DIR"
+    echo ""
+    [ -d "$APP_DIR" ] && echo "  - transcribe-service/"
+    [ -d "$UV_DIR" ] && echo "  - uv/"
+    [ -d "$VENV_DIR" ] && echo "  - venv/"
+    echo ""
+    read -p "Do you want to uninstall and reinstall? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Installation aborted."
+        exit 0
+    fi
+    
+    echo "Removing existing installation..."
+    [ -d "$APP_DIR" ] && rm -rf "$APP_DIR"
+    [ -d "$UV_DIR" ] && rm -rf "$UV_DIR"
+    [ -d "$VENV_DIR" ] && rm -rf "$VENV_DIR"
+    [ -f "$INSTALL_DIR/VERSION" ] && rm -f "$INSTALL_DIR/VERSION"
+    echo "✓ Existing installation removed"
+    echo ""
 fi
+
+# Set UV architecture (arm64 already validated at startup)
+UV_ARCH="aarch64"
 
 # Installation directory
 echo "Installing to: $INSTALL_DIR"
@@ -70,49 +133,29 @@ echo "✓ uv installed successfully"
 # Step 2: Download transcribe-service release
 echo ""
 echo "Step 2/7: Downloading transcribe-service..."
-if [ "$TRANSCRIBE_VERSION" = "latest" ]; then
+if [ "$GITHUB_REF" = "latest" ]; then
     # Get the latest release tag
     echo "Fetching latest release..."
-    RELEASE_URL=$(curl -fsSL https://api.github.com/repos/ivrit-ai/transcribe-service/releases/latest | grep "tarball_url" | cut -d '"' -f 4)
+    RELEASE_URL=$(curl -fsSL https://api.github.com/repos/$GITHUB_REPO/releases/latest | grep "tarball_url" | cut -d '"' -f 4)
     if [ -z "$RELEASE_URL" ]; then
         echo "Error: Could not fetch latest release"
         exit 1
     fi
-    # Extract the ref for the raw content URL
-    GITHUB_REF=$(curl -fsSL https://api.github.com/repos/ivrit-ai/transcribe-service/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+    # Extract the actual tag name for the VERSION file
+    GITHUB_REF=$(curl -fsSL https://api.github.com/repos/$GITHUB_REPO/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
     if [ -z "$GITHUB_REF" ]; then
-        GITHUB_REF="main"
+        echo "Error: Could not determine release tag"
+        exit 1
     fi
+    echo "Found latest release: $GITHUB_REF"
+elif [ "$IS_TAG" = true ]; then
+    # It's a tag
+    echo "Using tag: $GITHUB_REF"
+    RELEASE_URL="https://api.github.com/repos/$GITHUB_REPO/tarball/refs/tags/$GITHUB_REF"
 else
-    # Check if this is a release tag or a branch
-    echo "Checking if $TRANSCRIBE_VERSION is a release tag..."
-    # Temporarily disable exit on error for validation checks
-    set +e
-    TAG_EXISTS=$(curl -fsSL -o /dev/null -w "%{http_code}" https://api.github.com/repos/ivrit-ai/transcribe-service/releases/tags/$TRANSCRIBE_VERSION 2>/dev/null)
-    set -e
-    
-    if [ "$TAG_EXISTS" = "200" ]; then
-        # It's a release tag
-        echo "Using release tag: $TRANSCRIBE_VERSION"
-        RELEASE_URL="https://api.github.com/repos/ivrit-ai/transcribe-service/tarball/refs/tags/$TRANSCRIBE_VERSION"
-        GITHUB_REF="$TRANSCRIBE_VERSION"
-    else
-        # Check if it's a valid branch
-        echo "Checking if $TRANSCRIBE_VERSION is a branch..."
-        set +e
-        BRANCH_EXISTS=$(curl -fsSL -o /dev/null -w "%{http_code}" https://api.github.com/repos/ivrit-ai/transcribe-service/branches/$TRANSCRIBE_VERSION 2>/dev/null)
-        set -e
-        
-        if [ "$BRANCH_EXISTS" = "200" ]; then
-            echo "Using branch: $TRANSCRIBE_VERSION"
-            RELEASE_URL="https://api.github.com/repos/ivrit-ai/transcribe-service/tarball/$TRANSCRIBE_VERSION"
-            GITHUB_REF="$TRANSCRIBE_VERSION"
-        else
-            echo "Error: '$TRANSCRIBE_VERSION' is not a valid release tag or branch"
-            echo "Please check the version/branch name and try again"
-            exit 1
-        fi
-    fi
+    # It's a branch
+    echo "Using branch: $GITHUB_REF"
+    RELEASE_URL="https://api.github.com/repos/$GITHUB_REPO/tarball/$GITHUB_REF"
 fi
 
 echo "Downloading from GitHub (ref: $GITHUB_REF)..."
@@ -124,6 +167,39 @@ if ! curl -fsSL "$RELEASE_URL" | tar -xzf - -C "$APP_DIR" --strip-components=1; 
     exit 1
 fi
 echo "✓ transcribe-service downloaded successfully"
+
+# Fetch commit hash for the version
+echo "Fetching commit hash for $GITHUB_REF..."
+if [ "$IS_TAG" = true ]; then
+    # For tags, try to get the commit hash from the tag reference
+    COMMIT_HASH=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/git/refs/tags/$GITHUB_REF" 2>/dev/null | grep '"sha"' | head -1 | cut -d '"' -f 4)
+    # If it's an annotated tag, we need to dereference it
+    if [ -z "$COMMIT_HASH" ]; then
+        COMMIT_HASH=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/commits/$GITHUB_REF" 2>/dev/null | grep '"sha"' | head -1 | cut -d '"' -f 4)
+    fi
+else
+    # For branches, get the latest commit hash
+    COMMIT_HASH=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/commits/$GITHUB_REF" 2>/dev/null | grep '"sha"' | head -1 | cut -d '"' -f 4)
+fi
+
+if [ -z "$COMMIT_HASH" ]; then
+    echo "Warning: Could not fetch commit hash, using 'unknown'"
+    COMMIT_HASH="unknown"
+else
+    # Truncate to first 8 characters for brevity
+    COMMIT_HASH="${COMMIT_HASH:0:8}"
+    echo "✓ Commit hash: $COMMIT_HASH"
+fi
+
+# Create VERSION file
+VERSION_FILE="$INSTALL_DIR/VERSION"
+if [ "$IS_TAG" = true ]; then
+    REF_PREFIX="tags"
+else
+    REF_PREFIX="branches"
+fi
+echo "${GITHUB_REPO}/${REF_PREFIX}/${GITHUB_REF}@${COMMIT_HASH}" > "$VERSION_FILE"
+echo "✓ Version file created: $VERSION_FILE (${GITHUB_REPO}/${REF_PREFIX}/${GITHUB_REF}@${COMMIT_HASH})"
 
 # Step 3: Create virtual environment with Python 3.13
 echo ""
@@ -143,11 +219,13 @@ echo "Step 5/7: Installing ivrit[all]..."
 "$UV_DIR/uv" pip install --python "$VENV_DIR/bin/python" "ivrit[all]"
 echo "✓ ivrit[all] installed successfully"
 
-# Step 6: Download model
+# Step 6: Create data directory and download model
 echo ""
-echo "Step 6/7: Downloading ivrit-ai model..."
+echo "Step 6/7: Setting up data directory and downloading model..."
+mkdir -p "$DATA_DIR"
 mkdir -p "$MODELS_DIR"
-MODEL_FILE="$MODELS_DIR/ggml-model.bin"
+echo "Data directory: $DATA_DIR"
+MODEL_FILE="$MODELS_DIR/ivrit-ggml-model.bin"
 if [ -f "$MODEL_FILE" ]; then
     echo "Model already exists at $MODEL_FILE"
     read -p "Do you want to re-download it? (y/N): " -n 1 -r
@@ -197,7 +275,13 @@ cat > "$APP_CONTENTS/Info.plist" << 'PLIST_EOF'
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
     <key>LSMinimumSystemVersion</key>
-    <string>10.13</string>
+    <string>11.0</string>
+    <key>LSArchitecturePriority</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    <key>LSRequiresNativeExecution</key>
+    <true/>
 </dict>
 </plist>
 PLIST_EOF
@@ -211,8 +295,13 @@ set -e
 INSTALL_DIR="$INSTALL_DIR"
 VENV_DIR="\$INSTALL_DIR/venv"
 APP_DIR="\$INSTALL_DIR/transcribe-service"
-LOG_FILE="\$INSTALL_DIR/app.log"
-PID_FILE="\$INSTALL_DIR/app.pid"
+MODELS_DIR="\$INSTALL_DIR/models"
+DATA_DIR="$DATA_DIR"
+LOG_FILE="\$DATA_DIR/app.log"
+PID_FILE="\$DATA_DIR/app.pid"
+
+# Ensure data directory exists
+mkdir -p "\$DATA_DIR"
 
 # Check if already running
 if [ -f "\$PID_FILE" ]; then
@@ -232,7 +321,7 @@ fi
 echo "Starting transcribe service..."
 source "\$VENV_DIR/bin/activate"
 cd "\$APP_DIR"
-nohup python app.py --local > "\$LOG_FILE" 2>&1 &
+nohup python app.py --local --data-dir "\$DATA_DIR" --models-dir "\$MODELS_DIR" > "\$LOG_FILE" 2>&1 &
 APP_PID=\$!
 echo \$APP_PID > "\$PID_FILE"
 
@@ -274,6 +363,8 @@ echo "Installation Complete!"
 echo "==================================="
 echo ""
 echo "Installation directory: $INSTALL_DIR"
+echo "Models directory: $MODELS_DIR"
+echo "Data directory: $DATA_DIR"
 echo "Application: $APP_BUNDLE"
 echo ""
 echo "To start the transcribe service:"

@@ -5,8 +5,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/venv"
 APP_DIR="$SCRIPT_DIR/transcribe-service"
-LOG_FILE="$SCRIPT_DIR/app.log"
-PID_FILE="$SCRIPT_DIR/app.pid"
+MODELS_DIR="$SCRIPT_DIR/models"
+DATA_DIR="$HOME/Library/ivrit.ai/transcribe-service"
+LOG_FILE="$DATA_DIR/app.log"
+PID_FILE="$DATA_DIR/app.pid"
+
+# Ensure data directory exists
+mkdir -p "$DATA_DIR"
 
 # Check if already running
 if [ -f "$PID_FILE" ]; then
@@ -26,7 +31,7 @@ fi
 echo "Starting transcribe service..."
 source "$VENV_DIR/bin/activate"
 cd "$APP_DIR"
-nohup python app.py --local > "$LOG_FILE" 2>&1 &
+nohup python app.py --local --data-dir "$DATA_DIR" --models-dir "$MODELS_DIR" > "$LOG_FILE" 2>&1 &
 APP_PID=$!
 echo $APP_PID > "$PID_FILE"
 
