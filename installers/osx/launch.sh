@@ -42,7 +42,7 @@ echo "Error log file: $LAUNCH_LOG_FILE"
 
 # Wait a moment for the server to start
 echo "Waiting for server to start..."
-sleep 3
+sleep 8
 
 # Launch browser
 echo "Opening browser..."
