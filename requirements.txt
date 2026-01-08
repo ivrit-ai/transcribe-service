@@ -10,4 +10,5 @@ posthog==3.4.0
 python-box
 ivrit==0.1.9
 cachetools
+imageio-ffmpeg==0.6.0
 huggingface-hub==0.33.4

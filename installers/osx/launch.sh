@@ -3,6 +3,7 @@ set -e
 
 # Transcribe Service Launcher
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="$SCRIPT_DIR/bin"
 VENV_DIR="$SCRIPT_DIR/venv"
 APP_DIR="$SCRIPT_DIR/transcribe-service"
 MODELS_DIR="$SCRIPT_DIR/models"
@@ -10,6 +11,9 @@ DATA_DIR="$HOME/Library/ivrit.ai/transcribe-service"
 LOG_FILE="$DATA_DIR/app.log"
 LAUNCH_LOG_FILE="$DATA_DIR/launch.log"
 PID_FILE="$DATA_DIR/app.pid"
+
+# Add bin directory to PATH for ffmpeg
+export PATH="$BIN_DIR:$PATH"
 
 # Ensure data directory exists
 mkdir -p "$DATA_DIR"
