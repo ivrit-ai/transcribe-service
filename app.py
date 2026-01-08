@@ -397,7 +397,14 @@ MAX_QUEUED_JOBS = 20
 MAX_QUEUED_PRIVATE_JOBS = 5000
 SHORT_JOB_THRESHOLD = 20 * 60
 
-SPEEDUP_FACTOR = 15
+# Set speedup factor based on mode and platform
+if in_local_mode and sys.platform == "darwin":
+    SPEEDUP_FACTOR = 8  # macOS local mode
+else:
+    SPEEDUP_FACTOR = 15  # Remote/cloud mode or non-macOS
+
+log_message(f"Using SPEEDUP_FACTOR={SPEEDUP_FACTOR} (local_mode={in_local_mode}, platform={sys.platform})")
+
 TRANSCODING_SPEEDUP = 100  # Transcoding speedup factor for ETA calculation
 SUBMISSION_DELAY = 15  # Additional delay in seconds added to ETA calculations
 MAX_AUDIO_DURATION_IN_HOURS = 20
