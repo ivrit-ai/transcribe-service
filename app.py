@@ -2693,13 +2693,20 @@ async def transcribe_job(job_desc):
             from ivrit.diarization import diarize as diarize_func
             import torch
             diarize_device = "cuda" if torch.cuda.is_available() else "cpu"
-            segs = diarize_func(
+            diarized_segments = diarize_func(
                 audio=temp_file_path,
                 transcription_segments=all_segments,
                 verbose=True,
                 engine="ivrit",
                 device=diarize_device
             )
+            
+            # Convert to async generator for consistent processing
+            async def to_async_generator(segments):
+                for segment in segments:
+                    yield segment
+            
+            segs = to_async_generator(diarized_segments)
         else:
             # Use ct2_model for server/RunPod mode
             selected_model = lang_cfg["ct2_model"]
@@ -2736,11 +2743,6 @@ async def transcribe_job(job_desc):
         
         try:
             async for segment in segs:
-                print(segment)
-                # In local mode, assign "speaker 0" to all segments
-                #if in_local_mode:
-                #    if not hasattr(segment, 'speaker') or segment.speaker is None:
-                #        segment.speaker = "speaker 0"
                 await process_segment(job_id, segment, duration)
 
         except Exception as e:
@@ -3010,6 +3012,7 @@ def check_port_available(port: int) -> bool:
     """Check if a port is available for binding."""
     import socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind(("0.0.0.0", port))
         sock.close()

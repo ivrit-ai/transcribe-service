@@ -8,6 +8,7 @@ APP_DIR="$SCRIPT_DIR/transcribe-service"
 MODELS_DIR="$SCRIPT_DIR/models"
 DATA_DIR="$HOME/Library/ivrit.ai/transcribe-service"
 LOG_FILE="$DATA_DIR/app.log"
+LAUNCH_LOG_FILE="$DATA_DIR/launch.log"
 PID_FILE="$DATA_DIR/app.pid"
 
 # Ensure data directory exists
@@ -31,12 +32,13 @@ fi
 echo "Starting transcribe service..."
 source "$VENV_DIR/bin/activate"
 cd "$APP_DIR"
-nohup python app.py --local --data-dir "$DATA_DIR" --models-dir "$MODELS_DIR" > "$LOG_FILE" 2>&1 &
+nohup python app.py --local --data-dir "$DATA_DIR" --models-dir "$MODELS_DIR" > "$LOG_FILE" 2> "$LAUNCH_LOG_FILE" &
 APP_PID=$!
 echo $APP_PID > "$PID_FILE"
 
 echo "Transcribe service started (PID: $APP_PID)"
 echo "Log file: $LOG_FILE"
+echo "Error log file: $LAUNCH_LOG_FILE"
 
 # Wait a moment for the server to start
 echo "Waiting for server to start..."

@@ -84,6 +84,10 @@ VENV_DIR="$INSTALL_DIR/venv"
 MODELS_DIR="$INSTALL_DIR/models"
 DATA_DIR="$HOME/Library/ivrit.ai/transcribe-service"
 MODEL_URL="https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/main/ggml-model.bin"
+INSTALL_LOG="$INSTALL_DIR/install.log"
+
+# Redirect all output to install.log while also showing on terminal
+exec > >(tee -a "$INSTALL_LOG") 2>&1
 
 # Check if installation already exists
 if [ -d "$APP_DIR" ] || [ -d "$UV_DIR" ] || [ -d "$VENV_DIR" ]; then
@@ -368,6 +372,7 @@ echo "Installation directory: $INSTALL_DIR"
 echo "Models directory: $MODELS_DIR"
 echo "Data directory: $DATA_DIR"
 echo "Application: $APP_BUNDLE"
+echo "Installation log: $INSTALL_LOG"
 echo ""
 echo "To start the transcribe service:"
 echo "  - Open ivrit.ai from your Applications folder, or"
