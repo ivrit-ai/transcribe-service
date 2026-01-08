@@ -79,6 +79,7 @@ fi
 # Configuration
 INSTALL_DIR="$(pwd)"
 UV_DIR="$INSTALL_DIR/uv"
+BREW_DIR="$INSTALL_DIR/homebrew"
 APP_DIR="$INSTALL_DIR/transcribe-service"
 VENV_DIR="$INSTALL_DIR/venv"
 MODELS_DIR="$INSTALL_DIR/models"
@@ -90,7 +91,7 @@ INSTALL_LOG="$INSTALL_DIR/install.log"
 exec > >(tee -a "$INSTALL_LOG") 2>&1
 
 # Check if installation already exists
-if [ -d "$APP_DIR" ] || [ -d "$UV_DIR" ] || [ -d "$VENV_DIR" ]; then
+if [ -d "$APP_DIR" ] || [ -d "$UV_DIR" ] || [ -d "$VENV_DIR" ] || [ -d "$BREW_DIR" ]; then
     echo ""
     echo "==================================="
     echo "Existing Installation Detected"
@@ -101,6 +102,7 @@ if [ -d "$APP_DIR" ] || [ -d "$UV_DIR" ] || [ -d "$VENV_DIR" ]; then
     echo ""
     [ -d "$APP_DIR" ] && echo "  - transcribe-service/"
     [ -d "$UV_DIR" ] && echo "  - uv/"
+    [ -d "$BREW_DIR" ] && echo "  - homebrew/"
     [ -d "$VENV_DIR" ] && echo "  - venv/"
     echo ""
     read -p "Do you want to uninstall and reinstall? (y/N): " -n 1 -r
@@ -113,6 +115,7 @@ if [ -d "$APP_DIR" ] || [ -d "$UV_DIR" ] || [ -d "$VENV_DIR" ]; then
     echo "Removing existing installation..."
     [ -d "$APP_DIR" ] && rm -rf "$APP_DIR"
     [ -d "$UV_DIR" ] && rm -rf "$UV_DIR"
+    [ -d "$BREW_DIR" ] && rm -rf "$BREW_DIR"
     [ -d "$VENV_DIR" ] && rm -rf "$VENV_DIR"
     [ -f "$INSTALL_DIR/VERSION" ] && rm -f "$INSTALL_DIR/VERSION"
     echo "✓ Existing installation removed"
@@ -127,7 +130,7 @@ echo "Installing to: $INSTALL_DIR"
 
 # Step 1: Download and install uv
 echo ""
-echo "Step 1/7: Downloading uv..."
+echo "Step 1/9: Downloading uv..."
 mkdir -p "$UV_DIR"
 UV_DOWNLOAD_URL="https://github.com/astral-sh/uv/releases/latest/download/uv-${UV_ARCH}-apple-darwin.tar.gz"
 echo "Downloading from: $UV_DOWNLOAD_URL"
@@ -135,9 +138,24 @@ curl -fsSL "$UV_DOWNLOAD_URL" | tar -xzf - -C "$UV_DIR" --strip-components=1
 chmod +x "$UV_DIR/uv"
 echo "✓ uv installed successfully"
 
-# Step 2: Download transcribe-service release
+# Step 2: Download and install Homebrew locally
 echo ""
-echo "Step 2/7: Downloading transcribe-service..."
+echo "Step 2/9: Installing Homebrew locally..."
+mkdir -p "$BREW_DIR"
+echo "Downloading Homebrew..."
+curl -fsSL https://github.com/Homebrew/brew/tarball/master | tar -xzf - -C "$BREW_DIR" --strip-components=1
+echo "✓ Homebrew installed successfully"
+
+# Step 3: Install ffmpeg and ffprobe via Homebrew
+echo ""
+echo "Step 3/9: Installing ffmpeg and ffprobe..."
+export PATH="$BREW_DIR/bin:$PATH"
+"$BREW_DIR/bin/brew" install ffmpeg
+echo "✓ ffmpeg and ffprobe installed successfully"
+
+# Step 4: Download transcribe-service release
+echo ""
+echo "Step 4/9: Downloading transcribe-service..."
 if [ "$GITHUB_REF" = "latest" ]; then
     # Get the latest release tag
     echo "Fetching latest release..."
@@ -207,27 +225,27 @@ echo "${GITHUB_REPO}/${GITHUB_REF}@${COMMIT_HASH} (${REF_TYPE})" > "$VERSION_FIL
 echo "✓ Version file created: $VERSION_FILE"
 echo "   ${GITHUB_REPO}/${GITHUB_REF}@${COMMIT_HASH} (${REF_TYPE})"
 
-# Step 3: Create virtual environment with Python 3.13
+# Step 5: Create virtual environment with Python 3.13
 echo ""
-echo "Step 3/7: Creating virtual environment with Python 3.13..."
+echo "Step 5/9: Creating virtual environment with Python 3.13..."
 "$UV_DIR/uv" venv "$VENV_DIR" --python 3.13
 echo "✓ Virtual environment created successfully"
 
-# Step 4: Install requirements
+# Step 6: Install requirements
 echo ""
-echo "Step 4/7: Installing requirements..."
+echo "Step 6/9: Installing requirements..."
 "$UV_DIR/uv" pip install --python "$VENV_DIR/bin/python" -r "$APP_DIR/requirements.txt"
 echo "✓ Requirements installed successfully"
 
-# Step 5: Install ivrit[all]
+# Step 7: Install ivrit[all]
 echo ""
-echo "Step 5/7: Installing ivrit[all]..."
+echo "Step 7/9: Installing ivrit[all]..."
 "$UV_DIR/uv" pip install --python "$VENV_DIR/bin/python" "ivrit[all]"
 echo "✓ ivrit[all] installed successfully"
 
-# Step 6: Create data directory and download model
+# Step 8: Create data directory and download model
 echo ""
-echo "Step 6/7: Setting up data directory and downloading model..."
+echo "Step 8/9: Setting up data directory and downloading model..."
 mkdir -p "$DATA_DIR"
 mkdir -p "$MODELS_DIR"
 echo "Data directory: $DATA_DIR"
@@ -249,9 +267,9 @@ else
     echo "✓ Model downloaded successfully"
 fi
 
-# Step 7: Create ivrit.ai.app in Applications folder
+# Step 9: Create ivrit.ai.app in Applications folder
 echo ""
-echo "Step 7/7: Creating ivrit.ai application..."
+echo "Step 9/9: Creating ivrit.ai application..."
 
 APP_BUNDLE="$HOME/Applications/ivrit.ai.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
@@ -299,6 +317,7 @@ set -e
 
 # Installation directory (embedded at install time)
 INSTALL_DIR="$INSTALL_DIR"
+BREW_DIR="\$INSTALL_DIR/homebrew"
 VENV_DIR="\$INSTALL_DIR/venv"
 APP_DIR="\$INSTALL_DIR/transcribe-service"
 MODELS_DIR="\$INSTALL_DIR/models"
@@ -322,6 +341,9 @@ if [ -f "\$PID_FILE" ]; then
         rm -f "\$PID_FILE"
     fi
 fi
+
+# Add Homebrew binaries to PATH for ffmpeg/ffprobe
+export PATH="\$BREW_DIR/bin:\$PATH"
 
 # Activate virtual environment and launch app
 echo "Starting transcribe service..."

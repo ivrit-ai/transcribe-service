@@ -54,7 +54,6 @@ import io
 
 import posthog
 import ffmpeg
-import imageio_ffmpeg
 import base64
 import argparse
 import re
@@ -662,25 +661,15 @@ def is_ffmpeg_supported_mimetype(file_mime):
 
 def get_media_duration(file_path):
     try:
-        # Use ffmpeg directly to get media duration
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        result = subprocess.run(
-            [ffmpeg_exe, "-i", file_path, "-f", "null", "-"],
-            capture_output=True,
-            text=True
-        )
-        # ffmpeg outputs info to stderr
-        output = result.stderr
-        # Parse duration from output (format: Duration: HH:MM:SS.ms)
-        import re
-        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", output)
-        if match:
-            hours, minutes, seconds = match.groups()
-            duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
-            return duration
-        return None
-    except Exception as e:
-        log_message(f"ffmpeg duration error: {str(e)}")
+        probe = ffmpeg.probe(file_path)
+        audio_info = next(s for s in probe["streams"] if s["codec_type"] == "audio")
+        return float(audio_info["duration"])
+    except ffmpeg.Error as e:
+        try:
+            stderr = e.stderr.decode(errors="ignore") if isinstance(e.stderr, (bytes, bytearray)) else str(e.stderr)
+        except Exception:
+            stderr = str(e.stderr)
+        log_message(f"ffmpeg probe error: {stderr}")
         return None
 
 
