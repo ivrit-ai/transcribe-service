@@ -1567,6 +1567,7 @@
       </div>
       
       <!-- Balance/Quota Display (Compact) -->
+      {% if not in_local_mode %}
       <div
         class="balance-container compact-balance"
         id="main-balance-container"
@@ -1581,6 +1582,7 @@
         </div>
         <a href="{{ quota_increase_url }}" target="_blank" rel="noopener" id="quota-info-link" style="display: none;" data-i18n="howToGetMoreQuota">הגדלת מכסה</a>
       </div>
+      {% endif %}
       
       <h1 data-i18n="title">תמלול בעזרת ivrit.ai</h1>
       
@@ -1670,7 +1672,7 @@
       <div class="transcribe-options" style="margin-bottom: 1rem; text-align: right;">
         <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-color);">
           <input type="checkbox" id="save-audio-checkbox" checked style="width: 18px; height: 18px; accent-color: var(--primary-color); cursor: pointer;">
-          <span data-i18n="saveAudioInDrive">שמור אודיו ל-Google Drive</span>
+          <span data-i18n="{% if in_local_mode %}saveAudio{% else %}saveAudioInDrive{% endif %}">{% if in_local_mode %}שמור אודיו{% else %}שמור אודיו ל-Google Drive{% endif %}</span>
         </label>
         <div style="margin-top: 0.5rem; margin-right: 1.75rem; position: relative;">
           <button type="button" id="save-audio-info-btn" class="info-link-btn" data-i18n="whatDoesThisMean">מה זה אומר?</button>
@@ -1976,6 +1978,7 @@
           <button class="close" id="close-settings">&times;</button>
         </div>
         <form id="settings-form">
+          {% if not in_local_mode %}
           <div class="settings-section">
             <h3 data-i18n="settingsRunpod">הגדרות RunPod</h3>
             <div class="form-group">
@@ -1998,6 +2001,7 @@
               >
             </div>
           </div>
+          {% endif %}
 
           
 
@@ -2020,6 +2024,29 @@
 
     <script src="{{ url_for('static', path='i18n.js') }}"></script>
     <script>
+      // Heartbeat interval for local mode auto-shutdown
+      const HEARTBEAT_INTERVAL_MS = 60 * 1000  // 60 seconds
+      let heartbeatInterval = null
+
+      function startHeartbeat() {
+        if (!IN_LOCAL_MODE) return
+        
+        // Send initial heartbeat
+        sendHeartbeat()
+        
+        // Set up periodic heartbeat
+        heartbeatInterval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS)
+      }
+
+      async function sendHeartbeat() {
+        try {
+          await fetch('/client_heartbeat', { method: 'POST' })
+        } catch (e) {
+          // Server might be shutting down, ignore errors
+          console.log('Heartbeat failed:', e.message)
+        }
+      }
+
       // Initialize Lucide icons after DOM is parsed
       document.addEventListener("DOMContentLoaded", () => {
         if (window.lucide && typeof window.lucide.createIcons === "function") {
@@ -2045,6 +2072,8 @@
         initTabs()
         // Initialize save audio info tooltip
         initSaveAudioTooltip()
+        // Start heartbeat for local mode auto-shutdown
+        startHeartbeat()
       })
 
       // Initialize save audio tooltip
@@ -2251,6 +2280,7 @@
       let batchMode = false
       const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024 // 300MB in bytes
       const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024 // 3GB in bytes
+      const IN_LOCAL_MODE = {{ 'true' if in_local_mode else 'false' }}
       let transcriptionSegments = []
       let activeTranscription = false
       let currentJobId = null
@@ -2259,13 +2289,17 @@
 
       // Function to get current max file size based on private key usage
       function getMaxFileSize() {
-        const runpodToken = runpodTokenInput.value.trim()
+        // In local mode, always use regular max file size
+        if (IN_LOCAL_MODE) return MAX_FILE_SIZE_REGULAR
+        const runpodToken = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
         return runpodToken ? MAX_FILE_SIZE_PRIVATE : MAX_FILE_SIZE_REGULAR
       }
 
       // Function to get max file size text for display
       function getMaxFileSizeText() {
-        const runpodToken = runpodTokenInput.value.trim()
+        // In local mode, always use regular max file size text
+        if (IN_LOCAL_MODE) return "300MB"
+        const runpodToken = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
         return runpodToken ? "3GB" : "300MB"
       }
 
@@ -2465,6 +2499,20 @@
           updateTranscriptionDisplay()
         }
 
+        // Block RunPod settings in local mode
+        if (IN_LOCAL_MODE) {
+          dismissSettingsModal(false)
+          showToast(window.I18N.t('settingsSaved'), "success")
+          return
+        }
+        
+        // If RunPod token input doesn't exist, just save display settings and return
+        if (!runpodTokenInput) {
+          dismissSettingsModal(false)
+          showToast(window.I18N.t('settingsSaved'), "success")
+          return
+        }
+
         const token = runpodTokenInput.value.trim()
 
         // If token is empty, just clear the RunPod credentials but keep display settings
@@ -2548,13 +2596,15 @@
 
       // Clear all settings
       function clearAllSettings() {
-        // Clear RunPod settings
-        deleteCookie("runpod_token")
-        if (runpodTokenInput) {
-          runpodTokenInput.value = ""
+        // Clear RunPod settings (only if not in local mode)
+        if (!IN_LOCAL_MODE) {
+          deleteCookie("runpod_token")
+          if (runpodTokenInput) {
+            runpodTokenInput.value = ""
+          }
+          savedRunpodToken = ""
+          runpodTokenDirty = false
         }
-        savedRunpodToken = ""
-        runpodTokenDirty = false
 
         // Clear display settings
         displaySettings = {
@@ -2605,8 +2655,19 @@
 
       // Check for RunPod credentials or fetch user quota
       async function checkBalance() {
-        const token = getCookie("runpod_token")
+        // Block in local mode
+        if (IN_LOCAL_MODE) {
+          console.log("checkBalance blocked: not available in local mode")
+          return
+        }
+        
         const balanceContainer = document.getElementById("main-balance-container")
+        // Return early if balance container doesn't exist
+        if (!balanceContainer) {
+          return
+        }
+        
+        const token = getCookie("runpod_token")
         const balanceLabel = document.getElementById("main-balance-label")
         const balanceAmount = document.getElementById("main-balance-amount")
         const quotaInfoLink = document.getElementById("quota-info-link")
@@ -2678,6 +2739,12 @@
 
       // Check and create endpoint if needed (called automatically when saving settings)
       async function checkAndCreateEndpoint(token) {
+        // Block endpoint checks in local mode
+        if (IN_LOCAL_MODE) {
+          console.error("checkAndCreateEndpoint called in local mode - this should not happen")
+          throw new Error("Endpoint checks are not available in local mode")
+        }
+        
         try {
           const response = await fetch("/check_endpoint", {
             method: "POST",
@@ -3060,8 +3127,8 @@
 
       async function handleDrop(e) {
         const dt = e.dataTransfer
-        // Allow dropping multiple files/folders only with private key
-        const isPrivate = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
+        // Allow dropping multiple files/folders only with private key (not available in local mode)
+        const isPrivate = IN_LOCAL_MODE ? false : ((runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token"))
         if (isPrivate && dt.items && dt.items.length) {
           const files = await extractFilesFromDataTransfer(dt)
           handleFiles(files)
@@ -3128,7 +3195,8 @@
       })
 
       function handleFiles(files) {
-        const isPrivate = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
+        // Batch mode only available with private key (not available in local mode)
+        const isPrivate = IN_LOCAL_MODE ? false : ((runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token"))
         const list = Array.from(files || [])
         if (!list.length) return
 
@@ -3179,7 +3247,8 @@
       }
 
       dropArea.addEventListener("click", () => {
-        const isPrivate = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
+        // Multiple file selection only available with private key (not available in local mode)
+        const isPrivate = IN_LOCAL_MODE ? false : ((runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token"))
         if (isPrivate) {
           fileInput.setAttribute("multiple", "multiple")
         } else {
@@ -3200,7 +3269,8 @@
       async function uploadFile() {
         if (!selectedFile) return
 
-        const token = getCookie("runpod_token")
+        // In local mode, ensure no RunPod token is used
+        const token = IN_LOCAL_MODE ? "" : getCookie("runpod_token")
         let selectedLang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
         try {
           if (languageSelect && languageSelect.value) {
@@ -3278,7 +3348,8 @@
         showProgressUI()
         setProgressStatusText("batchStarting", { count: selectedFiles.length })
 
-        const token = getCookie("runpod_token")
+        // In local mode, ensure no RunPod token is used
+        const token = IN_LOCAL_MODE ? "" : getCookie("runpod_token")
         const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
         const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
         const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
@@ -3464,7 +3535,7 @@
             const startTime = currentGroup[0].start
             const endTime = currentGroup[currentGroup.length - 1].end
 
-            const groupText = displaySettings.diarizationDisplay === "enabled"
+            const groupText = displaySettings.diarizationDisplay !== "disabled"
               ? joinSegmentsWithSpeakerChanges(currentGroup, separator, "<br>", true)
               : currentGroup.map((seg) => seg.text.trim()).join(separator)
 
@@ -3607,7 +3678,7 @@
             const startTime = currentGroup[0].start
             const endTime = currentGroup[currentGroup.length - 1].end
 
-            const groupText = displaySettings.diarizationDisplay === "enabled"
+            const groupText = displaySettings.diarizationDisplay !== "disabled"
               ? joinSegmentsWithSpeakerChanges(currentGroup, separator, "\n", false)
               : currentGroup.map((seg) => seg.text.trim()).join(separator)
 
@@ -3694,7 +3765,7 @@
         
         const result = []
         let currentSpeaker = null
-        const diarizationEnabled = displaySettings.diarizationDisplay === "enabled"
+        const diarizationEnabled = displaySettings.diarizationDisplay !== "disabled"
         
         for (let i = 0; i < segments.length; i++) {
           const segment = segments[i]
@@ -4738,7 +4809,7 @@
             const endTime = currentGroup[currentGroup.length - 1].end
 
             let groupText
-            if (displaySettings.diarizationDisplay === "enabled") {
+            if (displaySettings.diarizationDisplay !== "disabled") {
               groupText = joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "<br>", true)
             } else {
               // Wrap each segment with timing data
@@ -4770,7 +4841,7 @@
         
         const result = []
         let currentSpeaker = null
-        const diarizationEnabled = displaySettings.diarizationDisplay === "enabled"
+        const diarizationEnabled = displaySettings.diarizationDisplay !== "disabled"
         
         for (let i = 0; i < segments.length; i++) {
           const segment = segments[i]
@@ -4875,7 +4946,7 @@
       })
 
       document.getElementById('viewer-diarization-toggle').addEventListener('click', () => {
-        displaySettings.diarizationDisplay = displaySettings.diarizationDisplay === 'enabled' ? 'disabled' : 'enabled'
+        displaySettings.diarizationDisplay = displaySettings.diarizationDisplay !== 'disabled' ? 'disabled' : 'enabled'
         localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
         updateViewerDiarizationToggleUI()
         updateViewerTranscriptionDisplay()
@@ -4917,7 +4988,7 @@
 
       function updateViewerDiarizationToggleUI() {
         const btn = document.getElementById('viewer-diarization-toggle')
-        const enabled = displaySettings.diarizationDisplay === "enabled"
+        const enabled = displaySettings.diarizationDisplay !== "disabled"
         btn.classList.toggle('toggle-active', enabled)
         btn.title = enabled ? (window.I18N ? window.I18N.t('diarizationEnabled') : 'הצג דוברים') : (window.I18N ? window.I18N.t('diarizationDisabled') : 'הסתר דוברים')
       }
@@ -4966,7 +5037,7 @@
             const startTime = currentGroup[0].start
             const endTime = currentGroup[currentGroup.length - 1].end
 
-            const groupText = displaySettings.diarizationDisplay === "enabled"
+            const groupText = displaySettings.diarizationDisplay !== "disabled"
               ? joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "\n", false)
               : currentGroup.map((seg) => seg.text.trim()).join(separator)
 

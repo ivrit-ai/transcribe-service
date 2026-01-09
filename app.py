@@ -54,7 +54,9 @@ import io
 
 import posthog
 import ffmpeg
+import imageio_ffmpeg
 import base64
+import subprocess
 import argparse
 import re
 import ivrit
@@ -90,6 +92,8 @@ parser.add_argument('--dev-user-email', help='User email for development mode')
 parser.add_argument('--dev-https', action='store_true', help='Enable HTTPS in development mode with self-signed certificates')
 parser.add_argument('--dev-cert-folder', help='Path to folder containing self-signed certificate files (cert.pem and key.pem)')
 parser.add_argument('--local', action='store_true', help='Enable local mode')
+parser.add_argument('--data-dir', dest='data_dir', default=None, help='Directory for storing data files (local storage, etc.)')
+parser.add_argument('--models-dir', dest='models_dir', default=None, help='Directory containing model files for local mode')
 parser.add_argument('--config', dest='config_path', default='config.json', help='Path to configuration JSON defining languages and models (default: config.json)')
 args, unknown = parser.parse_known_args()
 
@@ -110,7 +114,9 @@ if not in_local_mode:
 
 # Initialize file storage backend based on mode
 if in_local_mode:
-    file_storage_backend: FileStorageBackend = LocalFileStorageBackend()
+    # Use custom data directory if provided, otherwise use default
+    local_data_dir = args.data_dir if args.data_dir else "local_data"
+    file_storage_backend: FileStorageBackend = LocalFileStorageBackend(base_dir=local_data_dir)
 else:
     file_storage_backend: FileStorageBackend = GoogleDriveStorageBackend()
 
@@ -130,8 +136,13 @@ if "languages" not in APP_CONFIG or not isinstance(APP_CONFIG["languages"], dict
 for lang_key, lang_cfg in APP_CONFIG["languages"].items():
     if not isinstance(lang_cfg, dict):
         raise RuntimeError(f"Invalid configuration for language '{lang_key}': must be an object")
-    if "model" not in lang_cfg or not isinstance(lang_cfg["model"], str) or not lang_cfg["model"].strip():
-        raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'model'")
+    
+    # Require both ct2_model and ggml_model fields
+    if "ct2_model" not in lang_cfg or not isinstance(lang_cfg["ct2_model"], str) or not lang_cfg["ct2_model"].strip():
+        raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'ct2_model'")
+    if "ggml_model" not in lang_cfg or not isinstance(lang_cfg["ggml_model"], str) or not lang_cfg["ggml_model"].strip():
+        raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'ggml_model'")
+    
     if "general_availability" not in lang_cfg or not isinstance(lang_cfg["general_availability"], bool):
         raise RuntimeError(f"Invalid configuration for language '{lang_key}': missing or invalid 'general_availability' (bool)")
     if "enabled" not in lang_cfg or not isinstance(lang_cfg["enabled"], bool):
@@ -148,14 +159,21 @@ QUOTA_INCREASE_URL = APP_CONFIG["quota_increase_url"]
 LOG_FORMAT = "[%(asctime)s] %(message)s"
 LOGGER_NAME = "transcribe_service"
 
-# Ensure log file is created in the same directory as this script (not in bundle)
-# For PyInstaller, use the script directory, not the bundle directory
-if getattr(sys, 'frozen', False):
-    # Running in PyInstaller bundle - use script directory for logs
-    script_dir = Path(sys.executable).parent
+# Determine log directory (use data directory in local mode, otherwise script directory)
+if args.local and args.data_dir:
+    # In local mode with data directory specified, write logs there
+    log_dir = Path(args.data_dir)
+    # Create log directory if it doesn't exist
+    log_dir.mkdir(parents=True, exist_ok=True)
 else:
-    script_dir = Path(__file__).parent.absolute()
-LOG_FILE_PATH = str(script_dir / "app.log")
+    # Otherwise use script directory
+    if getattr(sys, 'frozen', False):
+        # Running in PyInstaller bundle - use script directory for logs
+        log_dir = Path(sys.executable).parent
+    else:
+        log_dir = Path(__file__).parent.absolute()
+
+LOG_FILE_PATH = str(log_dir / "app.log")
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
@@ -386,7 +404,14 @@ MAX_QUEUED_JOBS = 20
 MAX_QUEUED_PRIVATE_JOBS = 5000
 SHORT_JOB_THRESHOLD = 20 * 60
 
-SPEEDUP_FACTOR = 15
+# Set speedup factor based on mode and platform
+if in_local_mode and sys.platform == "darwin":
+    SPEEDUP_FACTOR = 8  # macOS local mode
+else:
+    SPEEDUP_FACTOR = 15  # Remote/cloud mode or non-macOS
+
+log_message(f"Using SPEEDUP_FACTOR={SPEEDUP_FACTOR} (local_mode={in_local_mode}, platform={sys.platform})")
+
 TRANSCODING_SPEEDUP = 100  # Transcoding speedup factor for ETA calculation
 SUBMISSION_DELAY = 15  # Additional delay in seconds added to ETA calculations
 MAX_AUDIO_DURATION_IN_HOURS = 20
@@ -496,6 +521,13 @@ stats_minutes_transcribed = {SHORT: 0.0, LONG: 0.0, PRIVATE: 0.0}
 stats_total_jobs_started = 0
 stats_total_minutes_processed = 0.0
 stats_app_start_time = time.time()
+
+# Heartbeat tracking for local mode auto-shutdown
+HEARTBEAT_INTERVAL_SECONDS = 60  # Client sends heartbeat every 60 seconds
+HEARTBEAT_MISSED_THRESHOLD = 3  # Number of consecutive missed heartbeats before shutdown
+missed_heartbeat_count = 0  # Counter for consecutive missed heartbeats
+heartbeat_received_this_period = False  # Flag to track if heartbeat received in current period
+last_heartbeat_check_time = None  # Last time we checked for heartbeat
 
 # Google Drive error tracking
 stats_gdrive_errors = {
@@ -645,11 +677,24 @@ def is_ffmpeg_supported_mimetype(file_mime):
 
 def get_media_duration(file_path):
     try:
-        probe = ffmpeg.probe(file_path)
-        audio_info = next(s for s in probe["streams"] if s["codec_type"] == "audio")
-        return float(audio_info["duration"])
-    except ffmpeg.Error as e:
-        print(f"Error: {e.stderr}")
+        # Use ffmpeg directly to get media duration
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        result = subprocess.run(
+            [ffmpeg_exe, "-i", file_path, "-f", "null", "-"],
+            capture_output=True,
+            text=True
+        )
+        # ffmpeg outputs info to stderr
+        output = result.stderr
+        # Parse duration from output (format: Duration: HH:MM:SS.ms)
+        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", output)
+        if match:
+            hours, minutes, seconds = match.groups()
+            duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+            return duration
+        return None
+    except Exception as e:
+        log_message(f"ffmpeg duration error: {str(e)}")
         return None
 
 
@@ -663,8 +708,9 @@ async def transcode_to_opus(
     """
     Transcode audio file to Opus format with progress reporting.
     """
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [
-        'ffmpeg',
+        ffmpeg_exe,
         '-hide_banner',
         '-loglevel', 'error',
         '-nostats',
@@ -910,7 +956,8 @@ async def index(request: Request):
         session_id = set_user_email(request, user_email)
         response = templates.TemplateResponse("index.html", {
             "request": request,
-            "quota_increase_url": QUOTA_INCREASE_URL
+            "quota_increase_url": QUOTA_INCREASE_URL,
+            "in_local_mode": in_local_mode
         })
         response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not (in_dev or in_local_mode))
         response.headers["ETag"] = f'"{backend_version}"'
@@ -929,7 +976,8 @@ async def index(request: Request):
     
     response = templates.TemplateResponse("index.html", {
         "request": request,
-        "quota_increase_url": QUOTA_INCREASE_URL
+        "quota_increase_url": QUOTA_INCREASE_URL,
+        "in_local_mode": in_local_mode
     })
     response.headers["ETag"] = f'"{backend_version}"'
     response.headers["Cache-Control"] = "no-cache, must-revalidate"
@@ -1401,6 +1449,8 @@ async def authorize(request: Request):
 
 async def get_max_serverless_concurrency(api_key: str) -> Optional[int]:
     """Get maximum serverless concurrency from RunPod"""
+    if in_local_mode:
+        raise RuntimeError("RunPod endpoint functions are not available in local mode")
     GRAPHQL_URL = "https://api.runpod.io/graphql"
     GRAPHQL_HEADERS = {
         "Content-Type": "application/json",
@@ -1440,6 +1490,8 @@ async def get_max_serverless_concurrency(api_key: str) -> Optional[int]:
 
 async def get_current_worker_usage(api_key: str) -> Optional[int]:
     """Get current worker usage by summing workersMax from all endpoints"""
+    if in_local_mode:
+        raise RuntimeError("RunPod endpoint functions are not available in local mode")
     GRAPHQL_URL = "https://api.runpod.io/graphql"
     GRAPHQL_HEADERS = {
         "Content-Type": "application/json",
@@ -1496,6 +1548,8 @@ async def get_current_worker_usage(api_key: str) -> Optional[int]:
 
 async def check_runpod_balance(api_key: str) -> Optional[dict]:
     """Check RunPod balance using GraphQL API"""
+    if in_local_mode:
+        raise RuntimeError("RunPod endpoint functions are not available in local mode")
     GRAPHQL_URL = "https://api.runpod.io/graphql"
     GRAPHQL_HEADERS = {
         "Content-Type": "application/json",
@@ -1540,6 +1594,8 @@ async def check_runpod_balance(api_key: str) -> Optional[dict]:
 
 async def find_runpod_endpoint(api_key: str) -> Optional[dict]:
     """Find autogenerated endpoint with full details including template ID using GraphQL API"""
+    if in_local_mode:
+        raise RuntimeError("RunPod endpoint functions are not available in local mode")
     GRAPHQL_URL = "https://api.runpod.io/graphql"
     GRAPHQL_HEADERS = {
         "Content-Type": "application/json",
@@ -1608,6 +1664,8 @@ async def find_runpod_endpoint(api_key: str) -> Optional[dict]:
 
 async def delete_runpod_endpoint(api_key: str, endpoint_id: str) -> bool:
     """Delete an endpoint using REST API"""
+    if in_local_mode:
+        raise RuntimeError("RunPod endpoint functions are not available in local mode")
     REST_URL = "https://rest.runpod.io/v1"
     REST_HEADERS = {
         "Content-Type": "application/json",
@@ -1632,6 +1690,8 @@ async def delete_runpod_endpoint(api_key: str, endpoint_id: str) -> bool:
 
 async def create_runpod_endpoint(api_key: str, template_id: str) -> Optional[dict]:
     """Create a new autogenerated endpoint using REST API with dynamic worker limits"""
+    if in_local_mode:
+        raise RuntimeError("RunPod endpoint functions are not available in local mode")
     REST_URL = "https://rest.runpod.io/v1"
     REST_HEADERS = {
         "Content-Type": "application/json",
@@ -1716,6 +1776,10 @@ async def create_runpod_endpoint(api_key: str, template_id: str) -> Optional[dic
 @app.get("/balance", dependencies=[Depends(require_google_login)])
 async def get_balance(request: Request, runpod_token: str = None):
     """Get RunPod balance for the provided credentials"""
+    # Block RunPod balance checks in local mode
+    if in_local_mode:
+        raise HTTPException(status_code=400, detail="RunPod balance check not available in local mode")
+    
     if not runpod_token:
         return JSONResponse({"error": "errorMissingRunpodToken", "i18n_key": "errorMissingRunpodToken"}, status_code=400)
     
@@ -1740,6 +1804,21 @@ async def get_quota(request: Request):
         "remainingMinutes": remaining_minutes,
         "maxMinutesPerWeek": MAX_MINUTES_PER_WEEK
     })
+
+
+@app.post("/client_heartbeat")
+async def client_heartbeat():
+    """Receive heartbeat from client to prevent auto-shutdown in local mode."""
+    global missed_heartbeat_count, heartbeat_received_this_period
+    
+    if not in_local_mode:
+        return JSONResponse({"error": "Heartbeat only available in local mode"}, status_code=400)
+    
+    # Reset missed count and mark heartbeat as received
+    missed_heartbeat_count = 0
+    heartbeat_received_this_period = True
+    
+    return JSONResponse({"status": "ok"})
 
 @app.get("/stats", dependencies=[Depends(require_google_login)])
 async def get_stats(request: Request):
@@ -1860,6 +1939,8 @@ async def check_runpod_endpoint(runpod_token: str) -> dict:
     Check for autogenerated endpoint, validate template ID, and recreate if needed.
     Returns a dictionary with action, endpoint info, and whether a wait is needed.
     """
+    if in_local_mode:
+        raise RuntimeError("RunPod endpoint functions are not available in local mode")
     try:
         # Get the required template ID from environment
         required_template_id = os.environ.get("RUNPOD_TEMPLATE_ID")
@@ -1933,6 +2014,10 @@ async def check_runpod_endpoint(runpod_token: str) -> dict:
 @app.post("/check_endpoint", dependencies=[Depends(require_google_login)])
 async def check_endpoint(request: Request):
     """Check for autogenerated endpoint, validate template ID, and recreate if needed"""
+    # Block RunPod endpoint checks in local mode
+    if in_local_mode:
+        raise HTTPException(status_code=400, detail="RunPod endpoint check not available in local mode")
+    
     try:
         body = await request.json()
         runpod_token = body.get("runpod_token")
@@ -2450,7 +2535,12 @@ async def validate_upload_request_metadata(
 
     save_audio_bool = str(save_audio).lower() == "true"
 
-    if normalized_runpod_token:
+    # Block RunPod tokens in local mode
+    if in_local_mode and normalized_runpod_token:
+        return None, JSONResponse({"error": "errorRunpodNotAvailableInLocalMode", "i18n_key": "errorRunpodNotAvailableInLocalMode"}, status_code=400)
+
+    # Check RunPod endpoint if token provided (only in non-local mode)
+    if not in_local_mode and normalized_runpod_token:
         endpoint_result = await check_runpod_endpoint(normalized_runpod_token)
         if not endpoint_result["success"]:
             return None, JSONResponse({
@@ -2597,14 +2687,50 @@ async def transcribe_job(job_desc):
 
         # Resolve model by language from config
         lang_cfg = APP_CONFIG["languages"][job_desc.language]
-        selected_model = lang_cfg["model"]
         
-        # Use whisper.cpp engine in local mode, runpod otherwise
+        # Select appropriate model based on mode (local vs server)
         if in_local_mode:
+            # Use ggml_model for local mode
+            selected_model = lang_cfg["ggml_model"]
+            
+            # If model is a relative path, resolve it against models_dir
+            if args.models_dir and not os.path.isabs(selected_model):
+                selected_model = os.path.join(args.models_dir, selected_model)
+            
+            log_message(f"{job_desc.user_email}: using local model: {selected_model}")
             m = ivrit.load_model(engine='whisper-cpp', model=selected_model)
-            # In local mode, always use local file path and disable diarization
+            # In local mode, transcribe first without diarization
             segs = m.transcribe_async(path=temp_file_path, diarize=False)
+            
+            # Collect all segments for diarization
+            all_segments = []
+            async for segment in segs:
+                all_segments.append(segment)
+            
+            # Perform diarization separately after transcription
+            from ivrit.diarization import diarize as diarize_func
+            import torch
+            diarize_device = "cuda" if torch.cuda.is_available() else "cpu"
+            diarized_segments = diarize_func(
+                audio=temp_file_path,
+                transcription_segments=all_segments,
+                verbose=True,
+                engine="ivrit",
+                device=diarize_device
+            )
+            
+            # Convert to async generator for consistent processing
+            async def to_async_generator(segments):
+                for segment in segments:
+                    yield segment
+            
+            segs = to_async_generator(diarized_segments)
         else:
+            # Use ct2_model for server/RunPod mode
+            selected_model = lang_cfg["ct2_model"]
+            
+            log_message(f"{job_desc.user_email}: using server model: {selected_model}")
+            
             # Load model using ivrit package
             # Pass custom RunPod credentials if provided
             if job_desc.uses_custom_runpod:
@@ -2635,10 +2761,6 @@ async def transcribe_job(job_desc):
         
         try:
             async for segment in segs:
-                # In local mode, assign "speaker 0" to all segments
-                if in_local_mode:
-                    if not hasattr(segment, 'speaker') or segment.speaker is None:
-                        segment.speaker = "speaker 0"
                 await process_segment(job_id, segment, duration)
 
         except Exception as e:
@@ -2848,6 +2970,44 @@ async def cleanup_old_results():
 
 
 
+async def check_heartbeat_timeout():
+    """Check if heartbeat has timed out in local mode and shutdown if needed."""
+    global missed_heartbeat_count, heartbeat_received_this_period, last_heartbeat_check_time
+    
+    if not in_local_mode:
+        return
+    
+    current_time = time.time()
+    
+    # Initialize last check time on first call
+    if last_heartbeat_check_time is None:
+        last_heartbeat_check_time = current_time
+        return
+    
+    # Only check once per interval
+    if current_time - last_heartbeat_check_time < HEARTBEAT_INTERVAL_SECONDS:
+        return
+    
+    last_heartbeat_check_time = current_time
+    
+    # Check if heartbeat was received during this period
+    if heartbeat_received_this_period:
+        # Heartbeat received, reset counter
+        missed_heartbeat_count = 0
+        heartbeat_received_this_period = False
+    else:
+        # No heartbeat received, increment missed count
+        missed_heartbeat_count += 1
+        log_message(f"Heartbeat missed ({missed_heartbeat_count}/{HEARTBEAT_MISSED_THRESHOLD})")
+    
+    if missed_heartbeat_count >= HEARTBEAT_MISSED_THRESHOLD:
+        log_message(f"Auto-shutdown: {missed_heartbeat_count} consecutive heartbeats missed (threshold: {HEARTBEAT_MISSED_THRESHOLD})")
+        log_message("Shutting down server due to client inactivity...")
+        # Give a moment for the log to be written
+        await asyncio.sleep(0.5)
+        os._exit(0)
+
+
 async def event_loop():
     while True:
         await submit_next_transcoding_task()
@@ -2855,6 +3015,7 @@ async def event_loop():
         await submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG], LONG)
         await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
         await cleanup_old_results()
+        await check_heartbeat_timeout()
         await asyncio.sleep(0.1)
 
 
@@ -2865,8 +3026,30 @@ queue_locks = {
     PRIVATE: None
 }
 
+def check_port_available(port: int) -> bool:
+    """Check if a port is available for binding."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("0.0.0.0", port))
+        sock.close()
+        return True
+    except OSError:
+        return False
+
+
 if __name__ == "__main__":
     port = 4600 if in_dev else 4500
+
+    # Check if port is available before starting
+    if not check_port_available(port):
+        logger.error(f"Port {port} is already in use. Another instance of the server may be running.")
+        logger.error("Please close the other instance or use a different port.")
+        print(f"\n*** ERROR: Port {port} is already in use. ***")
+        print("Another instance of the transcription server may be running.")
+        print("Please close it before starting a new one.\n")
+        sys.exit(1)
 
     # Configure SSL if dev-https is enabled
     ssl_kwargs = {}
