@@ -122,9 +122,7 @@ New-Item -ItemType Directory -Force -Path $uvDir | Out-Null
 $uvDownloadUrl = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
 Write-Host "Downloading from: $uvDownloadUrl"
 $uvZip = Join-Path $uvDir "uv.zip"
-$wc = New-Object System.Net.WebClient
-$wc.DownloadFile($uvDownloadUrl, $uvZip)
-$wc.Dispose()
+Start-BitsTransfer -Source $uvDownloadUrl -Destination $uvZip -Description "Downloading uv"
 Expand-Archive -Path $uvZip -DestinationPath $uvDir -Force
 Remove-Item $uvZip
 Write-Host "✓ uv installed successfully" -ForegroundColor Green
@@ -160,9 +158,7 @@ New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 
 # Download tarball
 $tarballPath = Join-Path $installDir "temp.tar.gz"
-$wc = New-Object System.Net.WebClient
-$wc.DownloadFile($releaseUrl, $tarballPath)
-$wc.Dispose()
+Start-BitsTransfer -Source $releaseUrl -Destination $tarballPath -Description "Downloading transcribe-service"
 
 # Extract tarball (requires tar.exe which is available in Windows 10+ by default)
 tar -xzf $tarballPath -C $appDir --strip-components=1
@@ -262,18 +258,14 @@ if (Test-Path $modelFile) {
     $reply = Read-Host "Do you want to re-download it? (y/N)"
     if ($reply -match '^[Yy]$') {
         Write-Host "Downloading model (this may take a while)..."
-        $wc = New-Object System.Net.WebClient
-        $wc.DownloadFile($modelUrl, $modelFile)
-        $wc.Dispose()
+        Start-BitsTransfer -Source $modelUrl -Destination $modelFile -Description "Downloading model" -DisplayName "ivrit-ggml-model.bin"
         Write-Host "✓ Model downloaded successfully" -ForegroundColor Green
     } else {
         Write-Host "Skipping model download"
     }
 } else {
     Write-Host "Downloading model (this may take a while)..."
-    $wc = New-Object System.Net.WebClient
-    $wc.DownloadFile($modelUrl, $modelFile)
-    $wc.Dispose()
+    Start-BitsTransfer -Source $modelUrl -Destination $modelFile -Description "Downloading model" -DisplayName "ivrit-ggml-model.bin"
     Write-Host "✓ Model downloaded successfully" -ForegroundColor Green
 }
 
