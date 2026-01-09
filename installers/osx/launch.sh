@@ -44,9 +44,29 @@ echo "Transcribe service started (PID: $APP_PID)"
 echo "Log file: $LOG_FILE"
 echo "Error log file: $LAUNCH_LOG_FILE"
 
-# Wait a moment for the server to start
+# Wait for server to start (poll for up to 20 seconds)
 echo "Waiting for server to start..."
-sleep 8
+MAX_WAIT=20
+ELAPSED=0
+SERVER_UP=false
+
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:4500 > /dev/null 2>&1; then
+        SERVER_UP=true
+        break
+    fi
+    sleep 1
+    ELAPSED=$((ELAPSED + 1))
+done
+
+if [ "$SERVER_UP" = false ]; then
+    echo "ERROR: Server failed to start after $MAX_WAIT seconds"
+    echo "Check the error log for details: $LAUNCH_LOG_FILE"
+    echo "Server process (PID: $APP_PID) may still be running"
+    exit 1
+fi
+
+echo "Server is up after $ELAPSED seconds"
 
 # Launch browser
 echo "Opening browser..."
