@@ -115,6 +115,50 @@ if ($existingDirs.Count -gt 0) {
 # Installation directory
 Write-Host "Installing to: $installDir"
 
+# Function to download file with throttled progress updates
+function Download-FileWithProgress {
+    param(
+        [string]$Url,
+        [string]$OutputPath
+    )
+    
+    $webClient = New-Object System.Net.WebClient
+    $lastUpdate = [DateTime]::MinValue
+    $updateInterval = [TimeSpan]::FromSeconds(1)  # Update every 1 second
+    
+    # Register progress event with throttling
+    $progressHandler = Register-ObjectEvent -InputObject $webClient -EventName DownloadProgressChanged -Action {
+        $now = [DateTime]::Now
+        if (($now - $script:lastUpdate) -ge $script:updateInterval) {
+            $script:lastUpdate = $now
+            $percent = $EventArgs.ProgressPercentage
+            $received = [Math]::Round($EventArgs.BytesReceived / 1MB, 2)
+            $total = [Math]::Round($EventArgs.TotalBytesToReceive / 1MB, 2)
+            Write-Host "`rDownloading: $percent% ($received MB / $total MB)" -NoNewline
+        }
+    }
+    
+    # Register completion event
+    $completeHandler = Register-ObjectEvent -InputObject $webClient -EventName DownloadFileCompleted -Action {
+        Write-Host ""  # New line after progress
+    }
+    
+    try {
+        $webClient.DownloadFileAsync($Url, $OutputPath)
+        
+        # Wait for download to complete
+        while ($webClient.IsBusy) {
+            Start-Sleep -Milliseconds 100
+        }
+    } finally {
+        Unregister-Event -SourceIdentifier $progressHandler.Name -ErrorAction SilentlyContinue
+        Unregister-Event -SourceIdentifier $completeHandler.Name -ErrorAction SilentlyContinue
+        Remove-Job -Job $progressHandler -ErrorAction SilentlyContinue
+        Remove-Job -Job $completeHandler -ErrorAction SilentlyContinue
+        $webClient.Dispose()
+    }
+}
+
 # Step 1: Download and install uv
 Write-Host ""
 Write-Host "Step 1/8: Downloading uv..." -ForegroundColor Cyan
@@ -122,7 +166,7 @@ New-Item -ItemType Directory -Force -Path $uvDir | Out-Null
 $uvDownloadUrl = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
 Write-Host "Downloading from: $uvDownloadUrl"
 $uvZip = Join-Path $uvDir "uv.zip"
-Invoke-WebRequest -Uri $uvDownloadUrl -OutFile $uvZip
+Download-FileWithProgress -Url $uvDownloadUrl -OutputPath $uvZip
 Expand-Archive -Path $uvZip -DestinationPath $uvDir -Force
 Remove-Item $uvZip
 Write-Host "✓ uv installed successfully" -ForegroundColor Green
@@ -158,7 +202,11 @@ New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 
 # Download tarball
 $tarballPath = Join-Path $installDir "temp.tar.gz"
+# Disable progress bar for faster downloads
+$prevProgressPreference = $ProgressPreference
+$ProgressPreference = 'SilentlyContinue'
 Invoke-WebRequest -Uri $releaseUrl -OutFile $tarballPath
+$ProgressPreference = $prevProgressPreference
 
 # Extract tarball (requires tar.exe which is available in Windows 10+ by default)
 tar -xzf $tarballPath -C $appDir --strip-components=1
@@ -258,14 +306,14 @@ if (Test-Path $modelFile) {
     $reply = Read-Host "Do you want to re-download it? (y/N)"
     if ($reply -match '^[Yy]$') {
         Write-Host "Downloading model (this may take a while)..."
-        Invoke-WebRequest -Uri $modelUrl -OutFile $modelFile
+        Download-FileWithProgress -Url $modelUrl -OutputPath $modelFile
         Write-Host "✓ Model downloaded successfully" -ForegroundColor Green
     } else {
         Write-Host "Skipping model download"
     }
 } else {
     Write-Host "Downloading model (this may take a while)..."
-    Invoke-WebRequest -Uri $modelUrl -OutFile $modelFile
+    Download-FileWithProgress -Url $modelUrl -OutputPath $modelFile
     Write-Host "✓ Model downloaded successfully" -ForegroundColor Green
 }
 
