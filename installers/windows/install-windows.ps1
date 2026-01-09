@@ -158,7 +158,11 @@ New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 
 # Download tarball
 $tarballPath = Join-Path $installDir "temp.tar.gz"
-Start-BitsTransfer -Source $releaseUrl -Destination $tarballPath -Description "Downloading transcribe-service"
+# Use Invoke-WebRequest for GitHub API URLs (handles redirects properly)
+$prevProgressPreference = $ProgressPreference
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest -Uri $releaseUrl -OutFile $tarballPath
+$ProgressPreference = $prevProgressPreference
 
 # Extract tarball (requires tar.exe which is available in Windows 10+ by default)
 tar -xzf $tarballPath -C $appDir --strip-components=1
