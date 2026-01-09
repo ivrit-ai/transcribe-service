@@ -61,7 +61,7 @@ if (-not $arch) {
 }
 
 # Configuration
-$installDir = Get-Location
+$installDir = (Get-Location).Path
 $uvDir = Join-Path $installDir "uv"
 $binDir = Join-Path $installDir "bin"
 $appDir = Join-Path $installDir "transcribe-service"
