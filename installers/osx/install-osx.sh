@@ -313,63 +313,15 @@ cat > "$APP_CONTENTS/Info.plist" << 'PLIST_EOF'
 </plist>
 PLIST_EOF
 
-# Create the launcher script inside the app bundle
-cat > "$APP_MACOS/ivrit.ai" << LAUNCHER_EOF
-#!/bin/bash
-set -e
+# Create the launcher script inside the app bundle by copying and patching launch.sh
+cp "$APP_DIR/installers/osx/launch.sh" "$APP_MACOS/ivrit.ai"
 
-# Installation directory (embedded at install time)
-INSTALL_DIR="$INSTALL_DIR"
-BIN_DIR="\$INSTALL_DIR/bin"
-VENV_DIR="\$INSTALL_DIR/venv"
-APP_DIR="\$INSTALL_DIR/transcribe-service"
-MODELS_DIR="\$INSTALL_DIR/models"
-DATA_DIR="$DATA_DIR"
-LOG_FILE="\$DATA_DIR/app.log"
-PID_FILE="\$DATA_DIR/app.pid"
+# Patch the launcher script to use absolute paths
+# Replace SCRIPT_DIR line with absolute INSTALL_DIR
+sed -i '' "s|SCRIPT_DIR=\"\$(cd \"\$(dirname \"\${BASH_SOURCE\[0\]}\")\" \&\& pwd)\"|SCRIPT_DIR=\"$INSTALL_DIR\"|g" "$APP_MACOS/ivrit.ai"
 
-# Ensure data directory exists
-mkdir -p "\$DATA_DIR"
-
-# Check if already running
-if [ -f "\$PID_FILE" ]; then
-    OLD_PID=\$(cat "\$PID_FILE")
-    if ps -p "\$OLD_PID" > /dev/null 2>&1; then
-        echo "Transcribe service is already running (PID: \$OLD_PID)"
-        echo "Opening browser..."
-        sleep 1
-        open "http://localhost:4500"
-        exit 0
-    else
-        rm -f "\$PID_FILE"
-    fi
-fi
-
-# Add bin directory to PATH for ffmpeg
-export PATH="\$BIN_DIR:\$PATH"
-
-# Activate virtual environment and launch app
-echo "Starting transcribe service..."
-source "\$VENV_DIR/bin/activate"
-cd "\$APP_DIR"
-nohup python app.py --local --data-dir "\$DATA_DIR" --models-dir "\$MODELS_DIR" > "\$LOG_FILE" 2>&1 &
-APP_PID=\$!
-echo \$APP_PID > "\$PID_FILE"
-
-echo "Transcribe service started (PID: \$APP_PID)"
-echo "Log file: \$LOG_FILE"
-
-# Wait a moment for the server to start
-echo "Waiting for server to start..."
-sleep 3
-
-# Launch browser
-echo "Opening browser..."
-open "http://localhost:4500"
-
-echo "Done! The service is running in the background."
-echo "To stop the service, run: kill \$APP_PID"
-LAUNCHER_EOF
+# Replace DATA_DIR to use absolute path
+sed -i '' "s|\$HOME/Library/ivrit.ai/transcribe-service|$DATA_DIR|g" "$APP_MACOS/ivrit.ai"
 
 chmod +x "$APP_MACOS/ivrit.ai"
 
