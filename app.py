@@ -115,7 +115,7 @@ if not in_local_mode:
 # Initialize file storage backend based on mode
 if in_local_mode:
     # Use custom data directory if provided, otherwise use default
-    local_data_dir = args.data_dir if args.data_dir else os.environ.get("LOCAL_DATA_DIR", "local_data")
+    local_data_dir = args.data_dir if args.data_dir else "local_data"
     file_storage_backend: FileStorageBackend = LocalFileStorageBackend(base_dir=local_data_dir)
 else:
     file_storage_backend: FileStorageBackend = GoogleDriveStorageBackend()
@@ -159,14 +159,21 @@ QUOTA_INCREASE_URL = APP_CONFIG["quota_increase_url"]
 LOG_FORMAT = "[%(asctime)s] %(message)s"
 LOGGER_NAME = "transcribe_service"
 
-# Ensure log file is created in the same directory as this script (not in bundle)
-# For PyInstaller, use the script directory, not the bundle directory
-if getattr(sys, 'frozen', False):
-    # Running in PyInstaller bundle - use script directory for logs
-    script_dir = Path(sys.executable).parent
+# Determine log directory (use data directory in local mode, otherwise script directory)
+if args.local and args.data_dir:
+    # In local mode with data directory specified, write logs there
+    log_dir = Path(args.data_dir)
+    # Create log directory if it doesn't exist
+    log_dir.mkdir(parents=True, exist_ok=True)
 else:
-    script_dir = Path(__file__).parent.absolute()
-LOG_FILE_PATH = str(script_dir / "app.log")
+    # Otherwise use script directory
+    if getattr(sys, 'frozen', False):
+        # Running in PyInstaller bundle - use script directory for logs
+        log_dir = Path(sys.executable).parent
+    else:
+        log_dir = Path(__file__).parent.absolute()
+
+LOG_FILE_PATH = str(log_dir / "app.log")
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
