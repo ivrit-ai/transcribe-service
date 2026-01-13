@@ -2289,16 +2289,16 @@
 
       // Function to get current max file size based on private key usage
       function getMaxFileSize() {
-        // In local mode, always use regular max file size
-        if (IN_LOCAL_MODE) return MAX_FILE_SIZE_REGULAR
+        // In local mode, no file size limit
+        if (IN_LOCAL_MODE) return Infinity
         const runpodToken = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
         return runpodToken ? MAX_FILE_SIZE_PRIVATE : MAX_FILE_SIZE_REGULAR
       }
 
       // Function to get max file size text for display
       function getMaxFileSizeText() {
-        // In local mode, always use regular max file size text
-        if (IN_LOCAL_MODE) return "300MB"
+        // In local mode, no file size limit
+        if (IN_LOCAL_MODE) return "unlimited"
         const runpodToken = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
         return runpodToken ? "3GB" : "300MB"
       }
