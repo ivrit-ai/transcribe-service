@@ -1,12 +1,13 @@
 # Transcribe Service Launcher for Windows
 $ErrorActionPreference = "Stop"
 
-# Get installation directory
+# Get installation directory (script is in bin/ subdirectory, so go up one level)
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$binDir = Join-Path $scriptDir "bin"
-$venvDir = Join-Path $scriptDir "venv"
-$appDir = Join-Path $scriptDir "transcribe-service"
-$modelsDir = Join-Path $scriptDir "models"
+$installDir = Split-Path -Parent $scriptDir
+$binDir = Join-Path $installDir "bin"
+$venvDir = Join-Path $installDir "venv"
+$appDir = Join-Path $installDir "transcribe-service"
+$modelsDir = Join-Path $installDir "models"
 $dataDir = Join-Path $env:APPDATA "ivrit.ai\transcribe-service"
 $logFile = Join-Path $dataDir "app.log"
 $launchLogFile = Join-Path $dataDir "launch.log"
