@@ -1,4 +1,11 @@
 # Transcribe Service Windows Installer
+#
+# IMPORTANT: This installer implements the standardized installation flow defined in:
+#   installers/install-template.md
+#
+# Any changes to the installation process should be documented in install-template.md
+# first, then propagated to all platform-specific installers.
+#
 # Usage:
 #   Install latest release from default repo:
 #     iwr -useb https://raw.githubusercontent.com/ivrit-ai/transcribe-service/main/installers/windows/install-windows.ps1 | iex
@@ -15,6 +22,7 @@ Write-Host "Transcribe Service Windows Installer" -ForegroundColor Cyan
 Write-Host "===================================" -ForegroundColor Cyan
 Write-Host ""
 
+# Step 0: Pre-Installation Checks (see install-template.md)
 # Parse REPO_PATH environment variable
 # Format: org/repo/ref-name (where ref-name can be a branch or tag)
 # If not specified, defaults to latest release from ivrit-ai/transcribe-service
@@ -53,6 +61,7 @@ Write-Host "Using GitHub repository: $githubRepo"
 Write-Host "Using reference: $githubRef"
 Write-Host ""
 
+# Architecture Validation (see install-template.md Step 0)
 # Check architecture - only x64 is supported
 $arch = [System.Environment]::Is64BitOperatingSystem
 if (-not $arch) {
@@ -74,6 +83,7 @@ $installLog = Join-Path $installDir "install.log"
 # Start logging
 Start-Transcript -Path $installLog -Append
 
+# Existing Installation Detection (see install-template.md Step 0)
 # Check if installation already exists
 $existingDirs = @()
 if (Test-Path $appDir) { $existingDirs += "transcribe-service\" }
@@ -115,19 +125,28 @@ if ($existingDirs.Count -gt 0) {
 # Installation directory
 Write-Host "Installing to: $installDir"
 
-# Step 1: Download and install uv
+# ============================================================================
+# Step 1: Download and Install UV (see install-template.md Step 1)
+# ============================================================================
 Write-Host ""
 Write-Host "Step 1/8: Downloading uv..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $uvDir | Out-Null
 $uvDownloadUrl = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
 Write-Host "Downloading from: $uvDownloadUrl"
 $uvZip = Join-Path $uvDir "uv.zip"
-Start-BitsTransfer -Source $uvDownloadUrl -Destination $uvZip -Description "Downloading uv"
+curl.exe -fL --progress-bar -o $uvZip $uvDownloadUrl
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: Failed to download uv" -ForegroundColor Red
+    Stop-Transcript
+    exit 1
+}
 Expand-Archive -Path $uvZip -DestinationPath $uvDir -Force
 Remove-Item $uvZip
 Write-Host "✓ uv installed successfully" -ForegroundColor Green
 
-# Step 2: Download transcribe-service release
+# ============================================================================
+# Step 2: Download Transcribe Service (see install-template.md Step 2)
+# ============================================================================
 Write-Host ""
 Write-Host "Step 2/8: Downloading transcribe-service..." -ForegroundColor Cyan
 if ($githubRef -eq "latest") {
@@ -158,14 +177,21 @@ New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 
 # Download tarball
 $tarballPath = Join-Path $installDir "temp.tar.gz"
-# Use Invoke-WebRequest for GitHub API URLs (handles redirects properly)
-$prevProgressPreference = $ProgressPreference
-$ProgressPreference = 'SilentlyContinue'
-Invoke-WebRequest -Uri $releaseUrl -OutFile $tarballPath
-$ProgressPreference = $prevProgressPreference
+curl.exe -fL --progress-bar -o $tarballPath $releaseUrl
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: Failed to download or extract the release" -ForegroundColor Red
+    Write-Host "URL attempted: $releaseUrl" -ForegroundColor Red
+    Stop-Transcript
+    exit 1
+}
 
 # Extract tarball (requires tar.exe which is available in Windows 10+ by default)
 tar -xzf $tarballPath -C $appDir --strip-components=1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: Failed to extract tarball" -ForegroundColor Red
+    Stop-Transcript
+    exit 1
+}
 Remove-Item $tarballPath
 Write-Host "✓ transcribe-service downloaded successfully" -ForegroundColor Green
 
@@ -211,26 +237,34 @@ if ($isTag) {
 Write-Host "✓ Version file created: $versionFile" -ForegroundColor Green
 Write-Host "   ${githubRepo}/${githubRef}@${commitHash} (${refType})"
 
-# Step 3: Create virtual environment with Python 3.13
+# ============================================================================
+# Step 3: Create Virtual Environment (see install-template.md Step 3)
+# ============================================================================
 Write-Host ""
 Write-Host "Step 3/8: Creating virtual environment with Python 3.13..." -ForegroundColor Cyan
 & "$uvDir\uv.exe" venv $venvDir --python 3.13
 Write-Host "✓ Virtual environment created successfully" -ForegroundColor Green
 
-# Step 4: Install requirements
+# ============================================================================
+# Step 4: Install Requirements (see install-template.md Step 4)
+# ============================================================================
 Write-Host ""
 Write-Host "Step 4/8: Installing requirements..." -ForegroundColor Cyan
 $pythonExe = Join-Path $venvDir "Scripts\python.exe"
 & "$uvDir\uv.exe" pip install --python $pythonExe -r "$appDir\requirements.txt"
 Write-Host "✓ Requirements installed successfully" -ForegroundColor Green
 
-# Step 5: Install ivrit[all]
+# ============================================================================
+# Step 5: Install ivrit[all] (see install-template.md Step 5)
+# ============================================================================
 Write-Host ""
 Write-Host "Step 5/8: Installing ivrit[all]..." -ForegroundColor Cyan
 & "$uvDir\uv.exe" pip install --python $pythonExe "ivrit[all]"
 Write-Host "✓ ivrit[all] installed successfully" -ForegroundColor Green
 
-# Step 6: Create symlinks/copies for ffmpeg
+# ============================================================================
+# Step 6: Setup FFmpeg (see install-template.md Step 6)
+# ============================================================================
 Write-Host ""
 Write-Host "Step 6/8: Setting up ffmpeg..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
@@ -250,7 +284,9 @@ $ffmpegDest = Join-Path $binDir "ffmpeg.exe"
 Copy-Item -Path $ffmpegPath -Destination $ffmpegDest -Force
 Write-Host "✓ Copied ffmpeg to: $ffmpegDest" -ForegroundColor Green
 
-# Step 7: Create data directory and download model
+# ============================================================================
+# Step 7: Setup Data Directory and Download Model (see install-template.md Step 7)
+# ============================================================================
 Write-Host ""
 Write-Host "Step 7/8: Setting up data directory and downloading model..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
@@ -262,45 +298,46 @@ if (Test-Path $modelFile) {
     $reply = Read-Host "Do you want to re-download it? (y/N)"
     if ($reply -match '^[Yy]$') {
         Write-Host "Downloading model (this may take a while)..."
-        Start-BitsTransfer -Source $modelUrl -Destination $modelFile -Description "Downloading model" -DisplayName "ivrit-ggml-model.bin"
+        curl.exe -fL --progress-bar -o $modelFile $modelUrl
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Error: Failed to download model" -ForegroundColor Red
+            Stop-Transcript
+            exit 1
+        }
         Write-Host "✓ Model downloaded successfully" -ForegroundColor Green
     } else {
         Write-Host "Skipping model download"
     }
 } else {
     Write-Host "Downloading model (this may take a while)..."
-    Start-BitsTransfer -Source $modelUrl -Destination $modelFile -Description "Downloading model" -DisplayName "ivrit-ggml-model.bin"
+    curl.exe -fL --progress-bar -o $modelFile $modelUrl
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Error: Failed to download model" -ForegroundColor Red
+        Stop-Transcript
+        exit 1
+    }
     Write-Host "✓ Model downloaded successfully" -ForegroundColor Green
 }
 
-# Step 8: Create launcher scripts and desktop shortcut
+# ============================================================================
+# Step 8: Create Application Launcher (see install-template.md Step 8)
+# ============================================================================
 Write-Host ""
 Write-Host "Step 8/8: Creating launcher scripts..." -ForegroundColor Cyan
 
-# Copy the launch.ps1 script from the installers directory
+# Copy the launch.ps1 script from the installers directory to bin
 $launchScriptSource = Join-Path $appDir "installers\windows\launch.ps1"
-$launchScriptDest = Join-Path $installDir "launch.ps1"
+$launchScriptDest = Join-Path $binDir "launch.ps1"
 Copy-Item -Path $launchScriptSource -Destination $launchScriptDest -Force
 
-# Create a batch file wrapper for easier launching
-$batchFile = Join-Path $installDir "ivrit.ai.bat"
+# Create a batch file wrapper in bin directory
+$batchFile = Join-Path $binDir "launch.bat"
 @"
 @echo off
-powershell.exe -ExecutionPolicy Bypass -File "$launchScriptDest"
+powershell.exe -ExecutionPolicy Bypass -File "%~dp0launch.ps1"
 "@ | Out-File -FilePath $batchFile -Encoding ASCII
 
-# Create a desktop shortcut
-$WshShell = New-Object -comObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut([System.IO.Path]::Combine([Environment]::GetFolderPath("Desktop"), "ivrit.ai Transcribe.lnk"))
-$Shortcut.TargetPath = "powershell.exe"
-$Shortcut.Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launchScriptDest`""
-$Shortcut.WorkingDirectory = $installDir
-$Shortcut.IconLocation = Join-Path $appDir "static\favicon.ico"
-$Shortcut.Description = "ivrit.ai Transcribe Service"
-$Shortcut.Save()
-
-Write-Host "✓ Launcher scripts created successfully" -ForegroundColor Green
-Write-Host "✓ Desktop shortcut created" -ForegroundColor Green
+Write-Host "✓ Launcher created successfully: $batchFile" -ForegroundColor Green
 
 # Installation complete
 Write-Host ""
@@ -312,11 +349,9 @@ Write-Host "Installation directory: $installDir"
 Write-Host "Models directory: $modelsDir"
 Write-Host "Data directory: $dataDir"
 Write-Host "Launcher: $batchFile"
-Write-Host "Desktop shortcut: Desktop\ivrit.ai Transcribe.lnk"
 Write-Host "Installation log: $installLog"
 Write-Host ""
 Write-Host "To start the transcribe service:"
-Write-Host "  - Double-click the 'ivrit.ai Transcribe' shortcut on your desktop, or"
 Write-Host "  - Run: $batchFile"
 Write-Host ""
 

@@ -2,6 +2,13 @@
 set -e
 
 # Transcribe Service OSX Installer
+#
+# IMPORTANT: This installer implements the standardized installation flow defined in:
+#   installers/install-template.md
+#
+# Any changes to the installation process should be documented in install-template.md
+# first, then propagated to all platform-specific installers.
+#
 # Usage: 
 #   Install latest release from default repo:
 #     curl -fsSL https://raw.githubusercontent.com/ivrit-ai/transcribe-service/main/installers/osx/install-osx.sh | bash
@@ -16,6 +23,7 @@ echo "Transcribe Service OSX Installer"
 echo "==================================="
 echo ""
 
+# Step 0: Pre-Installation Checks (see install-template.md)
 # Parse REPO_PATH environment variable
 # Format: org/repo/ref-name (where ref-name can be a branch or tag)
 # If not specified, defaults to latest release from ivrit-ai/transcribe-service
@@ -68,6 +76,7 @@ echo "Using GitHub repository: $GITHUB_REPO"
 echo "Using reference: $GITHUB_REF"
 echo ""
 
+# Architecture Validation (see install-template.md Step 0)
 # Check architecture first - only arm64 (Apple Silicon) is supported
 ARCH=$(uname -m)
 if [ "$ARCH" != "arm64" ]; then
@@ -90,6 +99,7 @@ INSTALL_LOG="$INSTALL_DIR/install.log"
 # Redirect all output to install.log while also showing on terminal
 exec > >(tee -a "$INSTALL_LOG") 2>&1
 
+# Existing Installation Detection (see install-template.md Step 0)
 # Check if installation already exists
 if [ -d "$APP_DIR" ] || [ -d "$UV_DIR" ] || [ -d "$VENV_DIR" ] || [ -d "$BIN_DIR" ]; then
     echo ""
@@ -128,7 +138,9 @@ UV_ARCH="aarch64"
 # Installation directory
 echo "Installing to: $INSTALL_DIR"
 
-# Step 1: Download and install uv
+# ============================================================================
+# Step 1: Download and Install UV (see install-template.md Step 1)
+# ============================================================================
 echo ""
 echo "Step 1/8: Downloading uv..."
 mkdir -p "$UV_DIR"
@@ -138,7 +150,9 @@ curl -fsSL "$UV_DOWNLOAD_URL" | tar -xzf - -C "$UV_DIR" --strip-components=1
 chmod +x "$UV_DIR/uv"
 echo "✓ uv installed successfully"
 
-# Step 2: Download transcribe-service release
+# ============================================================================
+# Step 2: Download Transcribe Service (see install-template.md Step 2)
+# ============================================================================
 echo ""
 echo "Step 2/8: Downloading transcribe-service..."
 if [ "$GITHUB_REF" = "latest" ]; then
@@ -210,25 +224,33 @@ echo "${GITHUB_REPO}/${GITHUB_REF}@${COMMIT_HASH} (${REF_TYPE})" > "$VERSION_FIL
 echo "✓ Version file created: $VERSION_FILE"
 echo "   ${GITHUB_REPO}/${GITHUB_REF}@${COMMIT_HASH} (${REF_TYPE})"
 
-# Step 3: Create virtual environment with Python 3.13
+# ============================================================================
+# Step 3: Create Virtual Environment (see install-template.md Step 3)
+# ============================================================================
 echo ""
 echo "Step 3/8: Creating virtual environment with Python 3.13..."
 "$UV_DIR/uv" venv "$VENV_DIR" --python 3.13
 echo "✓ Virtual environment created successfully"
 
-# Step 4: Install requirements
+# ============================================================================
+# Step 4: Install Requirements (see install-template.md Step 4)
+# ============================================================================
 echo ""
 echo "Step 4/8: Installing requirements..."
 "$UV_DIR/uv" pip install --python "$VENV_DIR/bin/python" -r "$APP_DIR/requirements.txt"
 echo "✓ Requirements installed successfully"
 
-# Step 5: Install ivrit[all]
+# ============================================================================
+# Step 5: Install ivrit[all] (see install-template.md Step 5)
+# ============================================================================
 echo ""
 echo "Step 5/8: Installing ivrit[all]..."
 "$UV_DIR/uv" pip install --python "$VENV_DIR/bin/python" "ivrit[all]"
 echo "✓ ivrit[all] installed successfully"
 
-# Step 6: Create symlinks for ffmpeg
+# ============================================================================
+# Step 6: Setup FFmpeg (see install-template.md Step 6)
+# ============================================================================
 echo ""
 echo "Step 6/8: Setting up ffmpeg symlinks..."
 mkdir -p "$BIN_DIR"
@@ -246,7 +268,9 @@ echo "Found ffmpeg at: $FFMPEG_PATH"
 ln -sf "$FFMPEG_PATH" "$BIN_DIR/ffmpeg"
 echo "✓ Created symlink: $BIN_DIR/ffmpeg -> $FFMPEG_PATH"
 
-# Step 7: Create data directory and download model
+# ============================================================================
+# Step 7: Setup Data Directory and Download Model (see install-template.md Step 7)
+# ============================================================================
 echo ""
 echo "Step 7/8: Setting up data directory and downloading model..."
 mkdir -p "$DATA_DIR"
@@ -270,7 +294,9 @@ else
     echo "✓ Model downloaded successfully"
 fi
 
-# Step 8: Create ivrit.ai.app in Applications folder
+# ============================================================================
+# Step 8: Create Application Launcher (see install-template.md Step 8)
+# ============================================================================
 echo ""
 echo "Step 8/8: Creating ivrit.ai application..."
 
