@@ -30,7 +30,7 @@ import json
 import uuid
 import box
 import dotenv
-import magic
+import puremagic
 import random
 import tempfile
 import asyncio
@@ -2210,7 +2210,7 @@ async def upload_file(
         with open(temp_file_path, 'wb') as f:
             while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                 total_size += len(chunk)
-                if total_size > max_file_size:
+                if max_file_size is not None and total_size > max_file_size:
                     os.unlink(temp_file_path)
                     return JSONResponse({
                         "error": "errorFileTooLarge",
@@ -2232,7 +2232,7 @@ async def upload_file(
         }, status_code=200)
 
     # Get the MIME type of the file
-    filetype = magic.Magic(mime=True).from_file(temp_file_path)
+    filetype = puremagic.magic_file(temp_file_path)[0].mime_type
 
     if not is_ffmpeg_supported_mimetype(filetype):
         return JSONResponse({
@@ -2523,10 +2523,15 @@ async def validate_upload_request_metadata(
     if (not lang_cfg["general_availability"]) and (not has_private_credentials):
         return None, JSONResponse({"error": "errorLanguageRequiresPrivateKey", "i18n_key": "errorLanguageRequiresPrivateKey"}, status_code=400)
 
-    max_file_size = MAX_FILE_SIZE_PRIVATE if has_private_credentials else MAX_FILE_SIZE_REGULAR
-    max_file_size_text = "3GB" if has_private_credentials else "300MB"
+    # In local mode, no file size limits
+    if in_local_mode:
+        max_file_size = None
+        max_file_size_text = "unlimited"
+    else:
+        max_file_size = MAX_FILE_SIZE_PRIVATE if has_private_credentials else MAX_FILE_SIZE_REGULAR
+        max_file_size_text = "3GB" if has_private_credentials else "300MB"
 
-    if file_size is not None and file_size > max_file_size:
+    if file_size is not None and max_file_size is not None and file_size > max_file_size:
         return None, JSONResponse({
             "error": "errorFileTooLarge",
             "i18n_key": "errorFileTooLarge",
