@@ -30,7 +30,7 @@ import json
 import uuid
 import box
 import dotenv
-import magic
+import puremagic
 import random
 import tempfile
 import asyncio
@@ -2232,7 +2232,7 @@ async def upload_file(
         }, status_code=200)
 
     # Get the MIME type of the file
-    filetype = magic.Magic(mime=True).from_file(temp_file_path)
+    filetype = puremagic.magic_file(temp_file_path)[0].mime_type
 
     if not is_ffmpeg_supported_mimetype(filetype):
         return JSONResponse({
