@@ -405,10 +405,15 @@ MAX_QUEUED_PRIVATE_JOBS = 5000
 SHORT_JOB_THRESHOLD = 20 * 60
 
 # Set speedup factor based on mode and platform
-if in_local_mode and sys.platform == "darwin":
-    SPEEDUP_FACTOR = 8  # macOS local mode
+if in_local_mode:
+    if sys.platform == "darwin":
+        SPEEDUP_FACTOR = 8  # macOS local mode
+    elif sys.platform == "win32":
+        SPEEDUP_FACTOR = 0.7  # Windows local mode
+    else:
+        SPEEDUP_FACTOR = 15  # Other platforms in local mode
 else:
-    SPEEDUP_FACTOR = 15  # Remote/cloud mode or non-macOS
+    SPEEDUP_FACTOR = 15  # Remote/cloud mode
 
 log_message(f"Using SPEEDUP_FACTOR={SPEEDUP_FACTOR} (local_mode={in_local_mode}, platform={sys.platform})")
 

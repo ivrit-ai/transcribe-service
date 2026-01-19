@@ -87,14 +87,22 @@ $elapsed = 0
 $serverUp = $false
 
 while ($elapsed -lt $maxWait) {
-    try {
-        $response = Invoke-WebRequest -Uri "http://localhost:4500" -Method Head -TimeoutSec 1 -ErrorAction Stop
+    # Check if process is still alive
+    if ($process.HasExited) {
+        Write-Host "ERROR: Server process exited unexpectedly" -ForegroundColor Red
+        Write-Host "Check the error log for details: $launchLogFile" -ForegroundColor Red
+        exit 1
+    }
+    
+    # Try to connect to server using curl (faster and more reliable than Invoke-WebRequest)
+    $null = curl.exe -s -o $null -w "%{http_code}" http://localhost:4500 2>$null
+    if ($LASTEXITCODE -eq 0) {
         $serverUp = $true
         break
-    } catch {
-        Start-Sleep -Seconds 1
-        $elapsed++
     }
+    
+    Start-Sleep -Seconds 1
+    $elapsed++
 }
 
 if (-not $serverUp) {
