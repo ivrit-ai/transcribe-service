@@ -8,6 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/html-docx-js/dist/html-docx.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/diff@5.1.0/dist/diff.min.js"></script>
     <style>
       :root {
         --bg-color: #f5f5f5;
@@ -590,6 +591,10 @@
       }
       .speaker {
         font-weight: bold;
+        cursor: default;
+      }
+      .edit-mode-active .speaker {
+        cursor: pointer;
       }
       .speaker-1 { color: #2196F3; } /* Blue */
       .speaker-2 { color: #4CAF50; } /* Green */
@@ -625,6 +630,18 @@
         text-decoration-thickness: 2px;
         text-decoration-color: var(--primary-color);
         text-underline-offset: 2px;
+      }
+      .transcript-segment.edited {
+        background-color: rgba(255, 213, 79, 0.2);
+      }
+      .transcript-segment.editing {
+        background-color: rgba(33, 150, 243, 0.2);
+      }
+      [data-theme="dark"] .transcript-segment.edited {
+        background-color: rgba(255, 213, 79, 0.15);
+      }
+      [data-theme="dark"] .transcript-segment.editing {
+        background-color: rgba(33, 150, 243, 0.15);
       }
       .action-buttons {
         display: flex;
@@ -1520,6 +1537,68 @@
         text-decoration: underline;
       }
       
+      /* Context Menu Styles */
+      .context-menu {
+        display: none;
+        position: fixed;
+        z-index: 2000;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        min-width: 150px;
+        padding: 4px 0;
+      }
+      .context-menu.show {
+        display: block;
+      }
+      .context-menu-item {
+        padding: 8px 16px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        color: var(--text-color);
+        transition: background 0.15s;
+        position: relative;
+      }
+      .context-menu-item:hover {
+        background: var(--secondary-color);
+      }
+      .context-menu-item.has-submenu::after {
+        content: '◄';
+        position: absolute;
+        left: 8px;
+        font-size: 0.7rem;
+      }
+      .context-submenu {
+        display: none;
+        position: absolute;
+        right: 100%;
+        top: 0;
+        margin-right: 2px;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        min-width: 120px;
+        padding: 4px 0;
+        max-height: 300px;
+        overflow-y: auto;
+      }
+      .context-menu-item:hover > .context-submenu {
+        display: block;
+      }
+      .context-submenu-item {
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: var(--text-color);
+        transition: background 0.15s;
+        white-space: nowrap;
+      }
+      .context-submenu-item:hover {
+        background: var(--secondary-color);
+      }
+
       /* Transcription Statistics Styles */
       #transcription-stats {
         margin: 0 0 0.75rem 0;
@@ -1808,6 +1887,10 @@
 
           <div class="action-buttons">
             <div class="actions-right">
+              <button id="viewer-edit-mode-toggle" title="מצב תצוגה" aria-label="מצב תצוגה" style="display: none;">
+                <i data-lucide="eye"></i>
+              </button>
+
               <button id="viewer-text-format-toggle" title="פורמט הטקסט" aria-label="פורמט הטקסט">
                 <svg id="viewer-text-format-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M4 6h16M10 12h10M4 18h16"/>
@@ -1818,6 +1901,10 @@
             </div>
 
             <div class="actions-left">
+              <button id="viewer-edit-toggle-btn" title="ערוך" aria-label="ערוך">
+                <i data-lucide="pen"></i>
+              </button>
+
               <button id="viewer-copy-btn" data-i18n-title="copyText">
                 <i data-lucide="copy"></i>
               </button>
@@ -2147,6 +2234,40 @@
             </button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Speaker Context Menu -->
+    <div id="speaker-context-menu" class="context-menu">
+      <div class="context-menu-item" id="speaker-rename-option">שנה שם</div>
+      <div class="context-menu-item has-submenu" id="speaker-swap-option">
+        החלף דובר
+        <div class="context-submenu" id="speaker-swap-submenu">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Speaker Rename Modal -->
+    <div id="speaker-rename-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>שנה שם דובר</h2>
+          <button class="close" id="close-speaker-rename">&times;</button>
+        </div>
+        <div class="form-group">
+          <label for="speaker-new-name">שם חדש:</label>
+          <input
+            type="text"
+            id="speaker-new-name"
+            placeholder="הזן שם לדובר"
+            style="text-align: right; direction: rtl;"
+          />
+        </div>
+        <div class="modal-buttons">
+          <button type="button" class="btn btn-primary" id="save-speaker-name">שמור</button>
+          <button type="button" class="btn btn-secondary" id="cancel-speaker-rename">ביטול</button>
+        </div>
       </div>
     </div>
 
@@ -3220,6 +3341,40 @@
         await saveSettings()
       })
 
+      // Speaker rename modal handlers
+      document.getElementById('speaker-rename-option').addEventListener('click', () => {
+        document.getElementById('speaker-context-menu').classList.remove('show')
+        showSpeakerRenameDialog()
+      })
+
+      document.getElementById('close-speaker-rename').addEventListener('click', () => {
+        document.getElementById('speaker-rename-modal').classList.remove('show')
+      })
+
+      document.getElementById('cancel-speaker-rename').addEventListener('click', () => {
+        document.getElementById('speaker-rename-modal').classList.remove('show')
+      })
+
+      document.getElementById('save-speaker-name').addEventListener('click', () => {
+        saveSpeakerName()
+      })
+
+      document.getElementById('speaker-new-name').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          saveSpeakerName()
+        } else if (e.key === 'Escape') {
+          document.getElementById('speaker-rename-modal').classList.remove('show')
+        }
+      })
+
+      // Close modal when clicking on backdrop
+      document.getElementById('speaker-rename-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'speaker-rename-modal') {
+          e.target.classList.remove('show')
+        }
+      })
+
       // Close modal when clicking outside
       window.addEventListener("click", (e) => {
         if (e.target === settingsModal) {
@@ -3567,7 +3722,7 @@
         if (displaySettings.timestampFormat === "segments") {
           for (let i = 0; i < segments.length; i++) {
             const seg = segments[i]
-            const text = esc((seg.text || '').trim())
+            const text = esc(seg.text.trim())
             const start = formatTimeForDisplay(seg.start || 0)
             const end = formatTimeForDisplay(seg.end || 0)
             if (diarizationEnabled) {
@@ -3605,7 +3760,7 @@
           for (let i = 0; i < segments.length; i++) {
             const seg = segments[i]
             const rawSpeaker = seg.speakers && seg.speakers.length > 0 ? seg.speakers[0] : null
-            const segText = esc((seg.text || '').trim())
+            const segText = esc(seg.text.trim())
             const speakerChanged = i === 0 ? true : rawSpeaker !== currentSpeaker
             if (speakerChanged) {
               flushParagraph()
@@ -3734,6 +3889,14 @@
       }
 
       function translateSpeakerLabelText(lang, num) {
+        const speakerId = `SPEAKER_${String(num).padStart(2, '0')}`
+        
+        // Check if there's a custom name mapping
+        if (speakerNameMappings[speakerId]) {
+          return speakerNameMappings[speakerId]
+        }
+        
+        // Otherwise use the default translation
         const entry = SPEAKER_I18N[lang] || SPEAKER_I18N['en']
         const template = entry.speaker || 'Speaker {num}'
         return String(template).replace('{num}', String(num))
@@ -4262,6 +4425,14 @@
       let currentViewerLanguage = 'he'
       let currentViewerEntry = null
       
+      // Edit mode state
+      let isEditMode = false
+      let editModeView = 'new' // 'original', 'compared', 'new'
+      let currentEdits = {} // Map of segment index to edited text
+      let currentEditingSegmentIndex = -1
+      let speakerNameMappings = {} // Map of SPEAKER_XX to custom names
+      let speakerSegmentSwaps = {} // Map of segment index to new SPEAKER_XX
+      
       // Pending file tracking for viewer processing state
       let pendingViewerFilename = null
       let pendingViewerLanguage = 'he'
@@ -4692,6 +4863,9 @@
           currentViewerLanguage = data.language || entry.language || 'he'
           currentViewerEntry = entry
           
+          // Load edits if they exist
+          await loadEdits(entry.results_id)
+          
           // Hide processing state if it was showing
           hideViewerProcessingState()
           pendingViewerFilename = null
@@ -4824,6 +4998,7 @@
         const baseName = originalFileName.replace(/\.[^/.]+$/, '')
         
         if (format === 'json') {
+          // Segments already have edits applied
           const blob = new Blob([JSON.stringify(segments, null, 2)], { type: 'application/json' })
           triggerDownload(blob, `${baseName}.json`)
         } else if (format === 'vtt') {
@@ -4831,7 +5006,8 @@
           segments.forEach((segment, index) => {
             const startTime = formatTime(segment.start)
             const endTime = formatTime(segment.end)
-            vttContent += `${index + 1}\n${startTime} --> ${endTime}\n${segment.text.trim()}\n\n`
+            const text = segment.text.trim()
+            vttContent += `${index + 1}\n${startTime} --> ${endTime}\n${text}\n\n`
           })
           const blob = new Blob([vttContent], { type: 'text/vtt' })
           triggerDownload(blob, `${baseName}.vtt`)
@@ -4840,7 +5016,8 @@
           segments.forEach((segment, index) => {
             const start = formatTime(segment.start).replace(".", ",")
             const end = formatTime(segment.end).replace(".", ",")
-            srtContent += `${index + 1}\n${start} --> ${end}\n${segment.text.trim()}\n\n`
+            const text = segment.text.trim()
+            srtContent += `${index + 1}\n${start} --> ${end}\n${text}\n\n`
           })
           const blob = new Blob([srtContent], { type: 'text/plain' })
           triggerDownload(blob, `${baseName}.srt`)
@@ -4873,16 +5050,28 @@
         if (!currentViewerData || !currentViewerData.results) return
 
         const viewerTranscription = document.getElementById('viewer-transcription')
-        const segments = currentViewerData.results
+        
+        // Determine which data to use based on edit mode view
+        let segments
+        if (isEditMode && editModeView === 'original') {
+          // Show original data without any edits
+          segments = currentViewerData.results
+        } else if (isEditMode && editModeView === 'compared') {
+          // Show effective data but getSegmentDisplayText will handle the comparison
+          segments = currentViewerData.results
+        } else {
+          // Show effective data with all edits applied (default and 'new' view)
+          segments = getEffectiveTranscriptionData()
+        }
 
         // Use same display logic as main transcription
         let result
         if (displaySettings.timestampFormat === "segments") {
-          result = formatWithTimecodesForSegments(segments)
+          result = formatWithTimecodesForSegments(segments, editModeView !== 'new' && isEditMode)
         } else {
           const continuousSeparator = displaySettings.textFormat === "continuous" ? " " : "<br>"
           const segmentSeparator = "<br>"
-          result = joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, true)
+          result = joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, true, editModeView !== 'new' && isEditMode)
         }
 
         result = result + "<br><br>" + (window.I18N ? window.I18N.t('transcriptFooter') : "תומלל באמצעות שירות התמלול של ivrit.ai")
@@ -4929,7 +5118,8 @@
           return
         }
         
-        const segments = currentViewerData.results
+        // Get effective data with all edits applied
+        const segments = getEffectiveTranscriptionData()
         if (segments.length === 0) {
           document.getElementById('transcription-stats').classList.remove('show')
           return
@@ -5020,10 +5210,10 @@
           Object.entries(speakerTimes).sort((a, b) => b[1] - a[1]).forEach(([speaker, time]) => {
             let speakerLabel
             if (speaker === 'UNKNOWN') {
-              speakerLabel = window.I18N ? window.I18N.t('unknownSpeaker') : 'לא ידוע'
+              speakerLabel = translateSpeakerUnknownText(currentViewerLanguage)
             } else {
               const speakerNumber = parseInt(speaker.replace('SPEAKER_', ''), 10) || 0
-              speakerLabel = window.I18N ? window.I18N.t('speaker', {num: speakerNumber}) : 'דובר ' + speakerNumber
+              speakerLabel = translateSpeakerLabelText(currentViewerLanguage, speakerNumber)
             }
             
             labels.push(speakerLabel)
@@ -5092,15 +5282,22 @@
         document.getElementById('transcription-stats').classList.add('show')
       }
       
-      // Add click handlers to transcript segments for audio seeking
+      // Add click handlers to transcript segments for audio seeking or editing
       function addSegmentClickHandlers() {
         const segments = document.querySelectorAll('.transcript-segment')
         const audioPlayer = document.getElementById('viewer-audio-player')
         
         segments.forEach(segment => {
-          segment.addEventListener('click', () => {
+          segment.addEventListener('click', (e) => {
+            const segmentIndex = parseInt(segment.dataset.segmentIndex)
             const start = parseFloat(segment.dataset.start)
-            if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
+            
+            if (isEditMode) {
+              // In edit mode, clicking a segment makes it editable
+              enterSegmentEditMode(segmentIndex)
+              e.stopPropagation()
+            } else if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
+              // In normal mode, clicking seeks audio
               audioPlayer.currentTime = start
               audioPlayer.play().catch(err => {
                 console.log('Play failed:', err)
@@ -5108,9 +5305,349 @@
             }
           })
         })
+        
+        // Add context menu handlers to speaker labels in edit mode
+        addSpeakerContextMenuHandlers()
       }
 
-      function formatWithTimecodesForSegments(segments) {
+      function addSpeakerContextMenuHandlers() {
+        if (!isEditMode) return
+        
+        const speakerLabels = document.querySelectorAll('.speaker')
+        speakerLabels.forEach(label => {
+          label.addEventListener('contextmenu', (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            
+            // Get speaker number from class
+            const classes = Array.from(label.classList)
+            const speakerClass = classes.find(c => c.startsWith('speaker-'))
+            if (!speakerClass) return
+            
+            const speakerNumber = speakerClass.replace('speaker-', '')
+            const speakerId = `SPEAKER_${speakerNumber.padStart(2, '0')}`
+            
+            // Find the segment index by looking at the next sibling transcript-segment
+            let segmentIndex = -1
+            const nextElement = label.nextElementSibling
+            if (nextElement && nextElement.classList.contains('transcript-segment')) {
+              segmentIndex = parseInt(nextElement.dataset.segmentIndex)
+            }
+            
+            showSpeakerContextMenu(e.clientX, e.clientY, speakerId, segmentIndex)
+          })
+        })
+      }
+
+      let currentRenamingSpeakerId = null
+      let currentContextSegmentIndex = -1
+      
+      function showSpeakerContextMenu(x, y, speakerId, segmentIndex) {
+        const contextMenu = document.getElementById('speaker-context-menu')
+        currentRenamingSpeakerId = speakerId
+        currentContextSegmentIndex = segmentIndex
+        
+        // Populate speaker swap submenu
+        populateSpeakerSwapSubmenu()
+        
+        // Position the menu
+        contextMenu.style.left = x + 'px'
+        contextMenu.style.top = y + 'px'
+        contextMenu.classList.add('show')
+        
+        // Hide menu when clicking outside
+        const hideMenu = (e) => {
+          if (!contextMenu.contains(e.target)) {
+            contextMenu.classList.remove('show')
+            document.removeEventListener('click', hideMenu)
+          }
+        }
+        setTimeout(() => {
+          document.addEventListener('click', hideMenu)
+        }, 0)
+      }
+
+      function populateSpeakerSwapSubmenu() {
+        if (!currentViewerData || !currentViewerData.results) return
+        
+        const submenu = document.getElementById('speaker-swap-submenu')
+        submenu.innerHTML = ''
+        
+        // Get all unique speakers from the effective transcription
+        const effectiveSegments = getEffectiveTranscriptionData()
+        const speakers = new Set()
+        effectiveSegments.forEach(segment => {
+          if (segment.speakers && segment.speakers.length > 0) {
+            speakers.add(segment.speakers[0])
+          }
+        })
+        
+        // Convert to sorted array
+        const speakerList = Array.from(speakers).sort()
+        
+        // Create submenu items
+        speakerList.forEach(speakerId => {
+          const speakerNumber = parseInt(speakerId.replace('SPEAKER_', ''))
+          const speakerLabel = translateSpeakerLabelText(currentViewerLanguage, speakerNumber)
+          
+          const item = document.createElement('div')
+          item.className = 'context-submenu-item'
+          item.textContent = speakerLabel
+          item.dataset.speakerId = speakerId
+          
+          // Highlight current speaker
+          if (speakerId === currentRenamingSpeakerId) {
+            item.style.fontWeight = 'bold'
+          }
+          
+          item.addEventListener('click', (e) => {
+            e.stopPropagation()
+            swapSegmentSpeaker(currentContextSegmentIndex, speakerId)
+            document.getElementById('speaker-context-menu').classList.remove('show')
+          })
+          
+          submenu.appendChild(item)
+        })
+      }
+
+      function showSpeakerRenameDialog() {
+        const modal = document.getElementById('speaker-rename-modal')
+        const input = document.getElementById('speaker-new-name')
+        
+        // Set current name if exists
+        const currentName = speakerNameMappings[currentRenamingSpeakerId] || ''
+        input.value = currentName
+        
+        modal.classList.add('show')
+        input.focus()
+      }
+
+      function swapSegmentSpeaker(segmentIndex, newSpeakerId) {
+        if (segmentIndex < 0 || !currentViewerData || !currentViewerData.results[segmentIndex]) {
+          console.error('Invalid segment index for speaker swap')
+          return
+        }
+        
+        const originalSpeaker = currentViewerData.results[segmentIndex].speakers?.[0]
+        
+        // If swapping back to original, remove the mapping
+        if (originalSpeaker === newSpeakerId) {
+          delete speakerSegmentSwaps[segmentIndex]
+          console.log(`Removed speaker swap for segment ${segmentIndex}`)
+        } else {
+          speakerSegmentSwaps[segmentIndex] = newSpeakerId
+          console.log(`Swapped segment ${segmentIndex} speaker to ${newSpeakerId}`)
+        }
+        
+        // Refresh the display immediately
+        updateViewerTranscriptionDisplay()
+      }
+
+      function saveSpeakerName() {
+        const input = document.getElementById('speaker-new-name')
+        const newName = input.value.trim()
+        
+        if (newName) {
+          // Check if another speaker already has this name
+          const existingSpeaker = Object.entries(speakerNameMappings).find(
+            ([speakerId, name]) => speakerId !== currentRenamingSpeakerId && name === newName
+          )
+          
+          if (existingSpeaker) {
+            showToast("שם זה כבר בשימוש עבור דובר אחר", "error")
+            return
+          }
+          
+          speakerNameMappings[currentRenamingSpeakerId] = newName
+          console.log(`Renamed ${currentRenamingSpeakerId} to ${newName}`)
+        } else {
+          // Remove mapping if empty
+          delete speakerNameMappings[currentRenamingSpeakerId]
+          console.log(`Removed custom name for ${currentRenamingSpeakerId}`)
+        }
+        
+        // Close modal
+        document.getElementById('speaker-rename-modal').classList.remove('show')
+        
+        // Refresh the display immediately (this also updates statistics)
+        updateViewerTranscriptionDisplay()
+      }
+
+      function enterSegmentEditMode(segmentIndex) {
+        // Save current segment if editing another one
+        if (currentEditingSegmentIndex !== -1 && currentEditingSegmentIndex !== segmentIndex) {
+          saveCurrentEditingSegment()
+        }
+        
+        currentEditingSegmentIndex = segmentIndex
+        const segment = document.querySelector(`.transcript-segment[data-segment-index="${segmentIndex}"]`)
+        if (!segment) return
+        
+        // Make the segment editable
+        segment.contentEditable = 'true'
+        segment.classList.add('editing')
+        segment.focus()
+        
+        // Place cursor at beginning based on language direction
+        const rtlLangs = ['he', 'yi']
+        const isRTL = rtlLangs.includes(currentViewerLanguage)
+        
+        const range = document.createRange()
+        const sel = window.getSelection()
+        sel.removeAllRanges()
+        
+        if (isRTL) {
+          // For RTL languages, place cursor at the end (which is visually the beginning)
+          range.selectNodeContents(segment)
+          range.collapse(false)
+        } else {
+          // For LTR languages, place cursor at the start
+          range.setStart(segment, 0)
+          range.collapse(true)
+        }
+        
+        sel.addRange(range)
+      }
+
+      function saveCurrentEditingSegment() {
+        if (currentEditingSegmentIndex === -1) return
+        
+        const segment = document.querySelector(`.transcript-segment[data-segment-index="${currentEditingSegmentIndex}"]`)
+        if (!segment) return
+        
+        const newText = segment.innerText.trim()
+        const originalText = currentViewerData.results[currentEditingSegmentIndex].text.trim()
+        
+        if (newText !== originalText) {
+          currentEdits[currentEditingSegmentIndex] = newText
+        } else {
+          // Remove edit if text is same as original
+          delete currentEdits[currentEditingSegmentIndex]
+        }
+        
+        segment.contentEditable = 'false'
+        segment.classList.remove('editing')
+      }
+
+      function getSegmentDisplayText(segment, index) {
+        const hasEdit = currentEdits.hasOwnProperty(index)
+        const originalText = segment.text.trim()
+        const editedText = hasEdit ? currentEdits[index] : originalText
+        
+        if (!hasEdit || editModeView === 'new') {
+          return editedText
+        } else if (editModeView === 'original') {
+          return originalText
+        } else if (editModeView === 'compared') {
+          if (originalText === editedText) {
+            return editedText
+          }
+          return generateWordLevelDiff(originalText, editedText)
+        }
+        
+        return editedText
+      }
+
+      function generateWordLevelDiff(originalText, editedText) {
+        // Use jsdiff library for word-level diff
+        if (!window.Diff || !window.Diff.diffWords) {
+          // Fallback if library not loaded
+          return `<del style="color: #999;">${originalText}</del> ${editedText}`
+        }
+        
+        const diff = window.Diff.diffWords(originalText, editedText)
+        let result = []
+        
+        for (let i = 0; i < diff.length; i++) {
+          const part = diff[i]
+          const value = part.value
+          
+          if (part.added) {
+            // Text was added in the edit
+            result.push(`<ins style="background-color: rgba(76, 175, 80, 0.2); text-decoration: none;">${value}</ins>`)
+          } else if (part.removed) {
+            // Text was removed in the edit
+            result.push(`<del style="color: #999; text-decoration: line-through;">${value}</del>`)
+          } else {
+            // Text is unchanged
+            result.push(value)
+          }
+        }
+        
+        return result.join('')
+      }
+
+      // Keyboard navigation for edit mode
+      document.addEventListener('keydown', (e) => {
+        if (!isEditMode || currentEditingSegmentIndex === -1) return
+        
+        // Ctrl+Arrow for word navigation with segment boundary detection
+        if (e.ctrlKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+          const segment = document.querySelector(`.transcript-segment[data-segment-index="${currentEditingSegmentIndex}"]`)
+          if (!segment) return
+          
+          const sel = window.getSelection()
+          if (!sel.rangeCount) return
+          
+          const range = sel.getRangeAt(0)
+          const segmentText = segment.textContent || ''
+          
+          // Calculate absolute cursor position in segment
+          const preCaretRange = range.cloneRange()
+          preCaretRange.selectNodeContents(segment)
+          preCaretRange.setEnd(range.endContainer, range.endOffset)
+          const cursorOffset = preCaretRange.toString().length
+          
+          const isAtStart = cursorOffset === 0
+          const isAtEnd = cursorOffset === segmentText.length
+          
+          // Check if we're at segment boundary and should move to next/prev segment
+          const rtlLangs = ['he', 'yi']
+          const isRTL = rtlLangs.includes(currentViewerLanguage)
+          
+          let shouldMoveSegment = false
+          let direction = 0
+          
+          if (isRTL) {
+            // In RTL, left arrow at end means next segment, right arrow at start means previous
+            if (e.key === 'ArrowLeft' && isAtEnd) {
+              shouldMoveSegment = true
+              direction = 1
+            } else if (e.key === 'ArrowRight' && isAtStart) {
+              shouldMoveSegment = true
+              direction = -1
+            }
+          } else {
+            // In LTR, left arrow at start means previous segment, right arrow at end means next
+            if (e.key === 'ArrowLeft' && isAtStart) {
+              shouldMoveSegment = true
+              direction = -1
+            } else if (e.key === 'ArrowRight' && isAtEnd) {
+              shouldMoveSegment = true
+              direction = 1
+            }
+          }
+          
+          if (shouldMoveSegment) {
+            e.preventDefault()
+            saveCurrentEditingSegment()
+            
+            const nextIndex = currentEditingSegmentIndex + direction
+            if (nextIndex >= 0 && nextIndex < currentViewerData.results.length) {
+              enterSegmentEditMode(nextIndex)
+            }
+          }
+          // Otherwise, let the browser handle word navigation naturally
+        } else if (e.key === 'Escape') {
+          // Escape to exit segment editing
+          e.preventDefault()
+          saveCurrentEditingSegment()
+          currentEditingSegmentIndex = -1
+          updateViewerTranscriptionDisplay()
+        }
+      })
+
+      function formatWithTimecodesForSegments(segments, useViewMode = false) {
         if (!segments || segments.length === 0) return ""
 
         const separator = displaySettings.textFormat === "continuous" ? " " : "<br>"
@@ -5133,12 +5670,15 @@
 
             let groupText
             if (displaySettings.diarizationDisplay !== "disabled") {
-              groupText = joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "<br>", true)
+              groupText = joinSegmentsWithSpeakerChangesForSegments(currentGroup, separator, "<br>", true, useViewMode)
             } else {
               // Wrap each segment with timing data
               groupText = currentGroup.map((seg, idx) => {
                 const actualIndex = segments.indexOf(seg)
-                return `<span class="transcript-segment" data-start="${seg.start}" data-end="${seg.end}" data-segment-index="${actualIndex}">${seg.text.trim()}</span>`
+                const displayText = useViewMode ? getSegmentDisplayText(seg, actualIndex) : seg.text.trim()
+                const editableAttr = isEditMode ? '' : ''
+                const editClass = currentEdits.hasOwnProperty(actualIndex) ? ' edited' : ''
+                return `<span class="transcript-segment${editClass}" data-start="${seg.start}" data-end="${seg.end}" data-segment-index="${actualIndex}"${editableAttr}>${displayText}</span>`
               }).join(separator)
             }
 
@@ -5159,7 +5699,7 @@
       }
 
 
-      function joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, isHTML = true) {
+      function joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, isHTML = true, useViewMode = false) {
         if (!segments || segments.length === 0) return ""
         
         const result = []
@@ -5175,13 +5715,17 @@
           let segmentText
           if (isHTML) {
             const labelHTML = showSpeakerLabel ? getSpeakerLabelForLanguage(segment, currentViewerLanguage) : ''
-            const textContent = segment.text.trim()
+            // If using view mode (original/compared), use getSegmentDisplayText for comparison logic
+            // Otherwise, just use the segment text directly (it already has edits applied from getEffectiveTranscriptionData)
+            const displayText = useViewMode ? getSegmentDisplayText(segment, i) : segment.text.trim()
+            const editClass = currentEdits.hasOwnProperty(i) ? ' edited' : ''
             // Wrap in span with timing data for audio sync
-            segmentText = labelHTML + `<span class="transcript-segment" data-start="${segment.start}" data-end="${segment.end}" data-segment-index="${i}">${textContent}</span>`
+            segmentText = labelHTML + `<span class="transcript-segment${editClass}" data-start="${segment.start}" data-end="${segment.end}" data-segment-index="${i}">${displayText}</span>`
           } else {
+            const displayText = useViewMode ? getSegmentDisplayText(segment, i) : segment.text.trim()
             segmentText = showSpeakerLabel 
-              ? getSpeakerLabelPlainForLanguage(segment, currentViewerLanguage) + segment.text.trim()
-              : segment.text.trim()
+              ? getSpeakerLabelPlainForLanguage(segment, currentViewerLanguage) + displayText
+              : displayText
           }
           
           if (i === 0) {
@@ -5201,6 +5745,56 @@
         return result.join("")
       }
 
+
+      /**
+       * Returns the effective transcription data with all edits applied.
+       * This creates a modified copy of the original data, applying:
+       * - Text edits from currentEdits
+       * - Speaker swaps from speakerSegmentSwaps
+       * 
+       * @returns {Array} Array of segment objects with edits applied
+       */
+      function getEffectiveTranscriptionData() {
+        if (!currentViewerData || !currentViewerData.results) {
+          return []
+        }
+        
+        // Deep clone the segments to avoid modifying original data
+        const segments = currentViewerData.results.map((segment, index) => {
+          const cloned = {
+            ...segment,
+            speakers: segment.speakers ? [...segment.speakers] : [],
+            text: segment.text
+          }
+          
+          // Apply text edit if exists
+          if (currentEdits.hasOwnProperty(index)) {
+            cloned.text = currentEdits[index]
+          }
+          
+          // Apply speaker swap if exists
+          if (speakerSegmentSwaps.hasOwnProperty(index) && cloned.speakers.length > 0) {
+            cloned.speakers[0] = speakerSegmentSwaps[index]
+          }
+          
+          return cloned
+        })
+        
+        return segments
+      }
+      
+      /**
+       * Helper function to get the effective speaker for a specific segment.
+       * Uses the effective transcription data.
+       */
+      function getEffectiveSpeaker(segment, segmentIndex) {
+        // Check if this segment has a speaker swap
+        if (speakerSegmentSwaps.hasOwnProperty(segmentIndex)) {
+          return speakerSegmentSwaps[segmentIndex]
+        }
+        // Otherwise return the original speaker
+        return segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
+      }
 
       function getSpeakerLabelForLanguage(segment, lang) {
         if (segment.speakers && segment.speakers.length > 0) {
@@ -5237,6 +5831,23 @@
         stopViewerProcessingPoll()
         pendingViewerFilename = null
         hideViewerProcessingState()
+        
+        // Reset edit mode
+        isEditMode = false
+        currentEditingSegmentIndex = -1
+        currentEdits = {}
+        speakerNameMappings = {}
+        speakerSegmentSwaps = {}
+        editModeView = 'new'
+        document.getElementById('viewer-edit-mode-toggle').style.display = 'none'
+        const editBtn = document.getElementById('viewer-edit-toggle-btn')
+        editBtn.innerHTML = '<i data-lucide="pen"></i>'
+        editBtn.title = 'ערוך'
+        editBtn.classList.remove('toggle-active')
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons()
+        }
+        
         // Hide and reset audio player
         const playerContainer = document.getElementById('viewer-audio-player-container')
         const audioPlayer = document.getElementById('viewer-audio-player')
@@ -5319,13 +5930,185 @@
       // Copy button in viewer
       document.getElementById('viewer-copy-btn').addEventListener('click', () => {
         if (!currentViewerData || !currentViewerData.results) return
-        const plainText = getPlainTextFromSegmentsForViewer(currentViewerData.results)
+        // Get effective data with all edits applied
+        const effectiveSegments = getEffectiveTranscriptionData()
+        const plainText = getPlainTextFromSegmentsForViewer(effectiveSegments)
         navigator.clipboard.writeText(plainText).then(() => {
           showToast((window.I18N ? window.I18N.t('copySuccess') : "הטקסט הועתק ללוח בהצלחה"), "success")
         }).catch(() => {
-          showToast((window.I18N ? window.I18N.t('copySuccess') : "הטקסט הועתק ללוח בהצלחה"), "success")
+          showToast((window.I18N ? window.I18N.t('copyError') : "שגיאה בהעתקה"), "error")
         })
       })
+
+      // Edit mode toggle button
+      document.getElementById('viewer-edit-toggle-btn').addEventListener('click', async () => {
+        if (!currentViewerData || !currentViewerData.results) return
+        
+        if (isEditMode) {
+          // Save edits
+          await saveEdits()
+          exitEditMode()
+        } else {
+          // Enter edit mode
+          enterEditMode()
+        }
+      })
+
+      function enterEditMode() {
+        isEditMode = true
+        const editBtn = document.getElementById('viewer-edit-toggle-btn')
+        const viewModeBtn = document.getElementById('viewer-edit-mode-toggle')
+        
+        // Pause audio if playing
+        const audioPlayer = document.getElementById('viewer-audio-player')
+        if (audioPlayer && !audioPlayer.paused) {
+          audioPlayer.pause()
+        }
+        
+        // Change button to save icon
+        editBtn.innerHTML = '<i data-lucide="save"></i>'
+        editBtn.title = 'שמור'
+        editBtn.classList.add('toggle-active')
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons()
+        }
+        
+        // Show view mode toggle button
+        viewModeBtn.style.display = 'inline-block'
+        updateViewModeButtonUI()
+        
+        // Add edit mode class to transcription container for styling
+        const transcriptionDiv = document.getElementById('viewer-transcription')
+        if (transcriptionDiv) {
+          transcriptionDiv.classList.add('edit-mode-active')
+        }
+        
+        // Make segments editable
+        updateViewerTranscriptionDisplay()
+      }
+
+      function exitEditMode() {
+        isEditMode = false
+        currentEditingSegmentIndex = -1
+        const editBtn = document.getElementById('viewer-edit-toggle-btn')
+        const viewModeBtn = document.getElementById('viewer-edit-mode-toggle')
+        
+        // Change button back to pen icon
+        editBtn.innerHTML = '<i data-lucide="pen"></i>'
+        editBtn.title = 'ערוך'
+        editBtn.classList.remove('toggle-active')
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons()
+        }
+        
+        // Remove edit mode class from transcription container
+        const transcriptionDiv = document.getElementById('viewer-transcription')
+        if (transcriptionDiv) {
+          transcriptionDiv.classList.remove('edit-mode-active')
+        }
+        
+        // Hide view mode toggle button if no edits exist
+        if (Object.keys(currentEdits).length === 0) {
+          viewModeBtn.style.display = 'none'
+        }
+        
+        // Refresh display
+        updateViewerTranscriptionDisplay()
+      }
+
+      // View mode toggle (original/compared/new)
+      document.getElementById('viewer-edit-mode-toggle').addEventListener('click', () => {
+        // Cycle through modes: new -> compared -> original -> new
+        if (editModeView === 'new') {
+          editModeView = 'compared'
+        } else if (editModeView === 'compared') {
+          editModeView = 'original'
+        } else {
+          editModeView = 'new'
+        }
+        
+        updateViewModeButtonUI()
+        updateViewerTranscriptionDisplay()
+      })
+
+      function updateViewModeButtonUI() {
+        const btn = document.getElementById('viewer-edit-mode-toggle')
+        if (editModeView === 'original') {
+          btn.title = 'מקור'
+          btn.innerHTML = '<i data-lucide="file-text"></i>'
+        } else if (editModeView === 'compared') {
+          btn.title = 'השוואה'
+          btn.innerHTML = '<i data-lucide="git-compare"></i>'
+        } else {
+          btn.title = 'חדש'
+          btn.innerHTML = '<i data-lucide="eye"></i>'
+        }
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons()
+        }
+      }
+
+      async function saveEdits() {
+        if (!currentViewerEntry || !currentViewerData) return
+        
+        if (Object.keys(currentEdits).length === 0 && 
+            Object.keys(speakerNameMappings).length === 0 && 
+            Object.keys(speakerSegmentSwaps).length === 0) {
+          showToast("אין שינויים לשמירה", "info")
+          return
+        }
+        
+        try {
+          const response = await fetch(`/appdata/edits/${currentViewerEntry.results_id}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              edits: currentEdits,
+              speakerNames: speakerNameMappings,
+              speakerSwaps: speakerSegmentSwaps
+            })
+          })
+          
+          if (response.ok) {
+            showToast("השינויים נשמרו בהצלחה", "success")
+          } else {
+            throw new Error('Failed to save edits')
+          }
+        } catch (error) {
+          console.error('Error saving edits:', error)
+          showToast("שגיאה בשמירת השינויים", "error")
+        }
+      }
+
+      async function loadEdits(uuid) {
+        try {
+          const response = await fetch(`/appdata/edits/${uuid}`)
+          if (response.ok) {
+            const data = await response.json()
+            currentEdits = data.edits || {}
+            speakerNameMappings = data.speakerNames || {}
+            speakerSegmentSwaps = data.speakerSwaps || {}
+            
+            // Show view mode button if edits exist
+            if (Object.keys(currentEdits).length > 0) {
+              document.getElementById('viewer-edit-mode-toggle').style.display = 'inline-block'
+              updateViewModeButtonUI()
+            }
+          } else if (response.status === 404) {
+            // No edits file exists yet
+            currentEdits = {}
+            speakerNameMappings = {}
+            speakerSegmentSwaps = {}
+          }
+        } catch (error) {
+          console.error('Error loading edits:', error)
+          currentEdits = {}
+          speakerNameMappings = {}
+          speakerSegmentSwaps = {}
+        }
+      }
 
       function getPlainTextFromSegmentsForViewer(segments) {
         let result
@@ -5384,25 +6167,33 @@
       document.getElementById('viewer-menu-json').addEventListener('click', () => {
         if (!currentViewerData) return
         const fileName = document.getElementById('viewer-file-name').textContent
-        downloadInFormat(currentViewerData.results, fileName, 'json', currentViewerLanguage)
+        // Download with all edits applied
+        const effectiveSegments = getEffectiveTranscriptionData()
+        downloadInFormat(effectiveSegments, fileName, 'json', currentViewerLanguage)
       })
       
       document.getElementById('viewer-menu-vtt').addEventListener('click', () => {
         if (!currentViewerData) return
         const fileName = document.getElementById('viewer-file-name').textContent
-        downloadInFormat(currentViewerData.results, fileName, 'vtt', currentViewerLanguage)
+        // Download with all edits applied
+        const effectiveSegments = getEffectiveTranscriptionData()
+        downloadInFormat(effectiveSegments, fileName, 'vtt', currentViewerLanguage)
       })
       
       document.getElementById('viewer-menu-srt').addEventListener('click', () => {
         if (!currentViewerData) return
         const fileName = document.getElementById('viewer-file-name').textContent
-        downloadInFormat(currentViewerData.results, fileName, 'srt', currentViewerLanguage)
+        // Download with all edits applied
+        const effectiveSegments = getEffectiveTranscriptionData()
+        downloadInFormat(effectiveSegments, fileName, 'srt', currentViewerLanguage)
       })
       
       document.getElementById('viewer-menu-docx').addEventListener('click', () => {
         if (!currentViewerData) return
         const fileName = document.getElementById('viewer-file-name').textContent
-        downloadInFormat(currentViewerData.results, fileName, 'docx', currentViewerLanguage)
+        // Download with all edits applied
+        const effectiveSegments = getEffectiveTranscriptionData()
+        downloadInFormat(effectiveSegments, fileName, 'docx', currentViewerLanguage)
       })
 
       // ========== MICROPHONE RECORDING FUNCTIONALITY ==========

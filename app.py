@@ -1150,6 +1150,93 @@ async def get_transcription_results(results_id: str, request: Request):
     )
 
 
+@app.get("/appdata/edits/{results_id}", dependencies=[Depends(require_google_login)])
+async def get_edits(results_id: str, request: Request):
+    """Get edit data for a transcription by UUID."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_email = get_user_email(request)
+    
+    if not in_local_mode and not refresh_token:
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
+    
+    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    
+    # Find the edits file
+    filename = f"{results_id}.edits.json"
+    file_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
+    
+    if not file_id:
+        return JSONResponse({"error": "errorEditsNotFound", "i18n_key": "errorEditsNotFound"}, status_code=404)
+    
+    # Download file as bytes
+    file_content = await file_storage_backend.download_file_bytes(file_id, user_identifier)
+    
+    if file_content is None:
+        return JSONResponse({"error": "errorEditsDownloadFailed", "i18n_key": "errorEditsDownloadFailed"}, status_code=500)
+    
+    # Return JSON data
+    from fastapi.responses import Response
+    return Response(
+        content=file_content,
+        media_type="application/json",
+        headers={
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
+@app.post("/appdata/edits/{results_id}", dependencies=[Depends(require_google_login)])
+async def save_edits(results_id: str, request: Request):
+    """Save edit data for a transcription by UUID."""
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_email = get_user_email(request)
+    
+    if not in_local_mode and not refresh_token:
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
+    
+    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    
+    # Get the edits data from request body
+    try:
+        body = await request.json()
+        edits = body.get("edits", {})
+        speaker_names = body.get("speakerNames", {})
+        speaker_swaps = body.get("speakerSwaps", {})
+    except Exception as e:
+        logger.error(f"Failed to parse edits data: {e}")
+        return JSONResponse({"error": "errorInvalidData", "i18n_key": "errorInvalidData"}, status_code=400)
+    
+    # Serialize edits to JSON bytes
+    import json
+    edits_json = json.dumps({
+        "edits": edits, 
+        "speakerNames": speaker_names,
+        "speakerSwaps": speaker_swaps
+    }, ensure_ascii=False)
+    file_data = edits_json.encode('utf-8')
+    mime_type = "application/json"
+    
+    # Find existing edits file
+    filename = f"{results_id}.edits.json"
+    existing_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
+    
+    success = False
+    if existing_id:
+        # Update existing file
+        success = await file_storage_backend.update_file(existing_id, file_data, mime_type, user_identifier, user_email)
+    else:
+        # Upload new file
+        file_id = await file_storage_backend.upload_file(filename, file_data, mime_type, user_identifier, user_email)
+        success = file_id is not None
+    
+    if success:
+        return JSONResponse({"success": True})
+    else:
+        return JSONResponse({"error": "errorEditsSaveFailed", "i18n_key": "errorEditsSaveFailed"}, status_code=500)
+
+
 @app.get("/appdata/audio/{results_id}", dependencies=[Depends(require_google_login)])
 async def get_audio_file(results_id: str, request: Request):
     """Download opus audio file by results_id UUID."""
@@ -1394,6 +1481,15 @@ async def delete_file(request: Request):
         json_file_id = await file_storage_backend.find_file_by_name(json_filename, user_identifier)
         if json_file_id:
             delete_success = await file_storage_backend.delete_file(json_file_id, user_identifier, user_email)
+            if not delete_success:
+                async with stats_lock:
+                    stats_gdrive_errors["delete"] += 1
+        
+        # Delete edits file if it exists
+        edits_filename = f"{results_id}.edits.json"
+        edits_file_id = await file_storage_backend.find_file_by_name(edits_filename, user_identifier)
+        if edits_file_id:
+            delete_success = await file_storage_backend.delete_file(edits_file_id, user_identifier, user_email)
             if not delete_success:
                 async with stats_lock:
                     stats_gdrive_errors["delete"] += 1
