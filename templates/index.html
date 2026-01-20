@@ -631,17 +631,15 @@
         text-decoration-color: var(--primary-color);
         text-underline-offset: 2px;
       }
-      .transcript-segment.edited {
-        background-color: rgba(255, 213, 79, 0.2);
-      }
       .transcript-segment.editing {
-        background-color: rgba(33, 150, 243, 0.2);
-      }
-      [data-theme="dark"] .transcript-segment.edited {
-        background-color: rgba(255, 213, 79, 0.15);
+        text-decoration: underline;
+        text-decoration-color: rgb(33, 150, 243);
+        text-decoration-thickness: 2px;
       }
       [data-theme="dark"] .transcript-segment.editing {
-        background-color: rgba(33, 150, 243, 0.15);
+        text-decoration: underline;
+        text-decoration-color: rgb(33, 150, 243);
+        text-decoration-thickness: 2px;
       }
       .action-buttons {
         display: flex;
@@ -4866,6 +4864,10 @@
           // Load edits if they exist
           await loadEdits(entry.results_id)
           
+          // Show view mode button (available in both edit and non-edit modes)
+          document.getElementById('viewer-edit-mode-toggle').style.display = 'inline-block'
+          updateViewModeButtonUI()
+          
           // Hide processing state if it was showing
           hideViewerProcessingState()
           pendingViewerFilename = null
@@ -5053,10 +5055,10 @@
         
         // Determine which data to use based on edit mode view
         let segments
-        if (isEditMode && editModeView === 'original') {
+        if (editModeView === 'original') {
           // Show original data without any edits
           segments = currentViewerData.results
-        } else if (isEditMode && editModeView === 'compared') {
+        } else if (editModeView === 'compared') {
           // Show effective data but getSegmentDisplayText will handle the comparison
           segments = currentViewerData.results
         } else {
@@ -5067,11 +5069,11 @@
         // Use same display logic as main transcription
         let result
         if (displaySettings.timestampFormat === "segments") {
-          result = formatWithTimecodesForSegments(segments, editModeView !== 'new' && isEditMode)
+          result = formatWithTimecodesForSegments(segments, editModeView !== 'new')
         } else {
           const continuousSeparator = displaySettings.textFormat === "continuous" ? " " : "<br>"
           const segmentSeparator = "<br>"
-          result = joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, true, editModeView !== 'new' && isEditMode)
+          result = joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, true, editModeView !== 'new')
         }
 
         result = result + "<br><br>" + (window.I18N ? window.I18N.t('transcriptFooter') : "תומלל באמצעות שירות התמלול של ivrit.ai")
@@ -5294,7 +5296,7 @@
             
             if (isEditMode) {
               // In edit mode, clicking a segment makes it editable
-              enterSegmentEditMode(segmentIndex)
+              enterSegmentEditMode(segmentIndex, e)
               e.stopPropagation()
             } else if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
               // In normal mode, clicking seeks audio
@@ -5328,24 +5330,55 @@
             const speakerId = `SPEAKER_${speakerNumber.padStart(2, '0')}`
             
             // Find the segment index by looking at the next sibling transcript-segment
-            let segmentIndex = -1
+            let firstSegmentIndex = -1
             const nextElement = label.nextElementSibling
             if (nextElement && nextElement.classList.contains('transcript-segment')) {
-              segmentIndex = parseInt(nextElement.dataset.segmentIndex)
+              firstSegmentIndex = parseInt(nextElement.dataset.segmentIndex)
             }
             
-            showSpeakerContextMenu(e.clientX, e.clientY, speakerId, segmentIndex)
+            // Find all consecutive segments with the same speaker
+            const segmentIndices = findConsecutiveSpeakerSegments(firstSegmentIndex, speakerId)
+            
+            showSpeakerContextMenu(e.clientX, e.clientY, speakerId, segmentIndices)
           })
         })
       }
 
+      /**
+       * Find all consecutive segment indices that belong to the same speaker block
+       */
+      function findConsecutiveSpeakerSegments(startIndex, speakerId) {
+        if (startIndex < 0 || !currentViewerData || !currentViewerData.results) {
+          return []
+        }
+        
+        const effectiveSegments = getEffectiveTranscriptionData()
+        const indices = []
+        
+        // Start from the given index and collect all consecutive segments with the same speaker
+        for (let i = startIndex; i < effectiveSegments.length; i++) {
+          const segment = effectiveSegments[i]
+          const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
+          
+          // Check if this segment belongs to the same speaker
+          if (segmentSpeaker === speakerId) {
+            indices.push(i)
+          } else {
+            // Speaker changed, stop here
+            break
+          }
+        }
+        
+        return indices
+      }
+
       let currentRenamingSpeakerId = null
-      let currentContextSegmentIndex = -1
+      let currentContextSegmentIndices = []
       
-      function showSpeakerContextMenu(x, y, speakerId, segmentIndex) {
+      function showSpeakerContextMenu(x, y, speakerId, segmentIndices) {
         const contextMenu = document.getElementById('speaker-context-menu')
         currentRenamingSpeakerId = speakerId
-        currentContextSegmentIndex = segmentIndex
+        currentContextSegmentIndices = segmentIndices
         
         // Populate speaker swap submenu
         populateSpeakerSwapSubmenu()
@@ -5402,7 +5435,7 @@
           
           item.addEventListener('click', (e) => {
             e.stopPropagation()
-            swapSegmentSpeaker(currentContextSegmentIndex, speakerId)
+            swapSegmentsSpeaker(currentContextSegmentIndices, speakerId)
             document.getElementById('speaker-context-menu').classList.remove('show')
           })
           
@@ -5422,22 +5455,41 @@
         input.focus()
       }
 
-      function swapSegmentSpeaker(segmentIndex, newSpeakerId) {
-        if (segmentIndex < 0 || !currentViewerData || !currentViewerData.results[segmentIndex]) {
-          console.error('Invalid segment index for speaker swap')
+      /**
+       * Swap speaker for multiple segments in a speaker block
+       */
+      function swapSegmentsSpeaker(segmentIndices, newSpeakerId) {
+        if (!segmentIndices || segmentIndices.length === 0) {
+          console.error('No segment indices provided for speaker swap')
           return
         }
         
-        const originalSpeaker = currentViewerData.results[segmentIndex].speakers?.[0]
-        
-        // If swapping back to original, remove the mapping
-        if (originalSpeaker === newSpeakerId) {
-          delete speakerSegmentSwaps[segmentIndex]
-          console.log(`Removed speaker swap for segment ${segmentIndex}`)
-        } else {
-          speakerSegmentSwaps[segmentIndex] = newSpeakerId
-          console.log(`Swapped segment ${segmentIndex} speaker to ${newSpeakerId}`)
+        if (!currentViewerData || !currentViewerData.results) {
+          console.error('No viewer data available')
+          return
         }
+        
+        let swappedCount = 0
+        let removedCount = 0
+        
+        segmentIndices.forEach(segmentIndex => {
+          if (segmentIndex < 0 || segmentIndex >= currentViewerData.results.length) {
+            return
+          }
+          
+          const originalSpeaker = currentViewerData.results[segmentIndex].speakers?.[0]
+          
+          // If swapping back to original, remove the mapping
+          if (originalSpeaker === newSpeakerId) {
+            delete speakerSegmentSwaps[segmentIndex]
+            removedCount++
+          } else {
+            speakerSegmentSwaps[segmentIndex] = newSpeakerId
+            swappedCount++
+          }
+        })
+        
+        console.log(`Speaker swap: ${swappedCount} segments swapped, ${removedCount} reverted to original`)
         
         // Refresh the display immediately
         updateViewerTranscriptionDisplay()
@@ -5473,7 +5525,7 @@
         updateViewerTranscriptionDisplay()
       }
 
-      function enterSegmentEditMode(segmentIndex) {
+      function enterSegmentEditMode(segmentIndex, clickEvent = null) {
         // Save current segment if editing another one
         if (currentEditingSegmentIndex !== -1 && currentEditingSegmentIndex !== segmentIndex) {
           saveCurrentEditingSegment()
@@ -5488,25 +5540,34 @@
         segment.classList.add('editing')
         segment.focus()
         
-        // Place cursor at beginning based on language direction
-        const rtlLangs = ['he', 'yi']
-        const isRTL = rtlLangs.includes(currentViewerLanguage)
-        
-        const range = document.createRange()
+        // Place cursor based on click position or at start if no click event
         const sel = window.getSelection()
         sel.removeAllRanges()
         
-        if (isRTL) {
-          // For RTL languages, place cursor at the end (which is visually the beginning)
-          range.selectNodeContents(segment)
-          range.collapse(false)
+        if (clickEvent) {
+          // Place cursor at click position
+          let range
+          if (document.caretRangeFromPoint) {
+            // Chrome, Safari
+            range = document.caretRangeFromPoint(clickEvent.clientX, clickEvent.clientY)
+          } else if (clickEvent.rangeParent) {
+            // Firefox
+            range = document.createRange()
+            range.setStart(clickEvent.rangeParent, clickEvent.rangeOffset)
+          }
+          
+          if (range) {
+            sel.addRange(range)
+          }
         } else {
-          // For LTR languages, place cursor at the start
-          range.setStart(segment, 0)
-          range.collapse(true)
+          // No click event - place cursor at start (e.g., keyboard navigation)
+          const range = document.createRange()
+          if (segment.firstChild) {
+            range.setStart(segment.firstChild, 0)
+            range.collapse(true)
+            sel.addRange(range)
+          }
         }
-        
-        sel.addRange(range)
       }
 
       function saveCurrentEditingSegment() {
@@ -5580,6 +5641,13 @@
       // Keyboard navigation for edit mode
       document.addEventListener('keydown', (e) => {
         if (!isEditMode || currentEditingSegmentIndex === -1) return
+        
+        // Enter key accepts the change and exits segment edit mode
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          saveCurrentEditingSegment()
+          return
+        }
         
         // Ctrl+Arrow for word navigation with segment boundary detection
         if (e.ctrlKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
@@ -5677,8 +5745,7 @@
                 const actualIndex = segments.indexOf(seg)
                 const displayText = useViewMode ? getSegmentDisplayText(seg, actualIndex) : seg.text.trim()
                 const editableAttr = isEditMode ? '' : ''
-                const editClass = currentEdits.hasOwnProperty(actualIndex) ? ' edited' : ''
-                return `<span class="transcript-segment${editClass}" data-start="${seg.start}" data-end="${seg.end}" data-segment-index="${actualIndex}"${editableAttr}>${displayText}</span>`
+                return `<span class="transcript-segment" data-start="${seg.start}" data-end="${seg.end}" data-segment-index="${actualIndex}"${editableAttr}>${displayText}</span>`
               }).join(separator)
             }
 
@@ -5718,9 +5785,8 @@
             // If using view mode (original/compared), use getSegmentDisplayText for comparison logic
             // Otherwise, just use the segment text directly (it already has edits applied from getEffectiveTranscriptionData)
             const displayText = useViewMode ? getSegmentDisplayText(segment, i) : segment.text.trim()
-            const editClass = currentEdits.hasOwnProperty(i) ? ' edited' : ''
             // Wrap in span with timing data for audio sync
-            segmentText = labelHTML + `<span class="transcript-segment${editClass}" data-start="${segment.start}" data-end="${segment.end}" data-segment-index="${i}">${displayText}</span>`
+            segmentText = labelHTML + `<span class="transcript-segment" data-start="${segment.start}" data-end="${segment.end}" data-segment-index="${i}">${displayText}</span>`
           } else {
             const displayText = useViewMode ? getSegmentDisplayText(segment, i) : segment.text.trim()
             segmentText = showSpeakerLabel 
@@ -5959,6 +6025,9 @@
         const editBtn = document.getElementById('viewer-edit-toggle-btn')
         const viewModeBtn = document.getElementById('viewer-edit-mode-toggle')
         
+        // Always set to 'new' view mode when entering edit mode
+        editModeView = 'new'
+        
         // Pause audio if playing
         const audioPlayer = document.getElementById('viewer-audio-player')
         if (audioPlayer && !audioPlayer.paused) {
@@ -6005,11 +6074,6 @@
         const transcriptionDiv = document.getElementById('viewer-transcription')
         if (transcriptionDiv) {
           transcriptionDiv.classList.remove('edit-mode-active')
-        }
-        
-        // Hide view mode toggle button if no edits exist
-        if (Object.keys(currentEdits).length === 0) {
-          viewModeBtn.style.display = 'none'
         }
         
         // Refresh display
@@ -6091,8 +6155,10 @@
             speakerNameMappings = data.speakerNames || {}
             speakerSegmentSwaps = data.speakerSwaps || {}
             
-            // Show view mode button if edits exist
-            if (Object.keys(currentEdits).length > 0) {
+            // Show view mode button if any edits exist (text, speaker names, or speaker swaps)
+            if (Object.keys(currentEdits).length > 0 || 
+                Object.keys(speakerNameMappings).length > 0 || 
+                Object.keys(speakerSegmentSwaps).length > 0) {
               document.getElementById('viewer-edit-mode-toggle').style.display = 'inline-block'
               updateViewModeButtonUI()
             }
@@ -6748,9 +6814,6 @@
           recordingTimerInterval = null
         }
       }
-
-      // Note: Recording is now automatically added to file list when stopped
-      // User can remove the file using the "Remove file" button in the file preview
 
       // ========== STATISTICS FUNCTIONALITY ==========
 

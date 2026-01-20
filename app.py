@@ -1163,7 +1163,7 @@ async def get_edits(results_id: str, request: Request):
     user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
     
     # Find the edits file
-    filename = f"{results_id}.edits.json"
+    filename = f"{results_id}.edits.json.gz"
     file_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
     
     if not file_id:
@@ -1175,10 +1175,17 @@ async def get_edits(results_id: str, request: Request):
     if file_content is None:
         return JSONResponse({"error": "errorEditsDownloadFailed", "i18n_key": "errorEditsDownloadFailed"}, status_code=500)
     
+    # Decompress the gzipped data
+    try:
+        decompressed_data = gzip.decompress(file_content)
+    except Exception as e:
+        logger.error(f"Failed to decompress edits file: {e}")
+        return JSONResponse({"error": "errorEditsDecompressionFailed", "i18n_key": "errorEditsDecompressionFailed"}, status_code=500)
+    
     # Return JSON data
     from fastapi.responses import Response
     return Response(
-        content=file_content,
+        content=decompressed_data,
         media_type="application/json",
         headers={
             "Cache-Control": "no-cache",
@@ -1208,18 +1215,19 @@ async def save_edits(results_id: str, request: Request):
         logger.error(f"Failed to parse edits data: {e}")
         return JSONResponse({"error": "errorInvalidData", "i18n_key": "errorInvalidData"}, status_code=400)
     
-    # Serialize edits to JSON bytes
+    # Serialize edits to JSON and compress with gzip
     import json
     edits_json = json.dumps({
         "edits": edits, 
         "speakerNames": speaker_names,
         "speakerSwaps": speaker_swaps
     }, ensure_ascii=False)
-    file_data = edits_json.encode('utf-8')
-    mime_type = "application/json"
+    json_data = edits_json.encode('utf-8')
+    file_data = gzip.compress(json_data)
+    mime_type = "application/gzip"
     
     # Find existing edits file
-    filename = f"{results_id}.edits.json"
+    filename = f"{results_id}.edits.json.gz"
     existing_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
     
     success = False
@@ -1486,7 +1494,7 @@ async def delete_file(request: Request):
                     stats_gdrive_errors["delete"] += 1
         
         # Delete edits file if it exists
-        edits_filename = f"{results_id}.edits.json"
+        edits_filename = f"{results_id}.edits.json.gz"
         edits_file_id = await file_storage_backend.find_file_by_name(edits_filename, user_identifier)
         if edits_file_id:
             delete_success = await file_storage_backend.delete_file(edits_file_id, user_identifier, user_email)
