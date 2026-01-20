@@ -7,6 +7,7 @@
     <title>תמלול בעזרת ivrit.ai</title>
     <script src="https://cdn.jsdelivr.net/npm/html-docx-js/dist/html-docx.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
       :root {
         --bg-color: #f5f5f5;
@@ -1518,6 +1519,85 @@
       .stats-footer-link:hover {
         text-decoration: underline;
       }
+      
+      /* Transcription Statistics Styles */
+      #transcription-stats {
+        margin: 0 0 0.75rem 0;
+        display: none;
+      }
+      #transcription-stats.show {
+        display: block;
+      }
+      .stats-toggle {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 0.5rem 0.75rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        transition: background 0.2s;
+        user-select: none;
+      }
+      .stats-toggle:hover {
+        background: var(--border-color);
+      }
+      .stats-toggle.expanded {
+        border-radius: 6px 6px 0 0;
+      }
+      .stats-toggle-icon {
+        transition: transform 0.2s;
+        font-size: 0.9rem;
+      }
+      .stats-toggle.expanded .stats-toggle-icon {
+        transform: rotate(90deg);
+      }
+      .stats-toggle-text {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text-color);
+      }
+      .stats-content {
+        display: none;
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-top: none;
+        border-radius: 0 0 6px 6px;
+        padding: 0.75rem;
+      }
+      .stats-content.show {
+        display: block;
+      }
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      .stat-card {
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 0.5rem 0.6rem;
+      }
+      .stat-label {
+        font-size: 0.75rem;
+        color: var(--text-color);
+        opacity: 0.7;
+        margin-bottom: 0.25rem;
+        line-height: 1.2;
+      }
+      .stat-value {
+        font-size: 1.1rem;
+        font-weight: bold;
+        color: var(--primary-color);
+      }
+      .chart-container {
+        position: relative;
+        height: 220px;
+        margin: 0.5rem 0;
+      }
     </style>
   </head>
   <body>
@@ -1761,6 +1841,54 @@
         </div>
 
         <div id="viewer-transcription-container">
+          <!-- Transcription Statistics -->
+          <div id="transcription-stats">
+            <div class="stats-toggle" id="stats-toggle">
+              <span class="stats-toggle-icon">▶</span>
+              <span class="stats-toggle-text" data-i18n="transcriptionStatistics">סטטיסטיקות תמלול</span>
+            </div>
+            <div class="stats-content" id="stats-content">
+              <div class="stats-grid">
+                <div class="stat-card">
+                  <div class="stat-label" data-i18n="totalTime">זמן כולל</div>
+                  <div class="stat-value" id="stat-total-time">--:--</div>
+                </div>
+                
+                <div class="stat-card">
+                  <div class="stat-label" data-i18n="totalWords">מילים</div>
+                  <div class="stat-value" id="stat-total-words">0</div>
+                </div>
+                
+                <div class="stat-card">
+                  <div class="stat-label" data-i18n="totalLetters">אותיות</div>
+                  <div class="stat-value" id="stat-total-letters">0</div>
+                </div>
+                
+                <div class="stat-card">
+                  <div class="stat-label" data-i18n="wordsPerMinute">מילים לדקה</div>
+                  <div class="stat-value" id="stat-wpm">0</div>
+                </div>
+                
+                <div class="stat-card">
+                  <div class="stat-label" data-i18n="lettersPerMinute">אותיות לדקה</div>
+                  <div class="stat-value" id="stat-lpm">0</div>
+                </div>
+                
+                <div class="stat-card">
+                  <div class="stat-label" data-i18n="avgTimeBetweenSpeakers">זמן ממוצע בין דוברים (שניות)</div>
+                  <div class="stat-value" id="stat-avg-gap">0.0</div>
+                </div>
+              </div>
+              
+              <div class="stat-card">
+                <div class="stat-label" data-i18n="speakerTimeDistribution">התפלגות זמן דיבור לפי דובר</div>
+                <div class="chart-container">
+                  <canvas id="speaker-time-chart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+          
           <div id="viewer-transcription" contenteditable="false"></div>
         </div>
         
@@ -4767,6 +4895,201 @@
         
         // Add click handlers to segments for seeking audio
         addSegmentClickHandlers()
+        
+        // Update transcription statistics
+        updateTranscriptionStatistics()
+      }
+      
+      // Calculate and display transcription statistics
+      let speakerTimeChart = null
+      
+      // Setup statistics toggle
+      document.addEventListener('DOMContentLoaded', () => {
+        const statsToggle = document.getElementById('stats-toggle')
+        const statsContent = document.getElementById('stats-content')
+        
+        if (statsToggle && statsContent) {
+          statsToggle.addEventListener('click', () => {
+            const isExpanded = statsToggle.classList.contains('expanded')
+            
+            if (isExpanded) {
+              statsToggle.classList.remove('expanded')
+              statsContent.classList.remove('show')
+            } else {
+              statsToggle.classList.add('expanded')
+              statsContent.classList.add('show')
+            }
+          })
+        }
+      })
+      
+      function updateTranscriptionStatistics() {
+        if (!currentViewerData || !currentViewerData.results) {
+          document.getElementById('transcription-stats').classList.remove('show')
+          return
+        }
+        
+        const segments = currentViewerData.results
+        if (segments.length === 0) {
+          document.getElementById('transcription-stats').classList.remove('show')
+          return
+        }
+        
+        // Calculate total time
+        const totalTime = segments[segments.length - 1].end
+        const totalMinutes = totalTime / 60
+        
+        // Calculate speaker times
+        const speakerTimes = {}
+        const speakerColors = {
+          'SPEAKER_01': '#2196F3',
+          'SPEAKER_02': '#4CAF50',
+          'SPEAKER_03': '#FF9800',
+          'SPEAKER_04': '#E91E63',
+          'SPEAKER_05': '#9C27B0',
+          'SPEAKER_06': '#F44336',
+          'SPEAKER_07': '#00BCD4',
+          'SPEAKER_08': '#8BC34A',
+          'SPEAKER_09': '#FFC107',
+          'SPEAKER_10': '#607D8B'
+        }
+        
+        segments.forEach(segment => {
+          const speaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : 'UNKNOWN'
+          const duration = segment.end - segment.start
+          speakerTimes[speaker] = (speakerTimes[speaker] || 0) + duration
+        })
+        
+        // Calculate gaps between different speakers
+        const gaps = []
+        for (let i = 0; i < segments.length - 1; i++) {
+          const currentSegment = segments[i]
+          const nextSegment = segments[i + 1]
+          
+          const currentSpeaker = currentSegment.speakers && currentSegment.speakers.length > 0 ? currentSegment.speakers[0] : null
+          const nextSpeaker = nextSegment.speakers && nextSegment.speakers.length > 0 ? nextSegment.speakers[0] : null
+          
+          // Only calculate gap if speakers are different
+          if (currentSpeaker !== nextSpeaker) {
+            const gap = nextSegment.start - currentSegment.end
+            if (gap >= 0) {
+              gaps.push(gap)
+            }
+          }
+        }
+        
+        // Calculate average gap
+        const avgGap = gaps.length > 0 ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0
+        
+        // Calculate word and letter counts
+        let totalWords = 0
+        let totalLetters = 0
+        
+        segments.forEach(segment => {
+          const text = segment.text.trim()
+          const words = text.split(/\s+/).filter(w => w.length > 0)
+          totalWords += words.length
+          totalLetters += text.replace(/\s/g, '').length
+        })
+        
+        // Calculate rates
+        const wpm = totalMinutes > 0 ? Math.round(totalWords / totalMinutes) : 0
+        const lpm = totalMinutes > 0 ? Math.round(totalLetters / totalMinutes) : 0
+        
+        // Update DOM
+        document.getElementById('stat-total-time').textContent = formatTimeForDisplay(totalTime)
+        document.getElementById('stat-total-words').textContent = totalWords.toLocaleString()
+        document.getElementById('stat-total-letters').textContent = totalLetters.toLocaleString()
+        document.getElementById('stat-wpm').textContent = wpm.toLocaleString()
+        document.getElementById('stat-lpm').textContent = lpm.toLocaleString()
+        document.getElementById('stat-avg-gap').textContent = avgGap.toFixed(2)
+        
+        // Create pie chart
+        const chartCanvas = document.getElementById('speaker-time-chart')
+        if (chartCanvas) {
+          // Destroy existing chart if it exists
+          if (speakerTimeChart) {
+            speakerTimeChart.destroy()
+          }
+          
+          const ctx = chartCanvas.getContext('2d')
+          const labels = []
+          const data = []
+          const colors = []
+          
+          Object.entries(speakerTimes).sort((a, b) => b[1] - a[1]).forEach(([speaker, time]) => {
+            let speakerLabel
+            if (speaker === 'UNKNOWN') {
+              speakerLabel = window.I18N ? window.I18N.t('unknownSpeaker') : 'לא ידוע'
+            } else {
+              const speakerNumber = parseInt(speaker.replace('SPEAKER_', ''), 10) || 0
+              speakerLabel = window.I18N ? window.I18N.t('speaker', {num: speakerNumber}) : 'דובר ' + speakerNumber
+            }
+            
+            labels.push(speakerLabel)
+            data.push(time)
+            colors.push(speakerColors[speaker] || '#999999')
+          })
+          
+          speakerTimeChart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+              labels: labels,
+              datasets: [{
+                data: data,
+                backgroundColor: colors,
+                borderWidth: 2,
+                borderColor: getComputedStyle(document.documentElement).getPropertyValue('--container-bg').trim()
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  position: 'right',
+                  labels: {
+                    color: getComputedStyle(document.documentElement).getPropertyValue('--text-color').trim(),
+                    font: {
+                      size: 11
+                    },
+                    generateLabels: function(chart) {
+                      const data = chart.data
+                      if (data.labels.length && data.datasets.length) {
+                        const dataset = data.datasets[0]
+                        const total = dataset.data.reduce((a, b) => a + b, 0)
+                        return data.labels.map((label, i) => {
+                          const value = dataset.data[i]
+                          const percentage = ((value / total) * 100).toFixed(1)
+                          return {
+                            text: label + ' (' + percentage + '%)',
+                            fillStyle: dataset.backgroundColor[i],
+                            hidden: false,
+                            index: i
+                          }
+                        })
+                      }
+                      return []
+                    }
+                  }
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function(context) {
+                      const label = context.label || ''
+                      const value = context.parsed || 0
+                      const percentage = ((value / totalTime) * 100).toFixed(1)
+                      return label + ': ' + formatTimeForDisplay(value) + ' (' + percentage + '%)'
+                    }
+                  }
+                }
+              }
+            }
+          })
+        }
+        
+        // Show the statistics section
+        document.getElementById('transcription-stats').classList.add('show')
       }
       
       // Add click handlers to transcript segments for audio seeking

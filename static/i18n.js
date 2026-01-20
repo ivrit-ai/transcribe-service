@@ -192,6 +192,16 @@
     errorInvalidFileSize: "Invalid file_size",
     tabStats: "סטטיסטיקות",
     statsForNerds: "סטטיסטיקות לחנונים",
+    transcriptionStatistics: "סטטיסטיקות תמלול",
+    totalTime: "זמן כולל",
+    totalWords: "מילים",
+    totalLetters: "אותיות",
+    wordsPerMinute: "מילים לדקה",
+    lettersPerMinute: "אותיות לדקה",
+    avgTimeBetweenSpeakers: "זמן ממוצע בין דוברים (שניות)",
+    medianTimeBetweenSpeakers: "זמן חציוני בין דוברים (שניות)",
+    speakerTimeDistribution: "התפלגות זמן דיבור לפי דובר",
+    unknownSpeaker: "לא ידוע",
   }
 
   const yi = {
@@ -387,6 +397,16 @@
     errorInvalidFileSize: "אומגילטיק file_size",
     tabStats: "סטאַטיסטיק",
     statsForNerds: "סטאַטיסטיק פֿאַר נערדס",
+    transcriptionStatistics: "טראַנסקריפּציע־סטאַטיסטיק",
+    totalTime: "געזאַמטע צײַט",
+    totalWords: "געזאַמטע ווערטער",
+    totalLetters: "געזאַמטע אותיות",
+    wordsPerMinute: "ווערטער פּער מינוט",
+    lettersPerMinute: "אותיות פּער מינוט",
+    avgTimeBetweenSpeakers: "דורכשניטלעכע צײַט צווישן רעדנדיקע (סעקונדן)",
+    medianTimeBetweenSpeakers: "מעדיאַנע צײַט צווישן רעדנדיקע (סעקונדן)",
+    speakerTimeDistribution: "צײַט־פֿאַרטיילונג פֿאַר רעדנדיקע",
+    unknownSpeaker: "ניט באַוואוסט",
   }
 
   const en = {
@@ -582,6 +602,16 @@
     errorInvalidFileSize: "Invalid file_size",
     tabStats: "Statistics",
     statsForNerds: "Stats for Nerds",
+    transcriptionStatistics: "Transcription Statistics",
+    totalTime: "Total Time",
+    totalWords: "Total Words",
+    totalLetters: "Total Letters",
+    wordsPerMinute: "Words Per Minute",
+    lettersPerMinute: "Letters Per Minute",
+    avgTimeBetweenSpeakers: "Average Time Between Speakers (seconds)",
+    medianTimeBetweenSpeakers: "Median Time Between Speakers (seconds)",
+    speakerTimeDistribution: "Speaker Time Distribution",
+    unknownSpeaker: "Unknown",
   }
 
   const resources = { he, yi, en }
