@@ -5639,6 +5639,166 @@
       }
 
       // Keyboard navigation for edit mode
+      // Helper function to get global text position
+      function getGlobalCursorPosition() {
+        const segment = document.querySelector(`.transcript-segment[data-segment-index="${currentEditingSegmentIndex}"]`)
+        if (!segment) return 0
+        
+        const sel = window.getSelection()
+        if (!sel.rangeCount) return 0
+        
+        const range = sel.getRangeAt(0)
+        
+        // Get cursor position within current segment
+        const preCaretRange = range.cloneRange()
+        preCaretRange.selectNodeContents(segment)
+        preCaretRange.setEnd(range.endContainer, range.endOffset)
+        const offsetInSegment = preCaretRange.toString().length
+        
+        // Add length of all previous segments (plus spaces between them)
+        let globalOffset = 0
+        const effectiveData = getEffectiveTranscriptionData()
+        for (let i = 0; i < currentEditingSegmentIndex && i < effectiveData.length; i++) {
+          const segmentText = currentEdits.hasOwnProperty(i) ? currentEdits[i] : effectiveData[i].text.trim()
+          globalOffset += segmentText.length
+          // Add 1 for the space after this segment
+          globalOffset += 1
+        }
+        
+        return globalOffset + offsetInSegment
+      }
+      
+      // Helper function to set cursor at global position
+      function setCursorAtGlobalPosition(globalPos) {
+        const effectiveData = getEffectiveTranscriptionData()
+        let currentPos = 0
+        let targetSegmentIndex = -1
+        let offsetInSegment = 0
+        
+        // Find which segment contains this global position
+        for (let i = 0; i < effectiveData.length; i++) {
+          const segmentText = currentEdits.hasOwnProperty(i) ? currentEdits[i] : effectiveData[i].text.trim()
+          const segmentLength = segmentText.length
+          
+          // Check if position is within this segment
+          if (currentPos + segmentLength > globalPos) {
+            targetSegmentIndex = i
+            offsetInSegment = globalPos - currentPos
+            break
+          }
+          
+          // Move past this segment
+          currentPos += segmentLength
+          
+          // Check if position is at the end of this segment or on the space after
+          if (i < effectiveData.length - 1) {
+            if (currentPos === globalPos) {
+              // Position is right at the end of this segment (before the space)
+              targetSegmentIndex = i
+              offsetInSegment = segmentLength
+              break
+            } else if (currentPos + 1 === globalPos) {
+              // Position is on the space after this segment - go to start of next segment
+              targetSegmentIndex = i + 1
+              offsetInSegment = 0
+              break
+            }
+            // Add 1 for the space after this segment
+            currentPos += 1
+          } else if (currentPos === globalPos) {
+            // At the end of the last segment
+            targetSegmentIndex = i
+            offsetInSegment = segmentLength
+            break
+          }
+        }
+        
+        // If position is beyond all segments, place at end of last segment
+        if (targetSegmentIndex === -1 && effectiveData.length > 0) {
+          targetSegmentIndex = effectiveData.length - 1
+          const lastSegmentText = currentEdits.hasOwnProperty(targetSegmentIndex) 
+            ? currentEdits[targetSegmentIndex] 
+            : effectiveData[targetSegmentIndex].text.trim()
+          offsetInSegment = lastSegmentText.length
+        }
+        
+        if (targetSegmentIndex === -1) return
+        
+        // Switch to target segment if different
+        if (targetSegmentIndex !== currentEditingSegmentIndex) {
+          saveCurrentEditingSegment()
+          currentEditingSegmentIndex = targetSegmentIndex
+          const segment = document.querySelector(`.transcript-segment[data-segment-index="${targetSegmentIndex}"]`)
+          if (!segment) return
+          
+          segment.contentEditable = 'true'
+          segment.classList.add('editing')
+          segment.focus()
+        }
+        
+        // Set cursor position within the segment
+        const segment = document.querySelector(`.transcript-segment[data-segment-index="${targetSegmentIndex}"]`)
+        if (!segment || !segment.firstChild) return
+        
+        const range = document.createRange()
+        const sel = window.getSelection()
+        sel.removeAllRanges()
+        
+        // Clamp offset to valid range
+        const maxOffset = segment.firstChild.textContent ? segment.firstChild.textContent.length : 0
+        offsetInSegment = Math.min(Math.max(0, offsetInSegment), maxOffset)
+        
+        range.setStart(segment.firstChild, offsetInSegment)
+        range.collapse(true)
+        sel.addRange(range)
+      }
+      
+      // Helper function to find next word boundary
+      function findNextWordBoundary(text, position, direction) {
+        if (direction > 0) {
+          // Moving right - find start of next word
+          let pos = position
+          
+          // If we're in a word, skip to end of current word
+          if (pos < text.length && /\S/.test(text[pos])) {
+            while (pos < text.length && /\S/.test(text[pos])) {
+              pos++
+            }
+          }
+          
+          // Skip whitespace to find start of next word
+          while (pos < text.length && /\s/.test(text[pos])) {
+            pos++
+          }
+          
+          return pos
+        } else {
+          // Moving left - find start of current or previous word
+          let pos = position
+          
+          // Check if we're currently in the middle of a word
+          const inMiddleOfWord = pos > 0 && pos < text.length && 
+                                 /\S/.test(text[pos - 1]) && /\S/.test(text[pos])
+          
+          if (inMiddleOfWord) {
+            // If in middle of word, go to start of current word
+            while (pos > 0 && /\S/.test(text[pos - 1])) {
+              pos--
+            }
+          } else {
+            // Otherwise, skip whitespace then go to start of previous word
+            while (pos > 0 && /\s/.test(text[pos - 1])) {
+              pos--
+            }
+            while (pos > 0 && /\S/.test(text[pos - 1])) {
+              pos--
+            }
+          }
+          
+          return pos
+        }
+      }
+
       document.addEventListener('keydown', (e) => {
         if (!isEditMode || currentEditingSegmentIndex === -1) return
         
@@ -5649,63 +5809,53 @@
           return
         }
         
-        // Ctrl+Arrow for word navigation with segment boundary detection
-        if (e.ctrlKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-          const segment = document.querySelector(`.transcript-segment[data-segment-index="${currentEditingSegmentIndex}"]`)
-          if (!segment) return
-          
-          const sel = window.getSelection()
-          if (!sel.rangeCount) return
-          
-          const range = sel.getRangeAt(0)
-          const segmentText = segment.textContent || ''
-          
-          // Calculate absolute cursor position in segment
-          const preCaretRange = range.cloneRange()
-          preCaretRange.selectNodeContents(segment)
-          preCaretRange.setEnd(range.endContainer, range.endOffset)
-          const cursorOffset = preCaretRange.toString().length
-          
-          const isAtStart = cursorOffset === 0
-          const isAtEnd = cursorOffset === segmentText.length
-          
-          // Check if we're at segment boundary and should move to next/prev segment
+        // Arrow navigation (regular and Ctrl+Arrow for word jumps)
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           const rtlLangs = ['he', 'yi']
           const isRTL = rtlLangs.includes(currentViewerLanguage)
           
-          let shouldMoveSegment = false
-          let direction = 0
-          
+          // Determine logical direction (independent of RTL/LTR)
+          let logicalDirection = 0
           if (isRTL) {
-            // In RTL, left arrow at end means next segment, right arrow at start means previous
-            if (e.key === 'ArrowLeft' && isAtEnd) {
-              shouldMoveSegment = true
-              direction = 1
-            } else if (e.key === 'ArrowRight' && isAtStart) {
-              shouldMoveSegment = true
-              direction = -1
-            }
+            // In RTL: left=forward, right=backward
+            logicalDirection = e.key === 'ArrowLeft' ? 1 : -1
           } else {
-            // In LTR, left arrow at start means previous segment, right arrow at end means next
-            if (e.key === 'ArrowLeft' && isAtStart) {
-              shouldMoveSegment = true
-              direction = -1
-            } else if (e.key === 'ArrowRight' && isAtEnd) {
-              shouldMoveSegment = true
-              direction = 1
+            // In LTR: right=forward, left=backward
+            logicalDirection = e.key === 'ArrowRight' ? 1 : -1
+          }
+          
+          // Get current global position
+          const currentGlobalPos = getGlobalCursorPosition()
+          
+          // Build full text for word boundary detection (with spaces between segments)
+          const effectiveData = getEffectiveTranscriptionData()
+          let fullText = ''
+          for (let i = 0; i < effectiveData.length; i++) {
+            const segmentText = currentEdits.hasOwnProperty(i) ? currentEdits[i] : effectiveData[i].text.trim()
+            fullText += segmentText
+            // Add space after segment (except for the last one)
+            if (i < effectiveData.length - 1) {
+              fullText += ' '
             }
           }
           
-          if (shouldMoveSegment) {
-            e.preventDefault()
-            saveCurrentEditingSegment()
-            
-            const nextIndex = currentEditingSegmentIndex + direction
-            if (nextIndex >= 0 && nextIndex < currentViewerData.results.length) {
-              enterSegmentEditMode(nextIndex)
-            }
+          let newGlobalPos
+          if (e.ctrlKey) {
+            // Word jump
+            newGlobalPos = findNextWordBoundary(fullText, currentGlobalPos, logicalDirection)
+          } else {
+            // Character jump
+            newGlobalPos = currentGlobalPos + logicalDirection
           }
-          // Otherwise, let the browser handle word navigation naturally
+          
+          // Clamp to valid range
+          newGlobalPos = Math.max(0, Math.min(fullText.length, newGlobalPos))
+          
+          // Only move if position actually changed
+          if (newGlobalPos !== currentGlobalPos) {
+            e.preventDefault()
+            setCursorAtGlobalPosition(newGlobalPos)
+          }
         } else if (e.key === 'Escape') {
           // Escape to exit segment editing
           e.preventDefault()
