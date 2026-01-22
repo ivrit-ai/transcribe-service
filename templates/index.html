@@ -4758,11 +4758,9 @@
                   const start = parseFloat(segmentEl.dataset.start)
                   const audioPlayer = document.getElementById('viewer-audio-player')
                   
-                  if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
+                  // Only seek if audio is already playing
+                  if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc && !audioPlayer.paused) {
                     audioPlayer.currentTime = start
-                    audioPlayer.play().catch(err => {
-                      console.log('Play failed:', err)
-                    })
                     // Don't prevent default or stop propagation - let the editor handle cursor positioning
                   }
                 }
