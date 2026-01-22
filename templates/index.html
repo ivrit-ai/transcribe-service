@@ -631,15 +631,140 @@
         text-decoration-color: var(--primary-color);
         text-underline-offset: 2px;
       }
+      /* In edit mode, show text cursor on hover */
+      .edit-mode-active .transcript-segment {
+        cursor: text;
+      }
       .transcript-segment.editing {
         text-decoration: underline;
         text-decoration-color: rgb(33, 150, 243);
         text-decoration-thickness: 2px;
+        outline: none;
+        border: none;
+        box-shadow: none;
       }
       [data-theme="dark"] .transcript-segment.editing {
         text-decoration: underline;
         text-decoration-color: rgb(33, 150, 243);
         text-decoration-thickness: 2px;
+        outline: none;
+        border: none;
+        box-shadow: none;
+      }
+      /* Remove any default contentEditable outline/border */
+      .transcript-segment[contenteditable="true"]:focus {
+        outline: none;
+        border: none;
+        box-shadow: none;
+      }
+      /* Speaker edit area styling */
+      .speaker-edit-area {
+        display: inline;
+        outline: none;
+        border: none;
+        box-shadow: none;
+        cursor: text;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        direction: ltr !important;
+        unicode-bidi: plaintext;
+      }
+      .speaker-edit-area:focus {
+        outline: none;
+        border: none;
+        box-shadow: none;
+      }
+      .speaker-edit-area.highlighted {
+        background-color: rgba(255, 193, 7, 0.3);
+        border-radius: 2px;
+        padding: 2px 4px;
+        margin: -2px -4px;
+      }
+      [data-theme="dark"] .speaker-edit-area.highlighted {
+        background-color: rgba(255, 193, 7, 0.2);
+      }
+      /* Individual segment spans within edit areas */
+      .edit-segment {
+        display: inline;
+        cursor: text;
+      }
+      .edit-segment.highlighted {
+        background-color: rgba(255, 193, 7, 0.3);
+        border-radius: 2px;
+        padding: 0px 2px;
+      }
+      [data-theme="dark"] .edit-segment.highlighted {
+        background-color: rgba(255, 193, 7, 0.2);
+      }
+      /* TipTap Editor Styles */
+      .tiptap-editor {
+        outline: none;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        line-height: 1.6;
+      }
+      .tiptap-editor[dir="rtl"] {
+        direction: rtl;
+        text-align: right;
+      }
+      .tiptap-editor[dir="ltr"] {
+        direction: ltr;
+        text-align: left;
+      }
+      .tiptap-editor:focus {
+        outline: none;
+      }
+      .tiptap-editor .ProseMirror {
+        outline: none;
+      }
+      .tiptap-editor .ProseMirror:focus {
+        outline: none;
+      }
+      .tiptap-speaker-block {
+        display: block;
+      }
+      .tiptap-speaker-block + .tiptap-speaker-block {
+        margin-top: 1.2em;
+      }
+      .tiptap-segment {
+        display: inline;
+        cursor: text;
+      }
+      .tiptap-segment.highlighted {
+        background-color: rgba(255, 193, 7, 0.3);
+        border-radius: 2px;
+        padding: 0px 2px;
+      }
+      [data-theme="dark"] .tiptap-segment.highlighted {
+        background-color: rgba(255, 193, 7, 0.2);
+      }
+      .tiptap-segment.underlined {
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
+        text-decoration-color: rgba(255, 193, 7, 0.8);
+      }
+      .tiptap-segment.playing {
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
+        text-decoration-color: var(--primary-color);
+        text-underline-offset: 2px;
+      }
+      /* Speaker label in TipTap - styled but not editable */
+      .tiptap-editor [data-speaker-label] {
+        cursor: pointer;
+        user-select: none;
+      }
+      .tiptap-editor [data-speaker-label]:hover {
+        text-decoration: underline;
+      }
+      .transcript-segment.highlighted {
+        background-color: rgba(255, 193, 7, 0.3);
+        border-radius: 2px;
+        padding: 2px 4px;
+        margin: -2px -4px;
+      }
+      [data-theme="dark"] .transcript-segment.highlighted {
+        background-color: rgba(255, 193, 7, 0.2);
       }
       .action-buttons {
         display: flex;
@@ -1902,6 +2027,10 @@
               <button id="viewer-edit-toggle-btn" title="ערוך" aria-label="ערוך">
                 <i data-lucide="pen"></i>
               </button>
+              
+              <button id="viewer-save-edit-btn" title="שמור" aria-label="שמור" style="display: none;">
+                <i data-lucide="save"></i>
+              </button>
 
               <button id="viewer-copy-btn" data-i18n-title="copyText">
                 <i data-lucide="copy"></i>
@@ -2246,6 +2375,16 @@
       </div>
     </div>
 
+    <!-- Segment Context Menu -->
+    <div id="segment-context-menu" class="context-menu">
+      <div class="context-menu-item has-submenu" id="segment-speaker-option">
+        החלף דובר
+        <div class="context-submenu" id="segment-speaker-submenu">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+
     <!-- Speaker Rename Modal -->
     <div id="speaker-rename-modal" class="modal">
       <div class="modal-content">
@@ -2270,6 +2409,33 @@
     </div>
 
     <script src="{{ url_for('static', path='i18n.js') }}"></script>
+    
+    <!-- TipTap Editor Module -->
+    <script type="module">
+      import { Editor, Node, mergeAttributes } from 'https://esm.sh/@tiptap/core@2.11.5'
+      import Document from 'https://esm.sh/@tiptap/extension-document@2.11.5'
+      import Paragraph from 'https://esm.sh/@tiptap/extension-paragraph@2.11.5'
+      import Text from 'https://esm.sh/@tiptap/extension-text@2.11.5'
+      import History from 'https://esm.sh/@tiptap/extension-history@2.11.5'
+      import { Plugin, PluginKey } from 'https://esm.sh/@tiptap/pm@2.11.5/state'
+      
+      // Export to window for use in non-module scripts
+      window.TipTap = {
+        Editor,
+        Node,
+        mergeAttributes,
+        Document,
+        Paragraph,
+        Text,
+        History,
+        Plugin,
+        PluginKey
+      }
+      
+      // Signal that TipTap is loaded
+      window.dispatchEvent(new Event('tiptap-loaded'))
+    </script>
+    
     <script>
       // Heartbeat interval for local mode auto-shutdown
       const HEARTBEAT_INTERVAL_MS = 60 * 1000  // 60 seconds
@@ -4431,6 +4597,389 @@
       let speakerNameMappings = {} // Map of SPEAKER_XX to custom names
       let speakerSegmentSwaps = {} // Map of segment index to new SPEAKER_XX
       
+      // TipTap editor instance
+      let tiptapEditor = null
+      let tiptapReady = false
+      
+      // TipTap extensions (initialized when TipTap loads)
+      let SpeakerLabelExtension = null
+      let SegmentExtension = null
+      let SpeakerBlockExtension = null
+      let ContextMenuPlugin = null
+      
+      // Initialize TipTap extensions when loaded
+      function initTipTapExtensions() {
+        if (!window.TipTap) return
+        
+        const { Node, mergeAttributes, Plugin, PluginKey } = window.TipTap
+        
+        // Custom Node: SpeakerLabel (non-editable, atomic)
+        SpeakerLabelExtension = Node.create({
+          name: 'speakerLabel',
+          group: 'inline',
+          inline: true,
+          atom: true,
+          selectable: false,
+          draggable: false,
+          
+          addAttributes() {
+            return {
+              speakerId: { default: null },
+              speakerNumber: { default: 0 },
+              segmentIndices: { default: '' },
+            }
+          },
+          
+          parseHTML() {
+            return [{
+              tag: 'span[data-speaker-label]',
+            }]
+          },
+          
+          renderHTML({ node, HTMLAttributes }) {
+            const speakerNumber = node.attrs.speakerNumber
+            const label = translateSpeakerLabelText(currentViewerLanguage, speakerNumber)
+            return ['span', mergeAttributes(HTMLAttributes, {
+              'data-speaker-label': 'true',
+              'data-speaker-id': node.attrs.speakerId,
+              'data-speaker-number': speakerNumber,
+              'data-segment-indices': node.attrs.segmentIndices,
+              'class': `speaker speaker-${speakerNumber}`,
+              'contenteditable': 'false',
+            }), `${label}: `]
+          },
+        })
+        
+        // Custom Node: Segment (editable text wrapper)
+        SegmentExtension = Node.create({
+          name: 'segment',
+          group: 'inline',
+          inline: true,
+          content: 'text*',
+          
+          addAttributes() {
+            return {
+              index: { default: -1 },
+              start: { default: 0 },
+              end: { default: 0 },
+            }
+          },
+          
+          parseHTML() {
+            return [{
+              tag: 'span[data-segment]',
+            }]
+          },
+          
+          renderHTML({ node, HTMLAttributes }) {
+            return ['span', mergeAttributes(HTMLAttributes, {
+              'data-segment': 'true',
+              'data-segment-index': node.attrs.index,
+              'data-start': node.attrs.start,
+              'data-end': node.attrs.end,
+              'class': 'tiptap-segment',
+            }), 0]
+          },
+        })
+        
+        // Custom Node: SpeakerBlock (block container for speaker group)
+        SpeakerBlockExtension = Node.create({
+          name: 'speakerBlock',
+          group: 'block',
+          content: 'inline*',
+          
+          addAttributes() {
+            return {
+              speakerId: { default: null },
+              segmentIndices: { default: '' },
+            }
+          },
+          
+          parseHTML() {
+            return [{
+              tag: 'div[data-speaker-block]',
+            }]
+          },
+          
+          renderHTML({ node, HTMLAttributes }) {
+            return ['div', mergeAttributes(HTMLAttributes, {
+              'data-speaker-block': 'true',
+              'data-speaker-id': node.attrs.speakerId,
+              'data-segment-indices': node.attrs.segmentIndices,
+              'class': 'tiptap-speaker-block',
+            }), 0]
+          },
+        })
+        
+        // Plugin for context menu and click handlers on speaker labels and segments
+        ContextMenuPlugin = new Plugin({
+          key: new PluginKey('contextMenu'),
+          props: {
+            handleDOMEvents: {
+              contextmenu: (view, event) => {
+                const target = event.target
+                
+                // Check if right-clicked on a speaker label
+                if (target.closest('[data-speaker-label]')) {
+                  event.preventDefault()
+                  const labelEl = target.closest('[data-speaker-label]')
+                  const speakerId = labelEl.dataset.speakerId
+                  const segmentIndices = labelEl.dataset.segmentIndices.split(',').map(i => parseInt(i))
+                  
+                  currentRenamingSpeakerId = speakerId
+                  currentContextSegmentIndices = segmentIndices
+                  showSpeakerContextMenu(event.clientX, event.clientY, speakerId, segmentIndices)
+                  return true
+                }
+                
+                // Check if right-clicked on a segment
+                if (target.closest('[data-segment]')) {
+                  event.preventDefault()
+                  const segmentEl = target.closest('[data-segment]')
+                  const segmentIndex = parseInt(segmentEl.dataset.segmentIndex)
+                  
+                  // Underline the segment for visual feedback
+                  segmentEl.classList.add('underlined')
+                  currentTipTapHighlightedSegment = segmentEl
+                  
+                  // Show segment context menu
+                  showTipTapSegmentContextMenu(event.clientX, event.clientY, segmentIndex)
+                  return true
+                }
+                
+                return false
+              },
+              click: (view, event) => {
+                const target = event.target
+                
+                // Check if clicked on a segment (for audio playback)
+                const segmentEl = target.closest('[data-segment]')
+                if (segmentEl) {
+                  const start = parseFloat(segmentEl.dataset.start)
+                  const audioPlayer = document.getElementById('viewer-audio-player')
+                  
+                  if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
+                    audioPlayer.currentTime = start
+                    audioPlayer.play().catch(err => {
+                      console.log('Play failed:', err)
+                    })
+                    // Don't prevent default or stop propagation - let the editor handle cursor positioning
+                  }
+                }
+                
+                return false
+              }
+            }
+          }
+        })
+        
+        tiptapReady = true
+        console.log('TipTap extensions initialized')
+      }
+      
+      // Track highlighted segment for cleanup
+      let currentTipTapHighlightedSegment = null
+      
+      // Show context menu for a segment in TipTap editor
+      function showTipTapSegmentContextMenu(x, y, segmentIndex) {
+        const contextMenu = document.getElementById('segment-context-menu')
+        currentContextSegmentIndices = [segmentIndex]
+        
+        // Populate speaker submenu
+        populateSegmentSpeakerSubmenu(segmentIndex)
+        
+        // Position the menu
+        contextMenu.style.left = x + 'px'
+        contextMenu.style.top = y + 'px'
+        contextMenu.classList.add('show')
+        
+        // Hide menu when clicking outside
+        const hideMenu = (e) => {
+          if (!contextMenu.contains(e.target)) {
+            contextMenu.classList.remove('show')
+            document.removeEventListener('click', hideMenu)
+            
+            // Remove underline from segment
+            if (currentTipTapHighlightedSegment) {
+              currentTipTapHighlightedSegment.classList.remove('underlined')
+              currentTipTapHighlightedSegment.classList.remove('highlighted')
+              currentTipTapHighlightedSegment = null
+            }
+          }
+        }
+        setTimeout(() => {
+          document.addEventListener('click', hideMenu)
+        }, 0)
+      }
+      
+      // Wait for TipTap to load, then initialize extensions
+      if (window.TipTap) {
+        initTipTapExtensions()
+      } else {
+        window.addEventListener('tiptap-loaded', initTipTapExtensions)
+      }
+      
+      /**
+       * Convert segments array to TipTap JSON document format
+       * Groups consecutive segments by speaker and creates SpeakerBlock nodes
+       */
+      function buildTipTapContent(segments) {
+        if (!segments || segments.length === 0) {
+          return {
+            type: 'doc',
+            content: [{
+              type: 'paragraph',
+              content: [{ type: 'text', text: '' }]
+            }]
+          }
+        }
+        
+        const groups = groupSegmentsBySpeaker(segments)
+        const content = []
+        
+        for (const group of groups) {
+          const blockContent = []
+          
+          // Add speaker label node
+          const speakerNumber = parseInt((group.speaker || 'SPEAKER_00').replace('SPEAKER_', ''))
+          blockContent.push({
+            type: 'speakerLabel',
+            attrs: {
+              speakerId: group.speaker,
+              speakerNumber: speakerNumber,
+              segmentIndices: group.segments.join(','),
+            }
+          })
+          
+          // Add segment nodes with text
+          group.segments.forEach((idx, i) => {
+            const seg = segments[idx]
+            const text = seg.text.trim()
+            
+            // Add space before segment (except first)
+            if (i > 0) {
+              blockContent.push({ type: 'text', text: ' ' })
+            }
+            
+            blockContent.push({
+              type: 'segment',
+              attrs: {
+                index: idx,
+                start: seg.start,
+                end: seg.end,
+              },
+              content: text ? [{ type: 'text', text: text }] : []
+            })
+          })
+          
+          content.push({
+            type: 'speakerBlock',
+            attrs: {
+              speakerId: group.speaker,
+              segmentIndices: group.segments.join(','),
+            },
+            content: blockContent
+          })
+        }
+        
+        return {
+          type: 'doc',
+          content: content
+        }
+      }
+      
+      /**
+       * Create and initialize TipTap editor for edit mode
+       */
+      function createTipTapEditor(containerElement, segments) {
+        if (!tiptapReady || !window.TipTap) {
+          console.error('TipTap not ready')
+          return null
+        }
+        
+        const { Editor, Document, Paragraph, Text, History } = window.TipTap
+        
+        // Determine RTL/LTR based on language
+        const lang = currentViewerLanguage
+        const rtlLangs = ['he', 'yi']
+        const isRTL = rtlLangs.includes(lang)
+        const direction = isRTL ? 'rtl' : 'ltr'
+        
+        // Build content from segments
+        const content = buildTipTapContent(segments)
+        
+        // Create editor
+        const editor = new Editor({
+          element: containerElement,
+          extensions: [
+            Document,
+            Paragraph,
+            Text,
+            History,
+            SpeakerLabelExtension,
+            SegmentExtension,
+            SpeakerBlockExtension,
+          ],
+          content: content,
+          editorProps: {
+            attributes: {
+              class: 'tiptap-editor',
+              dir: direction,
+            },
+          },
+        })
+        
+        // Add the context menu plugin
+        editor.registerPlugin(ContextMenuPlugin)
+        
+        return editor
+      }
+      
+      /**
+       * Extract edits from TipTap editor content
+       */
+      function extractEditsFromTipTap() {
+        if (!tiptapEditor) return
+        
+        const json = tiptapEditor.getJSON()
+        
+        // Walk through speaker blocks and segments
+        if (json.content) {
+          json.content.forEach(block => {
+            if (block.type === 'speakerBlock' && block.content) {
+              block.content.forEach(node => {
+                if (node.type === 'segment') {
+                  const segmentIndex = node.attrs.index
+                  const editedText = node.content && node.content.length > 0 
+                    ? node.content.map(c => c.text || '').join('') 
+                    : ''
+                  
+                  // Get original text
+                  const originalText = currentViewerData.results[segmentIndex]?.text.trim() || ''
+                  
+                  // Store edit if changed
+                  if (editedText !== originalText) {
+                    currentEdits[segmentIndex] = editedText
+                  } else {
+                    delete currentEdits[segmentIndex]
+                  }
+                }
+              })
+            }
+          })
+        }
+      }
+      
+      /**
+       * Destroy TipTap editor instance
+       */
+      function destroyTipTapEditor() {
+        if (tiptapEditor) {
+          tiptapEditor.destroy()
+          tiptapEditor = null
+        }
+      }
+      
       // Pending file tracking for viewer processing state
       let pendingViewerFilename = null
       let pendingViewerLanguage = 'he'
@@ -4960,9 +5509,12 @@
           return
         }
         
+        // Determine the correct selector based on current mode
+        const segmentClass = isEditMode ? 'tiptap-segment' : 'transcript-segment'
+        
         // Clear previous playing segment
         if (currentPlayingSegmentIndex !== -1) {
-          const prevElement = document.querySelector(`.transcript-segment[data-segment-index="${currentPlayingSegmentIndex}"]`)
+          const prevElement = document.querySelector(`.${segmentClass}[data-segment-index="${currentPlayingSegmentIndex}"]`)
           if (prevElement) {
             prevElement.classList.remove('playing')
           }
@@ -4972,7 +5524,7 @@
         currentPlayingSegmentIndex = segmentIndex
         
         if (segmentIndex !== -1) {
-          const currentElement = document.querySelector(`.transcript-segment[data-segment-index="${segmentIndex}"]`)
+          const currentElement = document.querySelector(`.${segmentClass}[data-segment-index="${segmentIndex}"]`)
           if (currentElement) {
             currentElement.classList.add('playing')
             
@@ -5294,17 +5846,31 @@
             const segmentIndex = parseInt(segment.dataset.segmentIndex)
             const start = parseFloat(segment.dataset.start)
             
-            if (isEditMode) {
-              // In edit mode, clicking a segment makes it editable
-              enterSegmentEditMode(segmentIndex, e)
-              e.stopPropagation()
-            } else if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
-              // In normal mode, clicking seeks audio
+            if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
+              // Clicking seeks audio (not in edit mode since segments aren't shown)
               audioPlayer.currentTime = start
               audioPlayer.play().catch(err => {
                 console.log('Play failed:', err)
               })
             }
+          })
+        })
+        
+        // Add handlers for individual segments within edit areas
+        const editSegments = document.querySelectorAll('.edit-segment')
+        editSegments.forEach(segmentSpan => {
+          // Right-click handler for speaker modification
+          segmentSpan.addEventListener('contextmenu', (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            
+            const segmentIndex = parseInt(segmentSpan.dataset.segmentIndex)
+            
+            // Highlight only this segment
+            segmentSpan.classList.add('highlighted')
+            
+            // Show context menu for this single segment
+            showEditSegmentContextMenu(e.clientX, e.clientY, segmentIndex, segmentSpan)
           })
         })
         
@@ -5469,6 +6035,11 @@
           return
         }
         
+        // If TipTap is active, extract edits before swap (to preserve text changes)
+        if (tiptapEditor) {
+          extractEditsFromTipTap()
+        }
+        
         let swappedCount = 0
         let removedCount = 0
         
@@ -5491,8 +6062,156 @@
         
         console.log(`Speaker swap: ${swappedCount} segments swapped, ${removedCount} reverted to original`)
         
-        // Refresh the display immediately
-        updateViewerTranscriptionDisplay()
+        // Refresh the display - recreate TipTap if in edit mode with TipTap
+        if (isEditMode && tiptapEditor) {
+          // Destroy old editor
+          destroyTipTapEditor()
+          
+          // Recreate with updated data
+          const transcriptionDiv = document.getElementById('viewer-transcription')
+          transcriptionDiv.innerHTML = ''
+          const segments = getEffectiveTranscriptionData()
+          tiptapEditor = createTipTapEditor(transcriptionDiv, segments)
+        } else {
+          updateViewerTranscriptionDisplay()
+        }
+      }
+
+      /**
+       * Show context menu for a single segment
+       */
+      let currentContextSegmentIndex = -1
+      
+      function showSegmentContextMenu(x, y, segmentIndex) {
+        const contextMenu = document.getElementById('segment-context-menu')
+        currentContextSegmentIndex = segmentIndex
+        
+        // Populate speaker submenu
+        populateSegmentSpeakerSubmenu(segmentIndex)
+        
+        // Position the menu
+        contextMenu.style.left = x + 'px'
+        contextMenu.style.top = y + 'px'
+        contextMenu.classList.add('show')
+        
+        // Hide menu when clicking outside
+        const hideMenu = (e) => {
+          if (!contextMenu.contains(e.target)) {
+            contextMenu.classList.remove('show')
+            document.removeEventListener('click', hideMenu)
+            
+            // Remove highlight from segment
+            const segment = document.querySelector(`.transcript-segment[data-segment-index="${currentContextSegmentIndex}"]`)
+            if (segment) {
+              segment.classList.remove('highlighted')
+            }
+          }
+        }
+        setTimeout(() => {
+          document.addEventListener('click', hideMenu)
+        }, 0)
+      }
+
+      /**
+       * Show context menu for an individual edit segment
+       */
+      let currentEditSegmentElement = null
+      
+      function showEditSegmentContextMenu(x, y, segmentIndex, segmentElement) {
+        const contextMenu = document.getElementById('segment-context-menu')
+        currentContextSegmentIndices = [segmentIndex]
+        currentEditSegmentElement = segmentElement
+        
+        // Populate speaker submenu for this segment
+        populateSegmentSpeakerSubmenu(segmentIndex)
+        
+        // Position the menu
+        contextMenu.style.left = x + 'px'
+        contextMenu.style.top = y + 'px'
+        contextMenu.classList.add('show')
+        
+        // Hide menu when clicking outside
+        const hideMenu = (e) => {
+          if (!contextMenu.contains(e.target)) {
+            contextMenu.classList.remove('show')
+            document.removeEventListener('click', hideMenu)
+            
+            // Remove highlight from segment
+            if (currentEditSegmentElement) {
+              currentEditSegmentElement.classList.remove('highlighted')
+              currentEditSegmentElement = null
+            }
+          }
+        }
+        setTimeout(() => {
+          document.addEventListener('click', hideMenu)
+        }, 0)
+      }
+
+      /**
+       * Populate the speaker submenu for segment context menu
+       */
+      function populateSegmentSpeakerSubmenu(segmentIndex) {
+        if (!currentViewerData || !currentViewerData.results) return
+        
+        const submenu = document.getElementById('segment-speaker-submenu')
+        submenu.innerHTML = ''
+        
+        // Get current speaker for this segment
+        const effectiveSegments = getEffectiveTranscriptionData()
+        const currentSegmentSpeaker = effectiveSegments[segmentIndex]?.speakers?.[0]
+        
+        // Get all unique speakers from the effective transcription
+        const speakers = new Set()
+        effectiveSegments.forEach(segment => {
+          if (segment.speakers && segment.speakers.length > 0) {
+            speakers.add(segment.speakers[0])
+          }
+        })
+        
+        // Convert to sorted array
+        const speakerList = Array.from(speakers).sort()
+        
+        // Create submenu items
+        speakerList.forEach(speakerId => {
+          const speakerNumber = parseInt(speakerId.replace('SPEAKER_', ''))
+          const speakerLabel = translateSpeakerLabelText(currentViewerLanguage, speakerNumber)
+          
+          const item = document.createElement('div')
+          item.className = 'context-submenu-item'
+          item.textContent = speakerLabel
+          item.dataset.speakerId = speakerId
+          
+          // Highlight current speaker
+          if (speakerId === currentSegmentSpeaker) {
+            item.style.fontWeight = 'bold'
+          }
+          
+          item.addEventListener('click', (e) => {
+            e.stopPropagation()
+            // Swap speaker for this single segment or all segments in the context
+            const indices = currentContextSegmentIndices.length > 0 ? currentContextSegmentIndices : [segmentIndex]
+            swapSegmentsSpeaker(indices, speakerId)
+            document.getElementById('segment-context-menu').classList.remove('show')
+            
+            // Remove highlight and underline from edit segment (old contentEditable or TipTap)
+            if (currentEditSegmentElement) {
+              currentEditSegmentElement.classList.remove('highlighted')
+              currentEditSegmentElement = null
+            }
+            if (currentTipTapHighlightedSegment) {
+              currentTipTapHighlightedSegment.classList.remove('highlighted')
+              currentTipTapHighlightedSegment.classList.remove('underlined')
+              currentTipTapHighlightedSegment = null
+            }
+            const segment = document.querySelector(`.transcript-segment[data-segment-index="${segmentIndex}"]`)
+            if (segment) {
+              segment.classList.remove('highlighted')
+            }
+          })
+          
+          submenu.appendChild(item)
+        })
       }
 
       function saveSpeakerName() {
@@ -5521,8 +6240,20 @@
         // Close modal
         document.getElementById('speaker-rename-modal').classList.remove('show')
         
-        // Refresh the display immediately (this also updates statistics)
-        updateViewerTranscriptionDisplay()
+        // Refresh the display - recreate TipTap if in edit mode with TipTap
+        if (isEditMode && tiptapEditor) {
+          // Extract current text edits
+          extractEditsFromTipTap()
+          // Destroy old editor
+          destroyTipTapEditor()
+          // Recreate with updated data
+          const transcriptionDiv = document.getElementById('viewer-transcription')
+          transcriptionDiv.innerHTML = ''
+          const segments = getEffectiveTranscriptionData()
+          tiptapEditor = createTipTapEditor(transcriptionDiv, segments)
+        } else {
+          updateViewerTranscriptionDisplay()
+        }
       }
 
       function enterSegmentEditMode(segmentIndex, clickEvent = null) {
@@ -5799,8 +6530,12 @@
         }
       }
 
+      // Old keyboard navigation code - no longer needed with speaker edit areas
+      // Native contentEditable handles text selection, Ctrl+Arrow word jumping, etc.
       document.addEventListener('keydown', (e) => {
-        if (!isEditMode || currentEditingSegmentIndex === -1) return
+        // This handler is kept for potential future use but currently disabled
+        // since we're using native contentEditable behavior in speaker edit areas
+        if (false && !isEditMode || currentEditingSegmentIndex === -1) return
         
         // Enter key accepts the change and exits segment edit mode
         if (e.key === 'Enter') {
@@ -5916,6 +6651,39 @@
       }
 
 
+      /**
+       * Groups consecutive segments by speaker
+       * Returns array of groups, each with speaker ID and segment indices
+       */
+      function groupSegmentsBySpeaker(segments) {
+        if (!segments || segments.length === 0) return []
+        
+        const groups = []
+        let currentGroup = null
+        
+        for (let i = 0; i < segments.length; i++) {
+          const segment = segments[i]
+          const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
+          
+          if (!currentGroup || currentGroup.speaker !== segmentSpeaker) {
+            // Start new group
+            currentGroup = {
+              speaker: segmentSpeaker,
+              startIndex: i,
+              endIndex: i,
+              segments: [i]
+            }
+            groups.push(currentGroup)
+          } else {
+            // Continue current group
+            currentGroup.endIndex = i
+            currentGroup.segments.push(i)
+          }
+        }
+        
+        return groups
+      }
+
       function joinSegmentsWithSpeakerChangesForSegments(segments, continuousSeparator, segmentSeparator, isHTML = true, useViewMode = false) {
         if (!segments || segments.length === 0) return ""
         
@@ -5923,6 +6691,44 @@
         let currentSpeaker = null
         const diarizationEnabled = displaySettings.diarizationDisplay !== "disabled"
         
+        // In edit mode, create editable divs per speaker group
+        if (isEditMode && isHTML) {
+          const groups = groupSegmentsBySpeaker(segments)
+          
+          for (const group of groups) {
+            const showSpeakerLabel = diarizationEnabled && group.speaker !== currentSpeaker
+            
+            // Wrap each segment in a span for individual targeting
+            const segmentSpans = group.segments.map((idx, i) => {
+              const seg = segments[idx]
+              const text = seg.text.trim()
+              // Add space before segment (except first)
+              const space = i > 0 ? ' ' : ''
+              return `${space}<span class="edit-segment" data-segment-index="${idx}">${text}</span>`
+            }).join('')
+            
+            // Create speaker label if needed
+            const labelHTML = showSpeakerLabel ? getSpeakerLabelForLanguage(segments[group.startIndex], currentViewerLanguage) : ''
+            
+            // Create editable div for this speaker group
+            const segmentIndices = group.segments.join(',')
+            const editableDiv = `<div class="speaker-edit-area" contenteditable="true" data-segment-indices="${segmentIndices}" data-speaker="${group.speaker || ''}">${segmentSpans}</div>`
+            
+            if (result.length === 0) {
+              result.push(labelHTML + editableDiv)
+            } else if (showSpeakerLabel) {
+              result.push('<br><br>' + labelHTML + editableDiv)
+            } else {
+              result.push(continuousSeparator + editableDiv)
+            }
+            
+            currentSpeaker = group.speaker
+          }
+          
+          return result.join("")
+        }
+        
+        // Normal mode (not editing) - use original logic
         for (let i = 0; i < segments.length; i++) {
           const segment = segments[i]
           const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
@@ -5932,10 +6738,7 @@
           let segmentText
           if (isHTML) {
             const labelHTML = showSpeakerLabel ? getSpeakerLabelForLanguage(segment, currentViewerLanguage) : ''
-            // If using view mode (original/compared), use getSegmentDisplayText for comparison logic
-            // Otherwise, just use the segment text directly (it already has edits applied from getEffectiveTranscriptionData)
             const displayText = useViewMode ? getSegmentDisplayText(segment, i) : segment.text.trim()
-            // Wrap in span with timing data for audio sync
             segmentText = labelHTML + `<span class="transcript-segment" data-start="${segment.start}" data-end="${segment.end}" data-segment-index="${i}">${displayText}</span>`
           } else {
             const displayText = useViewMode ? getSegmentDisplayText(segment, i) : segment.text.trim()
@@ -6156,45 +6959,69 @@
         })
       })
 
-      // Edit mode toggle button
+      // Edit mode toggle button (becomes cancel in edit mode)
       document.getElementById('viewer-edit-toggle-btn').addEventListener('click', async () => {
         if (!currentViewerData || !currentViewerData.results) return
         
         if (isEditMode) {
-          // Save edits
-          await saveEdits()
-          exitEditMode()
+          // Cancel editing - exit without saving
+          exitEditMode(false)
         } else {
           // Enter edit mode
           enterEditMode()
         }
       })
+      
+      // Save edit button
+      document.getElementById('viewer-save-edit-btn').addEventListener('click', async () => {
+        if (!isEditMode) return
+        
+        // Save edits and exit
+        await saveEdits()
+        exitEditMode()
+      })
 
       function enterEditMode() {
         isEditMode = true
         const editBtn = document.getElementById('viewer-edit-toggle-btn')
+        const saveBtn = document.getElementById('viewer-save-edit-btn')
         const viewModeBtn = document.getElementById('viewer-edit-mode-toggle')
         
         // Always set to 'new' view mode when entering edit mode
         editModeView = 'new'
         
-        // Pause audio if playing
-        const audioPlayer = document.getElementById('viewer-audio-player')
-        if (audioPlayer && !audioPlayer.paused) {
-          audioPlayer.pause()
-        }
+        // Lock display settings for editing mode
+        displaySettings.diarizationDisplay = 'enabled'
+        displaySettings.textFormat = 'continuous'
+        displaySettings.timestampFormat = 'none'
+        localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
         
-        // Change button to save icon
-        editBtn.innerHTML = '<i data-lucide="save"></i>'
-        editBtn.title = 'שמור'
+        // Update toggle UI to reflect locked settings
+        updateViewerDiarizationToggleUI()
+        updateViewerTextFormatToggleUI()
+        updateViewerTimestampsToggleUI()
+        
+        // Disable toggle buttons during edit mode
+        document.getElementById('viewer-text-format-toggle').disabled = true
+        document.getElementById('viewer-timestamps-toggle').disabled = true
+        document.getElementById('viewer-diarization-toggle').disabled = true
+        
+        // Show view mode button but disable it
+        viewModeBtn.style.display = 'inline-block'
+        viewModeBtn.disabled = true
+        updateViewModeButtonUI()
+        
+        // Change edit button to cancel icon
+        editBtn.innerHTML = '<i data-lucide="x"></i>'
+        editBtn.title = 'ביטול'
         editBtn.classList.add('toggle-active')
+        
+        // Show save button
+        saveBtn.style.display = 'inline-block'
+        
         if (window.lucide && typeof window.lucide.createIcons === 'function') {
           window.lucide.createIcons()
         }
-        
-        // Show view mode toggle button
-        viewModeBtn.style.display = 'inline-block'
-        updateViewModeButtonUI()
         
         // Add edit mode class to transcription container for styling
         const transcriptionDiv = document.getElementById('viewer-transcription')
@@ -6202,20 +7029,66 @@
           transcriptionDiv.classList.add('edit-mode-active')
         }
         
-        // Make segments editable
-        updateViewerTranscriptionDisplay()
+        // Create TipTap editor if ready, otherwise fall back to old method
+        if (tiptapReady && currentViewerData && currentViewerData.results) {
+          // Clear the container
+          transcriptionDiv.innerHTML = ''
+          
+          // Get effective data with edits applied
+          const segments = getEffectiveTranscriptionData()
+          
+          // Create TipTap editor
+          tiptapEditor = createTipTapEditor(transcriptionDiv, segments)
+          
+          if (!tiptapEditor) {
+            console.error('Failed to create TipTap editor, falling back to old method')
+            updateViewerTranscriptionDisplay()
+          }
+        } else {
+          // Fall back to old contentEditable method
+          console.log('TipTap not ready, using fallback edit mode')
+          updateViewerTranscriptionDisplay()
+        }
       }
 
-      function exitEditMode() {
+      function exitEditMode(saveChanges = true) {
         isEditMode = false
         currentEditingSegmentIndex = -1
+        
+        // Extract edits from TipTap or speaker edit areas before exiting if saving
+        if (saveChanges) {
+          if (tiptapEditor) {
+            extractEditsFromTipTap()
+          } else {
+            extractEditsFromSpeakerAreas()
+          }
+        }
+        
+        // Destroy TipTap editor if it exists
+        if (tiptapEditor) {
+          destroyTipTapEditor()
+        }
+        
         const editBtn = document.getElementById('viewer-edit-toggle-btn')
+        const saveBtn = document.getElementById('viewer-save-edit-btn')
         const viewModeBtn = document.getElementById('viewer-edit-mode-toggle')
+        
+        // Re-enable toggle buttons
+        document.getElementById('viewer-text-format-toggle').disabled = false
+        document.getElementById('viewer-timestamps-toggle').disabled = false
+        document.getElementById('viewer-diarization-toggle').disabled = false
+        
+        // Re-enable view mode button
+        viewModeBtn.disabled = false
         
         // Change button back to pen icon
         editBtn.innerHTML = '<i data-lucide="pen"></i>'
         editBtn.title = 'ערוך'
         editBtn.classList.remove('toggle-active')
+        
+        // Hide save button
+        saveBtn.style.display = 'none'
+        
         if (window.lucide && typeof window.lucide.createIcons === 'function') {
           window.lucide.createIcons()
         }
@@ -6231,7 +7104,12 @@
       }
 
       // View mode toggle (original/compared/new)
-      document.getElementById('viewer-edit-mode-toggle').addEventListener('click', () => {
+      document.getElementById('viewer-edit-mode-toggle').addEventListener('click', (e) => {
+        // Don't allow toggle if button is disabled
+        if (e.target.disabled || e.currentTarget.disabled) {
+          return
+        }
+        
         // Cycle through modes: new -> compared -> original -> new
         if (editModeView === 'new') {
           editModeView = 'compared'
@@ -6262,8 +7140,54 @@
         }
       }
 
+      /**
+       * Extract edits from speaker edit areas and update currentEdits
+       */
+      function extractEditsFromSpeakerAreas() {
+        const editAreas = document.querySelectorAll('.speaker-edit-area')
+        
+        editAreas.forEach(area => {
+          const segmentIndices = area.dataset.segmentIndices.split(',').map(i => parseInt(i))
+          const editedText = area.innerText.trim()
+          
+          if (segmentIndices.length === 0) return
+          
+          // Get original text for comparison
+          let originalText = ''
+          segmentIndices.forEach((idx, i) => {
+            if (i > 0) originalText += ' '
+            originalText += currentViewerData.results[idx].text.trim()
+          })
+          
+          // Check if text was actually edited
+          if (editedText !== originalText) {
+            // Store the edited text in the first segment
+            currentEdits[segmentIndices[0]] = editedText
+            
+            // Clear the remaining segments in the group (they're now merged into the first)
+            for (let i = 1; i < segmentIndices.length; i++) {
+              currentEdits[segmentIndices[i]] = ''
+            }
+          } else {
+            // No changes, remove any existing edits for this group
+            segmentIndices.forEach(idx => {
+              delete currentEdits[idx]
+            })
+          }
+        })
+      }
+
       async function saveEdits() {
         if (!currentViewerEntry || !currentViewerData) return
+        
+        // Extract edits from TipTap or speaker edit areas if in edit mode
+        if (isEditMode) {
+          if (tiptapEditor) {
+            extractEditsFromTipTap()
+          } else {
+            extractEditsFromSpeakerAreas()
+          }
+        }
         
         if (Object.keys(currentEdits).length === 0 && 
             Object.keys(speakerNameMappings).length === 0 && 
