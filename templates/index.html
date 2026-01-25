@@ -701,7 +701,6 @@
         outline: none;
         white-space: pre-wrap;
         word-wrap: break-word;
-        line-height: 1.6;
       }
       .tiptap-editor[dir="rtl"] {
         direction: rtl;
@@ -716,6 +715,12 @@
       }
       .tiptap-editor .ProseMirror {
         outline: none;
+        margin: 0;
+        padding: 0;
+      }
+      .tiptap-editor .ProseMirror p {
+        margin: 0;
+        padding: 0;
       }
       .tiptap-editor .ProseMirror:focus {
         outline: none;
@@ -724,18 +729,20 @@
         display: block;
       }
       .tiptap-speaker-block + .tiptap-speaker-block {
-        margin-top: 1.2em;
+        margin-top: 1em;
       }
       .tiptap-segment {
         display: inline;
         cursor: text;
       }
-      .tiptap-segment.highlighted {
+      .tiptap-segment.highlighted,
+      .tiptap-editor .highlighted {
         background-color: rgba(255, 193, 7, 0.3);
         border-radius: 2px;
         padding: 0px 2px;
       }
-      [data-theme="dark"] .tiptap-segment.highlighted {
+      [data-theme="dark"] .tiptap-segment.highlighted,
+      [data-theme="dark"] .tiptap-editor .highlighted {
         background-color: rgba(255, 193, 7, 0.2);
       }
       .tiptap-segment.underlined {
@@ -743,7 +750,8 @@
         text-decoration-thickness: 2px;
         text-decoration-color: rgba(255, 193, 7, 0.8);
       }
-      .tiptap-segment.playing {
+      .tiptap-segment.playing,
+      .tiptap-editor .playing {
         text-decoration: underline;
         text-decoration-thickness: 2px;
         text-decoration-color: var(--primary-color);
@@ -2418,6 +2426,7 @@
       import Text from 'https://esm.sh/@tiptap/extension-text@2.11.5'
       import History from 'https://esm.sh/@tiptap/extension-history@2.11.5'
       import { Plugin, PluginKey } from 'https://esm.sh/@tiptap/pm@2.11.5/state'
+      import { Decoration, DecorationSet } from 'https://esm.sh/@tiptap/pm@2.11.5/view'
       
       // Export to window for use in non-module scripts
       window.TipTap = {
@@ -2429,7 +2438,9 @@
         Text,
         History,
         Plugin,
-        PluginKey
+        PluginKey,
+        Decoration,
+        DecorationSet
       }
       
       // Signal that TipTap is loaded
@@ -4597,6 +4608,9 @@
       let speakerNameMappings = {} // Map of SPEAKER_XX to custom names
       let speakerSegmentSwaps = {} // Map of segment index to new SPEAKER_XX
       
+      // Snapshots for cancel functionality (stores state when entering edit mode)
+      let editModeSnapshot = null
+      
       // TipTap editor instance
       let tiptapEditor = null
       let tiptapReady = false
@@ -4611,7 +4625,7 @@
       function initTipTapExtensions() {
         if (!window.TipTap) return
         
-        const { Node, mergeAttributes, Plugin, PluginKey } = window.TipTap
+        const { Node, mergeAttributes, Plugin, PluginKey, Decoration, DecorationSet } = window.TipTap
         
         // Custom Node: SpeakerLabel (non-editable, atomic)
         SpeakerLabelExtension = Node.create({
@@ -4671,14 +4685,14 @@
             }]
           },
           
-          renderHTML({ node, HTMLAttributes }) {
-            return ['span', mergeAttributes(HTMLAttributes, {
+          renderHTML({ node }) {
+            return ['span', {
               'data-segment': 'true',
-              'data-segment-index': node.attrs.index,
-              'data-start': node.attrs.start,
-              'data-end': node.attrs.end,
+              'data-segment-index': String(node.attrs.index),
+              'data-start': String(node.attrs.start),
+              'data-end': String(node.attrs.end),
               'class': 'tiptap-segment',
-            }), 0]
+            }, 0]
           },
         })
         
@@ -4735,15 +4749,45 @@
                 // Check if right-clicked on a segment
                 if (target.closest('[data-segment]')) {
                   event.preventDefault()
-                  const segmentEl = target.closest('[data-segment]')
-                  const segmentIndex = parseInt(segmentEl.dataset.segmentIndex)
+                  const clickedSegmentEl = target.closest('[data-segment]')
+                  const clickedSegmentIndex = parseInt(clickedSegmentEl.dataset.segmentIndex)
                   
-                  // Underline the segment for visual feedback
-                  segmentEl.classList.add('underlined')
-                  currentTipTapHighlightedSegment = segmentEl
+                  // Check if there's a text selection that spans multiple segments
+                  const selection = window.getSelection()
+                  const selectedSegmentIndices = []
+                  const selectedSegmentElements = []
+                  
+                  if (selection && !selection.isCollapsed) {
+                    // Find all segments that intersect with the selection
+                    const allSegments = document.querySelectorAll('.tiptap-segment')
+                    allSegments.forEach(segEl => {
+                      if (selection.containsNode(segEl, true)) {
+                        const idx = parseInt(segEl.dataset.segmentIndex)
+                        if (!isNaN(idx)) {
+                          selectedSegmentIndices.push(idx)
+                          selectedSegmentElements.push(segEl)
+                        }
+                      }
+                    })
+                  }
+                  
+                  // If selection includes multiple segments, use those; otherwise use clicked segment
+                  let segmentIndices
+                  if (selectedSegmentIndices.length > 1) {
+                    // Sort indices to get contiguous range
+                    selectedSegmentIndices.sort((a, b) => a - b)
+                    segmentIndices = selectedSegmentIndices
+                  } else {
+                    segmentIndices = [clickedSegmentIndex]
+                  }
+                  
+                  // Highlight all affected segments using decoration plugin
+                  view.dispatch(
+                    view.state.tr.setMeta('highlightedSegments', segmentIndices)
+                  )
                   
                   // Show segment context menu
-                  showTipTapSegmentContextMenu(event.clientX, event.clientY, segmentIndex)
+                  showTipTapSegmentContextMenu(event.clientX, event.clientY, segmentIndices)
                   return true
                 }
                 
@@ -4771,20 +4815,76 @@
           }
         })
         
+        // Plugin key for highlight decorations (accessible for setMeta calls)
+        highlightPluginKey = new PluginKey('segmentHighlight')
+        
+        // Function to create highlight decorations by walking the document
+        createHighlightDecorations = function(doc, playingIndex, highlightedIndices) {
+          const decorations = []
+          
+          doc.descendants((node, pos) => {
+            if (node.type.name === 'segment') {
+              const index = node.attrs.index
+              const from = pos
+              const to = pos + node.nodeSize
+              
+              if (index === playingIndex) {
+                decorations.push(Decoration.inline(from, to, { class: 'playing' }))
+              }
+              if (highlightedIndices.includes(index)) {
+                decorations.push(Decoration.inline(from, to, { class: 'highlighted' }))
+              }
+            }
+          })
+          
+          return DecorationSet.create(doc, decorations)
+        }
+        
+        // Plugin for highlight decorations (playing segment, selected segments)
+        HighlightPlugin = new Plugin({
+          key: highlightPluginKey,
+          state: {
+            init() {
+              return { playingIndex: -1, highlightedIndices: [] }
+            },
+            apply(tr, value) {
+              // Check for meta updates
+              const playing = tr.getMeta('playingSegment')
+              const highlighted = tr.getMeta('highlightedSegments')
+              
+              if (playing !== undefined || highlighted !== undefined) {
+                return {
+                  playingIndex: playing !== undefined ? playing : value.playingIndex,
+                  highlightedIndices: highlighted !== undefined ? highlighted : value.highlightedIndices
+                }
+              }
+              return value
+            }
+          },
+          props: {
+            decorations(state) {
+              const pluginState = this.getState(state)
+              return createHighlightDecorations(state.doc, pluginState.playingIndex, pluginState.highlightedIndices)
+            }
+          }
+        })
+        
         tiptapReady = true
         console.log('TipTap extensions initialized')
       }
       
-      // Track highlighted segment for cleanup
-      let currentTipTapHighlightedSegment = null
+      // Global variables for highlight plugin
+      let highlightPluginKey = null
+      let createHighlightDecorations = null
+      let HighlightPlugin = null
       
-      // Show context menu for a segment in TipTap editor
-      function showTipTapSegmentContextMenu(x, y, segmentIndex) {
+      // Show context menu for segment(s) in TipTap editor
+      function showTipTapSegmentContextMenu(x, y, segmentIndices) {
         const contextMenu = document.getElementById('segment-context-menu')
-        currentContextSegmentIndices = [segmentIndex]
+        currentContextSegmentIndices = Array.isArray(segmentIndices) ? segmentIndices : [segmentIndices]
         
-        // Populate speaker submenu
-        populateSegmentSpeakerSubmenu(segmentIndex)
+        // Populate speaker submenu (use first segment for current speaker display)
+        populateSegmentSpeakerSubmenu(currentContextSegmentIndices[0])
         
         // Position the menu
         contextMenu.style.left = x + 'px'
@@ -4797,11 +4897,11 @@
             contextMenu.classList.remove('show')
             document.removeEventListener('click', hideMenu)
             
-            // Remove underline from segment
-            if (currentTipTapHighlightedSegment) {
-              currentTipTapHighlightedSegment.classList.remove('underlined')
-              currentTipTapHighlightedSegment.classList.remove('highlighted')
-              currentTipTapHighlightedSegment = null
+            // Clear highlights using decoration plugin
+            if (tiptapEditor) {
+              tiptapEditor.view.dispatch(
+                tiptapEditor.view.state.tr.setMeta('highlightedSegments', [])
+              )
             }
           }
         }
@@ -4929,6 +5029,9 @@
         
         // Add the context menu plugin
         editor.registerPlugin(ContextMenuPlugin)
+        
+        // Add the highlight decoration plugin
+        editor.registerPlugin(HighlightPlugin)
         
         return editor
       }
@@ -5507,28 +5610,41 @@
           return
         }
         
-        // Determine the correct selector based on current mode
-        const segmentClass = isEditMode ? 'tiptap-segment' : 'transcript-segment'
-        
-        // Clear previous playing segment
-        if (currentPlayingSegmentIndex !== -1) {
-          const prevElement = document.querySelector(`.${segmentClass}[data-segment-index="${currentPlayingSegmentIndex}"]`)
-          if (prevElement) {
-            prevElement.classList.remove('playing')
-          }
-        }
-        
-        // Update current playing segment
+        const previousSegmentIndex = currentPlayingSegmentIndex
         currentPlayingSegmentIndex = segmentIndex
         
-        if (segmentIndex !== -1) {
-          const currentElement = document.querySelector(`.${segmentClass}[data-segment-index="${segmentIndex}"]`)
-          if (currentElement) {
-            currentElement.classList.add('playing')
-            
-            // Optionally scroll to the playing segment
-            if (!isElementInViewport(currentElement)) {
+        if (isEditMode && tiptapEditor) {
+          // In edit mode, use decoration plugin via setMeta
+          tiptapEditor.view.dispatch(
+            tiptapEditor.view.state.tr.setMeta('playingSegment', segmentIndex)
+          )
+          
+          // Scroll to playing segment if needed
+          if (segmentIndex !== -1) {
+            const currentElement = document.querySelector(`.tiptap-segment[data-segment-index="${segmentIndex}"]`)
+            if (currentElement && !isElementInViewport(currentElement)) {
               currentElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }
+          }
+        } else {
+          // In view mode, use direct DOM manipulation
+          // Clear previous playing segment
+          if (previousSegmentIndex !== -1) {
+            const prevElement = document.querySelector(`.transcript-segment[data-segment-index="${previousSegmentIndex}"]`)
+            if (prevElement) {
+              prevElement.classList.remove('playing')
+            }
+          }
+          
+          if (segmentIndex !== -1) {
+            const currentElement = document.querySelector(`.transcript-segment[data-segment-index="${segmentIndex}"]`)
+            if (currentElement) {
+              currentElement.classList.add('playing')
+              
+              // Optionally scroll to the playing segment
+              if (!isElementInViewport(currentElement)) {
+                currentElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              }
             }
           }
         }
@@ -6192,16 +6308,20 @@
             swapSegmentsSpeaker(indices, speakerId)
             document.getElementById('segment-context-menu').classList.remove('show')
             
-            // Remove highlight and underline from edit segment (old contentEditable or TipTap)
+            // Remove highlight from edit segment (old contentEditable)
             if (currentEditSegmentElement) {
               currentEditSegmentElement.classList.remove('highlighted')
               currentEditSegmentElement = null
             }
-            if (currentTipTapHighlightedSegment) {
-              currentTipTapHighlightedSegment.classList.remove('highlighted')
-              currentTipTapHighlightedSegment.classList.remove('underlined')
-              currentTipTapHighlightedSegment = null
+            
+            // Clear TipTap highlights using decoration plugin
+            if (tiptapEditor) {
+              tiptapEditor.view.dispatch(
+                tiptapEditor.view.state.tr.setMeta('highlightedSegments', [])
+              )
             }
+            
+            // Clear non-edit mode highlights
             const segment = document.querySelector(`.transcript-segment[data-segment-index="${segmentIndex}"]`)
             if (segment) {
               segment.classList.remove('highlighted')
@@ -6981,6 +7101,16 @@
 
       function enterEditMode() {
         isEditMode = true
+        // Reset playing segment index so the next timeupdate re-applies the class to TipTap elements
+        currentPlayingSegmentIndex = -1
+        
+        // Save snapshot of current edit state for cancel functionality
+        editModeSnapshot = {
+          currentEdits: JSON.parse(JSON.stringify(currentEdits)),
+          speakerNameMappings: JSON.parse(JSON.stringify(speakerNameMappings)),
+          speakerSegmentSwaps: JSON.parse(JSON.stringify(speakerSegmentSwaps))
+        }
+        
         const editBtn = document.getElementById('viewer-edit-toggle-btn')
         const saveBtn = document.getElementById('viewer-save-edit-btn')
         const viewModeBtn = document.getElementById('viewer-edit-mode-toggle')
@@ -7052,6 +7182,8 @@
       function exitEditMode(saveChanges = true) {
         isEditMode = false
         currentEditingSegmentIndex = -1
+        // Reset playing segment index so the next timeupdate re-applies the class to transcript elements
+        currentPlayingSegmentIndex = -1
         
         // Extract edits from TipTap or speaker edit areas before exiting if saving
         if (saveChanges) {
@@ -7060,7 +7192,17 @@
           } else {
             extractEditsFromSpeakerAreas()
           }
+        } else {
+          // Cancel: restore from snapshot
+          if (editModeSnapshot) {
+            currentEdits = editModeSnapshot.currentEdits
+            speakerNameMappings = editModeSnapshot.speakerNameMappings
+            speakerSegmentSwaps = editModeSnapshot.speakerSegmentSwaps
+          }
         }
+        
+        // Clear snapshot
+        editModeSnapshot = null
         
         // Destroy TipTap editor if it exists
         if (tiptapEditor) {
