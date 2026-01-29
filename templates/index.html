@@ -2058,6 +2058,10 @@
                   <button type="button" data-action="json" id="viewer-menu-json">JSON</button>
                 </div>
               </div>
+
+              <button id="viewer-donate-btn" data-i18n-title="donateData">
+                <i data-lucide="heart"></i>
+              </button>
             </div>
           </div>
         </div>
@@ -2412,6 +2416,30 @@
         <div class="modal-buttons">
           <button type="button" class="btn btn-primary" id="save-speaker-name">שמור</button>
           <button type="button" class="btn btn-secondary" id="cancel-speaker-rename">ביטול</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Donate Data Modal -->
+    <div id="donate-data-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 data-i18n="donateDataTitle">תודה על התרומה!</h2>
+          <button class="close" id="close-donate-data">&times;</button>
+        </div>
+        <div class="form-group">
+          <p style="margin-bottom: 1rem;">
+            <span data-i18n="donateDataMessage">בתרום נתונים אלה, אתה מאשר שיש לך הרשאות לשחרר הן את הקול והן את הטקסט תחת רישיון ivrit.ai v2.</span>
+            <a href="https://huggingface.co/datasets/ivrit-ai/v2-text/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" data-i18n="donateDataLicenseLink" style="color: var(--primary-color); text-decoration: underline;">רישיון ivrit.ai v2</a>
+          </p>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+            <input type="checkbox" id="donate-data-checkbox" style="width: auto; margin: 0;" />
+            <span data-i18n="donateDataCheckbox">קראתי ואני מסכים</span>
+          </label>
+        </div>
+        <div class="modal-buttons">
+          <button type="button" class="btn btn-primary" id="submit-donate-data" data-i18n="donateDataSubmit" disabled>שלח</button>
+          <button type="button" class="btn btn-secondary" id="cancel-donate-data" data-i18n="cancel">ביטול</button>
         </div>
       </div>
     </div>
@@ -3547,6 +3575,102 @@
       document.getElementById('speaker-rename-modal').addEventListener('click', (e) => {
         if (e.target.id === 'speaker-rename-modal') {
           e.target.classList.remove('show')
+        }
+      })
+
+      // Donate data modal handlers
+      let currentDonateResultsId = null
+      
+      document.getElementById('viewer-donate-btn').addEventListener('click', () => {
+        if (!currentViewerEntry || !currentViewerEntry.results_id) return
+        currentDonateResultsId = currentViewerEntry.results_id
+        document.getElementById('donate-data-checkbox').checked = false
+        document.getElementById('submit-donate-data').disabled = true
+        document.getElementById('donate-data-modal').classList.add('show')
+      })
+      
+      document.getElementById('donate-data-checkbox').addEventListener('change', (e) => {
+        document.getElementById('submit-donate-data').disabled = !e.target.checked
+      })
+      
+      document.getElementById('close-donate-data').addEventListener('click', () => {
+        document.getElementById('donate-data-modal').classList.remove('show')
+        currentDonateResultsId = null
+      })
+      
+      document.getElementById('cancel-donate-data').addEventListener('click', () => {
+        document.getElementById('donate-data-modal').classList.remove('show')
+        currentDonateResultsId = null
+      })
+      
+      document.getElementById('submit-donate-data').addEventListener('click', async () => {
+        if (!currentDonateResultsId) return
+        const checkbox = document.getElementById('donate-data-checkbox')
+        if (!checkbox.checked) return
+        
+        const submitBtn = document.getElementById('submit-donate-data')
+        submitBtn.disabled = true
+        submitBtn.textContent = window.I18N ? window.I18N.t('loading') : 'טוען...'
+        
+        try {
+          const response = await fetch('/appdata/donate_data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              results_id: currentDonateResultsId,
+              checkbox_confirmed: true
+            })
+          })
+          
+          // In local mode, the response is a file download
+          if (IN_LOCAL_MODE && response.headers.get('X-Donation-Success') === 'true') {
+            const blob = await response.blob()
+            const contentDisposition = response.headers.get('Content-Disposition')
+            let filename = `${currentDonateResultsId}.tar`
+            if (contentDisposition) {
+              const match = contentDisposition.match(/filename="?([^"]+)"?/)
+              if (match) filename = match[1]
+            }
+            
+            // Trigger download
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = filename
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+            
+            document.getElementById('donate-data-modal').classList.remove('show')
+            showToast(window.I18N ? window.I18N.t('donateDataSuccess') : 'תודה! הנתונים נתרמו בהצלחה.', 'success')
+            // Hide donate button for this file
+            document.getElementById('viewer-donate-btn').style.display = 'none'
+          } else if (response.ok) {
+            const data = await response.json()
+            document.getElementById('donate-data-modal').classList.remove('show')
+            showToast(window.I18N ? window.I18N.t('donateDataSuccess') : 'תודה! הנתונים נתרמו בהצלחה.', 'success')
+            // Hide donate button for this file
+            document.getElementById('viewer-donate-btn').style.display = 'none'
+          } else {
+            const data = await response.json()
+            const errorKey = data.i18n_key || 'donateDataError'
+            showToast(window.I18N ? window.I18N.t(errorKey) : 'שגיאה בתרומת הנתונים.', 'error')
+          }
+        } catch (error) {
+          console.error('Error donating data:', error)
+          showToast(window.I18N ? window.I18N.t('donateDataError') : 'שגיאה בתרומת הנתונים.', 'error')
+        } finally {
+          submitBtn.disabled = false
+          submitBtn.textContent = window.I18N ? window.I18N.t('donateDataSubmit') : 'שלח'
+          currentDonateResultsId = null
+        }
+      })
+      
+      document.getElementById('donate-data-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'donate-data-modal') {
+          e.target.classList.remove('show')
+          currentDonateResultsId = null
         }
       })
 
@@ -5535,6 +5659,11 @@
 
           // Load audio player if audio file exists
           await loadViewerAudioPlayer(entry.results_id)
+
+          // Show/hide donate button based on donated status AND audio availability
+          const donateBtn = document.getElementById('viewer-donate-btn')
+          const hasAudio = document.getElementById('viewer-audio-player-container').classList.contains('visible')
+          donateBtn.style.display = (entry.donated || !hasAudio) ? 'none' : 'flex'
 
           // Show viewer tab
           document.getElementById('viewer-tab-btn').style.display = 'block'

@@ -202,6 +202,20 @@
     medianTimeBetweenSpeakers: "זמן חציוני בין דוברים (שניות)",
     speakerTimeDistribution: "התפלגות זמן דיבור לפי דובר",
     unknownSpeaker: "לא ידוע",
+    donateData: "תרומת נתונים",
+    donateDataTitle: "תודה על התרומה!",
+    donateDataMessage: "בתרום נתונים אלה, אתה מאשר שיש לך הרשאות לשחרר הן את הקול והן את הטקסט תחת רישיון ivrit.ai v2.",
+    donateDataCheckbox: "קראתי ואני מסכים",
+    donateDataLicenseLink: "רישיון ivrit.ai v2",
+    donateDataSubmit: "שלח",
+    donateDataSuccess: "תודה! הנתונים נתרמו בהצלחה.",
+    donateDataError: "שגיאה בתרומת הנתונים. אנא נסה שוב.",
+    donateDataAlreadyDonated: "נתונים אלה כבר נתרמו.",
+    errorMissingResultsId: "חסר results_id",
+    errorDonateNoAudio: "קובץ אודיו לא נמצא לתרומה",
+    errorDonateNoTranscript: "תמלול לא נמצא לתרומה",
+    errorDonateCheckboxRequired: "יש לאשר את תיבת הסימון",
+    errorAlreadyDonated: "נתונים אלה כבר נתרמו",
   }
 
   const yi = {
@@ -407,6 +421,20 @@
     medianTimeBetweenSpeakers: "מעדיאַנע צײַט צווישן רעדנדיקע (סעקונדן)",
     speakerTimeDistribution: "צײַט־פֿאַרטיילונג פֿאַר רעדנדיקע",
     unknownSpeaker: "ניט באַוואוסט",
+    donateData: "שענקען דאַטן",
+    donateDataTitle: "אַ דאַנק פֿאַר דער נדבה!",
+    donateDataMessage: "מיט דער נדבה פֿון די דאַטן, באַשטעטיקט איר אַז איר האָט רשות צו באַפֿרײַען סײַ דעם קול און סײַ דעם טעקסט אונטערן ivrit.ai v2 ליצענץ.",
+    donateDataCheckbox: "איך האָב געלייענט און איך בין מסכים",
+    donateDataLicenseLink: "ivrit.ai v2 ליצענץ",
+    donateDataSubmit: "אַרײַנגעבן",
+    donateDataSuccess: "אַ דאַנק! די דאַטן זענען געשענקט געוואָרן.",
+    donateDataError: "טעות בײַם שענקען דאַטן. ביטע פּרוּווט ווידער.",
+    donateDataAlreadyDonated: "די דאַטן זענען שוין געשענקט געוואָרן.",
+    errorMissingResultsId: "פֿעלנדיק results_id",
+    errorDonateNoAudio: "אַודיאָ־טעקע נישט געפֿונען פֿאַר נדבה",
+    errorDonateNoTranscript: "טראַנסקריפּציע נישט געפֿונען פֿאַר נדבה",
+    errorDonateCheckboxRequired: "מען דאַרף באַשטעטיקן דעם טשעקבאָקס",
+    errorAlreadyDonated: "די דאַטן זענען שוין געשענקט געוואָרן",
   }
 
   const en = {
@@ -612,6 +640,20 @@
     medianTimeBetweenSpeakers: "Median Time Between Speakers (seconds)",
     speakerTimeDistribution: "Speaker Time Distribution",
     unknownSpeaker: "Unknown",
+    donateData: "Donate data",
+    donateDataTitle: "Thank you for contributing!",
+    donateDataMessage: "By contributing this data, you confirm that you have permissions to release both its voice and text under the ivrit.ai v2 license.",
+    donateDataCheckbox: "I have read and agree",
+    donateDataLicenseLink: "ivrit.ai v2 license",
+    donateDataSubmit: "Submit",
+    donateDataSuccess: "Thank you! The data was donated successfully.",
+    donateDataError: "Error donating data. Please try again.",
+    donateDataAlreadyDonated: "This data has already been donated.",
+    errorMissingResultsId: "Missing results_id",
+    errorDonateNoAudio: "Audio file not found for donation",
+    errorDonateNoTranscript: "Transcription not found for donation",
+    errorDonateCheckboxRequired: "Checkbox must be checked",
+    errorAlreadyDonated: "This data has already been donated",
   }
 
   const resources = { he, yi, en }

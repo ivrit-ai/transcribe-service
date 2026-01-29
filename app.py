@@ -1512,6 +1512,174 @@ async def delete_file(request: Request):
         return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer"}, status_code=500)
 
 
+@app.post("/appdata/donate_data", dependencies=[Depends(require_google_login)])
+async def donate_data(request: Request):
+    """Donate transcription data (audio + transcript + edits) for the ivrit.ai v2 dataset."""
+    import tarfile
+    
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_email = get_user_email(request)
+    
+    if not in_local_mode and not refresh_token:
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
+    
+    if not user_email:
+        return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
+    
+    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    
+    try:
+        body = await request.json()
+        results_id = body.get("results_id")
+        checkbox_confirmed = body.get("checkbox_confirmed", False)
+        
+        if not results_id:
+            return JSONResponse({"error": "errorMissingResultsId", "i18n_key": "errorMissingResultsId"}, status_code=400)
+        
+        if not checkbox_confirmed:
+            return JSONResponse({"error": "errorDonateCheckboxRequired", "i18n_key": "errorDonateCheckboxRequired"}, status_code=400)
+        
+        # Acquire per-user lock for TOC updates
+        toc_lock = get_toc_lock(user_email)
+        async with toc_lock:
+            # Download current TOC
+            toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+
+            if not toc_data or "entries" not in toc_data:
+                return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
+
+            # Find the entry with matching results_id
+            entry = None
+            entry_index = None
+            for i, e in enumerate(toc_data["entries"]):
+                if e.get("results_id") == results_id:
+                    entry = e
+                    entry_index = i
+                    break
+            
+            if entry is None:
+                return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
+            
+            # Check if already donated
+            if entry.get("donated"):
+                return JSONResponse({"error": "errorAlreadyDonated", "i18n_key": "errorAlreadyDonated"}, status_code=400)
+            
+            # Download opus audio file
+            opus_filename = f"{results_id}.opus"
+            opus_file_id = await file_storage_backend.find_file_by_name(opus_filename, user_identifier)
+            opus_content = None
+            if opus_file_id:
+                opus_content = await file_storage_backend.download_file_bytes(opus_file_id, user_identifier)
+            
+            if not opus_content:
+                return JSONResponse({"error": "errorDonateNoAudio", "i18n_key": "errorDonateNoAudio"}, status_code=404)
+            
+            # Download transcript json.gz
+            json_filename = f"{results_id}.json.gz"
+            json_file_id = await file_storage_backend.find_file_by_name(json_filename, user_identifier)
+            transcript_content = None
+            if json_file_id:
+                transcript_content = await file_storage_backend.download_file_bytes(json_file_id, user_identifier)
+            
+            if not transcript_content:
+                return JSONResponse({"error": "errorDonateNoTranscript", "i18n_key": "errorDonateNoTranscript"}, status_code=404)
+            
+            # Download edits if they exist (optional)
+            edits_filename = f"{results_id}.edits.json.gz"
+            edits_file_id = await file_storage_backend.find_file_by_name(edits_filename, user_identifier)
+            edits_content = None
+            if edits_file_id:
+                edits_content = await file_storage_backend.download_file_bytes(edits_file_id, user_identifier)
+            
+            # Create uploads directory if it doesn't exist
+            uploads_dir = Path(args.data_dir or ".") / "uploads"
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create desc.json with metadata
+            submission_time = datetime.utcnow().isoformat() + "Z"
+            desc_data = {
+                "user_email": user_email,
+                "submitted_at": submission_time,
+                "checkbox_confirmed": checkbox_confirmed,
+                "original_filename": entry.get("source_filename", "unknown"),
+                "results_id": results_id,
+                "language": entry.get("language", "he"),
+            }
+            desc_json = json.dumps(desc_data, ensure_ascii=False, indent=2).encode('utf-8')
+            desc_filename = f"{results_id}.desc.json"
+            
+            # Create tar file (in memory for local mode, on disk otherwise)
+            tar_filename = f"{results_id}.tar"
+            tar_buffer = io.BytesIO()
+            
+            with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+                # Add opus file
+                opus_info = tarfile.TarInfo(name=opus_filename)
+                opus_info.size = len(opus_content)
+                tar.addfile(opus_info, io.BytesIO(opus_content))
+                
+                # Add transcript (gzipped json)
+                json_info = tarfile.TarInfo(name=json_filename)
+                json_info.size = len(transcript_content)
+                tar.addfile(json_info, io.BytesIO(transcript_content))
+                
+                # Add edits if they exist
+                if edits_content:
+                    edits_info = tarfile.TarInfo(name=edits_filename)
+                    edits_info.size = len(edits_content)
+                    tar.addfile(edits_info, io.BytesIO(edits_content))
+                
+                # Add desc.json inside the tar
+                desc_info = tarfile.TarInfo(name=desc_filename)
+                desc_info.size = len(desc_json)
+                tar.addfile(desc_info, io.BytesIO(desc_json))
+            
+            tar_content = tar_buffer.getvalue()
+            
+            # Update TOC to mark as donated
+            toc_data["entries"][entry_index]["donated"] = True
+            
+            # Upload updated TOC
+            success = await upload_toc(refresh_token, toc_data, user_email=user_email, session_id=session_id)
+            
+            if not success:
+                return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
+            
+            # In local mode, return the tar file as a download
+            if in_local_mode:
+                logging.info(f"{user_email}: Donated data for results_id {results_id} (download)")
+                return Response(
+                    content=tar_content,
+                    media_type="application/x-tar",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{tar_filename}"',
+                        "X-Donation-Success": "true",
+                    },
+                )
+            
+            # In non-local mode, save to uploads directory
+            uploads_dir = Path(args.data_dir or ".") / "uploads"
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+            
+            tar_path = uploads_dir / tar_filename
+            with open(tar_path, "wb") as f:
+                f.write(tar_content)
+            
+            # Write desc.json separately (not in tar, as specified for non-local mode)
+            desc_path = uploads_dir / desc_filename
+            with open(desc_path, "wb") as f:
+                f.write(desc_json)
+        
+        logging.info(f"{user_email}: Donated data for results_id {results_id}")
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logging.error(f"Error donating data: {e}")
+        traceback.print_exc()
+        return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer"}, status_code=500)
+
+
 @app.get("/login")
 async def login(request: Request):
     google_analytics_tag = os.environ.get("GOOGLE_ANALYTICS_TAG", "")
