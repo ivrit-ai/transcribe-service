@@ -30,7 +30,6 @@ import json
 import uuid
 import box
 import dotenv
-import puremagic
 import random
 import tempfile
 import asyncio
@@ -661,18 +660,6 @@ class LeakyBucket:
         """Check if the bucket is fully replenished."""
         self.update()
         return self.seconds_remaining >= self.max_seconds
-
-ffmpeg_supported_mimes = [
-    "video/",
-    "audio/",
-    "application/mp4",
-    "application/x-matroska",
-    "application/mxf",
-]
-
-
-def is_ffmpeg_supported_mimetype(file_mime):
-    return any(file_mime.startswith(supported_mime) for supported_mime in ffmpeg_supported_mimes)
 
 
 def get_media_duration(file_path):
@@ -2424,17 +2411,22 @@ async def upload_file(
 ):
     job_id = str(uuid.uuid4())
     user_email = get_user_email(request)
+    
+    log_message(f"{user_email}: Upload request started - job_id={job_id}, filename={file.filename if file else 'None'}, language={language}, save_audio={save_audio}")
 
     if in_hiatus_mode:
+        log_message(f"{user_email}: Upload rejected - service in hiatus mode (job_id={job_id})")
         capture_event(job_id, "file-upload-hiatus-rejected", {"user": user_email})
         return JSONResponse({"error": "errorServiceUnavailable", "i18n_key": "errorServiceUnavailable"}, status_code=503)
 
     capture_event(job_id, "file-upload", {"user": user_email})
 
     if not file:
+        log_message(f"{user_email}: No file provided (job_id={job_id})")
         return JSONResponse({"error": "errorNoFileSelected", "i18n_key": "errorNoFileSelected"}, status_code=200)
 
     if file.filename == "":
+        log_message(f"{user_email}: Empty filename (job_id={job_id})")
         return JSONResponse({"error": "errorEmptyFilename", "i18n_key": "errorEmptyFilename"}, status_code=200)
 
     # Use original filename directly - it's only used for display in TOC, never for filesystem operations
@@ -2451,6 +2443,7 @@ async def upload_file(
     session_id = get_session_id(request)
     refresh_token = sessions.get(session_id, {}).get("refresh_token")
 
+    log_message(f"{user_email}: Validating upload metadata (job_id={job_id}, content_length={content_length})")
     metadata, error_response = await validate_upload_request_metadata(
         request,
         user_email=user_email,
@@ -2461,7 +2454,10 @@ async def upload_file(
         refresh_token=refresh_token,
     )
     if error_response:
+        log_message(f"{user_email}: Upload validation failed (job_id={job_id})")
         return error_response
+    
+    log_message(f"{user_email}: Upload metadata validated successfully (job_id={job_id})")
 
     lang_cfg = metadata["lang_cfg"]
     runpod_token = metadata["normalized_runpod_token"]
@@ -2472,17 +2468,21 @@ async def upload_file(
 
     requested_lang = language  # safe after validation
 
+    log_message(f"{user_email}: Creating temp file for upload (job_id={job_id})")
     # Create a temporary file
     temp_file = tempfile.NamedTemporaryFile(delete=False)
     temp_file_path = temp_file.name
+    log_message(f"{user_email}: Temp file created (job_id={job_id}, path={temp_file_path})")
 
     try:
         # Read file content in chunks to avoid memory overload
+        log_message(f"{user_email}: Starting file read (job_id={job_id})")
         total_size = 0
         with open(temp_file_path, 'wb') as f:
             while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                 total_size += len(chunk)
                 if max_file_size is not None and total_size > max_file_size:
+                    log_message(f"{user_email}: File too large (job_id={job_id}, size={total_size}, max={max_file_size})")
                     os.unlink(temp_file_path)
                     return JSONResponse({
                         "error": "errorFileTooLarge",
@@ -2493,7 +2493,10 @@ async def upload_file(
         
         file_size = total_size
         metadata["file_size_bytes"] = total_size
+        log_message(f"{user_email}: File read completed (job_id={job_id}, size={file_size} bytes)")
     except Exception as e:
+        log_message(f"{user_email}: ERROR - File read failed (job_id={job_id}): {type(e).__name__}: {str(e)}")
+        logger.exception(f"{user_email}: Full traceback for file read failure (job_id={job_id})")
         # Clean up temp file if it exists
         if os.path.exists(temp_file_path):
             os.unlink(temp_file_path)
@@ -2503,22 +2506,13 @@ async def upload_file(
             "i18n_vars": {"details": str(e)}
         }, status_code=200)
 
-    # Get the MIME type of the file
-    filetype = puremagic.magic_file(temp_file_path)[0].mime_type
-
-    if not is_ffmpeg_supported_mimetype(filetype):
-        return JSONResponse({
-            "error": "errorUnsupportedFileType",
-            "i18n_key": "errorUnsupportedFileType",
-            "i18n_vars": {"type": filetype}
-        }, status_code=200)
-
     # Estimate duration based on file size: 1 minute per 1MB (for transcoding progress only)
     estimated_duration = (file_size / (1024 * 1024)) * 60
 
     # Store the temporary file path
     temp_files[job_id] = temp_file_path
     
+    log_message(f"{user_email}: Creating transcoding job descriptor (job_id={job_id})")
     # Create transcoding job descriptor
     transcoding_job = box.Box()
     transcoding_job.id = job_id
@@ -2534,6 +2528,7 @@ async def upload_file(
     transcoding_job.save_audio = save_audio_bool
     
     # Queue transcoding job instead of starting immediately
+    log_message(f"{user_email}: Queueing transcoding job (job_id={job_id})")
     try:
         async with transcoding_lock:
             queue_depth = transcoding_queue.qsize()
@@ -2542,7 +2537,7 @@ async def upload_file(
         # Initialize job results
         job_results[job_id] = {"results": [], "completion_time": None}
         
-        log_message(f"{user_email}: Transcoding job queued: {job_id}, queue depth: {queue_depth}")
+        log_message(f"{user_email}: Transcoding job queued (job_id={job_id}, queue_depth={queue_depth})")
 
         event_queue = asyncio.Queue()
         upload_event_streams[job_id] = event_queue
@@ -2555,6 +2550,7 @@ async def upload_file(
             }
         )
 
+        log_message(f"{user_email}: Returning streaming response (job_id={job_id})")
         return StreamingResponse(
             upload_event_generator(job_id),
             media_type="application/x-ndjson",
@@ -2562,7 +2558,7 @@ async def upload_file(
         )
     except queue.Full:
         cleanup_temp_file(job_id)
-        log_message(f"{user_email}: Transcoding queue full for job {job_id}")
+        log_message(f"{user_email}: ERROR - Transcoding queue full (job_id={job_id})")
         return JSONResponse({"error": "errorServerBusy", "i18n_key": "errorServerBusy"}, status_code=503)
 
 
@@ -2622,7 +2618,7 @@ async def handle_transcoding(job_id: str):
         
         if not success:
             log_message(f"Transcoding failed for job {job_id}")
-            await emit_upload_error(job_id, "errorInternalServer", details="transcoding_failed")
+            await emit_upload_error(job_id, "errorTranscodingFailed")
             # Clean up
             if job_id in transcoding_running_jobs:
                 del transcoding_running_jobs[job_id]

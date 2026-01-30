@@ -2073,7 +2073,7 @@
               <span class="stats-toggle-icon">▶</span>
               <span class="stats-toggle-text" data-i18n="transcriptionStatistics">סטטיסטיקות תמלול</span>
             </div>
-            <div class="stats-content" id="stats-content">
+            <div class="stats-content" id="transcription-stats-content">
               <div class="stats-grid">
                 <div class="stat-card">
                   <div class="stat-label" data-i18n="totalTime">זמן כולל</div>
@@ -5892,7 +5892,7 @@
       // Setup statistics toggle
       document.addEventListener('DOMContentLoaded', () => {
         const statsToggle = document.getElementById('stats-toggle')
-        const statsContent = document.getElementById('stats-content')
+        const statsContent = document.getElementById('transcription-stats-content')
         
         if (statsToggle && statsContent) {
           statsToggle.addEventListener('click', () => {
