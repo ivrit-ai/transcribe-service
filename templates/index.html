@@ -3906,6 +3906,7 @@
 
         resetUploadState()
         activeTranscription = false
+        checkBalance()
         if (successCount > 0) {
           showToast((window.I18N ? window.I18N.t('batchQueued', { count: successCount }) : `${successCount} קבצים נשלחו לתמלול בהצלחה. התוצאות יופיעו ב"הקבצים שלי" כשיסתיימו.`), 'success')
           // Switch to My Files tab
