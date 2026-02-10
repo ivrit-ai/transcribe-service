@@ -94,12 +94,15 @@ parser.add_argument('--local', action='store_true', help='Enable local mode')
 parser.add_argument('--data-dir', dest='data_dir', default=None, help='Directory for storing data files (local storage, etc.)')
 parser.add_argument('--models-dir', dest='models_dir', default=None, help='Directory containing model files for local mode')
 parser.add_argument('--config', dest='config_path', default='config.json', help='Path to configuration JSON defining languages and models (default: config.json)')
+parser.add_argument('--max-batch-local', type=int, default=100, help='Max parallel transcription jobs per user in local mode (default: 100)')
+parser.add_argument('--max-batch-private', type=int, default=20, help='Max parallel transcription jobs per user with private RunPod key (default: 20)')
 args, unknown = parser.parse_known_args()
 
 # Rate limiting configuration from CLI arguments
 MAX_MINUTES_PER_WEEK = args.max_minutes_per_week  # Maximum credit grant per week
 REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically derive daily replenish rate
-
+MAX_BATCH_LOCAL = args.max_batch_local
+MAX_BATCH_PRIVATE = args.max_batch_private
 
 
 in_dev = args.staging or args.dev
@@ -662,17 +665,18 @@ class LeakyBucket:
         return self.seconds_remaining >= self.max_seconds
 
 
-def get_media_duration(file_path):
+async def get_media_duration(file_path):
     try:
-        # Use ffmpeg directly to get media duration
+        # Use ffmpeg directly to get media duration (async to avoid blocking event loop)
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        result = subprocess.run(
-            [ffmpeg_exe, "-i", file_path, "-f", "null", "-"],
-            capture_output=True,
-            text=True
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg_exe, "-i", file_path, "-f", "null", "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
+        _, stderr_bytes = await proc.communicate()
         # ffmpeg outputs info to stderr
-        output = result.stderr
+        output = stderr_bytes.decode("utf-8", errors="replace")
         # Parse duration from output (format: Duration: HH:MM:SS.ms)
         match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", output)
         if match:
@@ -831,9 +835,17 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
             payload["i18n_vars"] = i18n_vars
         return False, payload
 
-    # Check if user already has a job queued or running
-    if user_email in user_jobs:
-        return build_error("errorJobAlreadyActive", status_code=400)
+    # Check if user has reached their batch limit
+    if bool(runpod_token):
+        user_batch_limit = MAX_BATCH_PRIVATE
+    elif in_local_mode:
+        user_batch_limit = MAX_BATCH_LOCAL
+    else:
+        user_batch_limit = 1
+
+    active_count = len(user_jobs.get(user_email, set()))
+    if active_count >= user_batch_limit:
+        return build_error("errorBatchLimitReached", status_code=400)
 
     max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
     if duration > max_duration_seconds:
@@ -912,7 +924,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
             time_ahead_str = str(timedelta(seconds=int(time_ahead_seconds)))
 
             # Add job to user's active jobs
-            user_jobs[user_email] = job_id
+            user_jobs.setdefault(user_email, set()).add(job_id)
 
             capture_event(job_id, "job-queued", {"user": user_email, "queue-depth": queue_depth, "job-type": job_type, "custom-runpod": job_desc.uses_custom_runpod})
 
@@ -981,7 +993,14 @@ async def list_languages():
         }
         for key, cfg in APP_CONFIG.get("languages", {}).items()
     }
-    return JSONResponse({"languages": langs})
+    return JSONResponse({
+        "languages": langs,
+        "batch": {
+            "max_batch_local": MAX_BATCH_LOCAL,
+            "max_batch_private": MAX_BATCH_PRIVATE,
+            "max_batch_default": 1,
+        },
+    })
 
 
 @app.get("/appdata/toc", dependencies=[Depends(require_google_login)])
@@ -2628,7 +2647,7 @@ async def handle_transcoding(job_id: str):
             return
         
         # Get duration from the generated Opus file before replacing the original
-        duration = get_media_duration(output_path)
+        duration = await get_media_duration(output_path)
 
         # Replace original file with transcoded file
         try:
@@ -2745,16 +2764,30 @@ async def validate_upload_request_metadata(
     if not user_email:
         return None, JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
 
-    if user_email in user_jobs:
-        return None, JSONResponse({"error": "errorJobAlreadyActive", "i18n_key": "errorJobAlreadyActive"}, status_code=400)
+    # Determine batch limit for this user
+    if bool(runpod_token):
+        user_batch_limit = MAX_BATCH_PRIVATE
+    elif in_local_mode:
+        user_batch_limit = MAX_BATCH_LOCAL
+    else:
+        user_batch_limit = 1
 
+    # Count active transcription jobs
+    active_job_count = len(user_jobs.get(user_email, set()))
+
+    # Count active transcoding jobs (queued + running)
+    transcoding_count = 0
     async with transcoding_lock:
         for queued_job in list(transcoding_queue.queue):
             if queued_job.user_email == user_email:
-                return None, JSONResponse({"error": "errorTranscodingJobActive", "i18n_key": "errorTranscodingJobActive"}, status_code=400)
+                transcoding_count += 1
         for existing_job_id, existing_job in transcoding_running_jobs.items():
             if existing_job.user_email == user_email:
-                return None, JSONResponse({"error": "errorTranscodingJobActive", "i18n_key": "errorTranscodingJobActive"}, status_code=400)
+                transcoding_count += 1
+
+    total_active = active_job_count + transcoding_count
+    if total_active >= user_batch_limit:
+        return None, JSONResponse({"error": "errorBatchLimitReached", "i18n_key": "errorBatchLimitReached"}, status_code=400)
 
     if save_audio is None:
         return None, JSONResponse({"error": "errorMissingSaveAudio", "i18n_key": "errorMissingSaveAudio"}, status_code=400)
@@ -2965,21 +2998,21 @@ async def transcribe_job(job_desc):
         if in_local_mode:
             # Use ggml_model for local mode
             selected_model = lang_cfg["ggml_model"]
-            
+
             # If model is a relative path, resolve it against models_dir
             if args.models_dir and not os.path.isabs(selected_model):
                 selected_model = os.path.join(args.models_dir, selected_model)
-            
+
             log_message(f"{job_desc.user_email}: using local model: {selected_model}")
             m = ivrit.load_model(engine='whisper-cpp', model=selected_model)
             # In local mode, transcribe first without diarization
             segs = m.transcribe_async(path=temp_file_path, diarize=False)
-            
+
             # Collect all segments for diarization
             all_segments = []
             async for segment in segs:
                 all_segments.append(segment)
-            
+
             # Perform diarization separately after transcription
             from ivrit.diarization import diarize as diarize_func
             import torch
@@ -2991,12 +3024,12 @@ async def transcribe_job(job_desc):
                 engine="ivrit",
                 device=diarize_device
             )
-            
+
             # Convert to async generator for consistent processing
             async def to_async_generator(segments):
                 for segment in segments:
                     yield segment
-            
+
             segs = to_async_generator(diarized_segments)
         else:
             # Use ct2_model for server/RunPod mode
@@ -3191,8 +3224,10 @@ async def transcribe_job(job_desc):
         del running_jobs[job_desc.job_type][job_id]
         # Remove job from user's active jobs
         user_email = job_desc.user_email
-        if user_email in user_jobs and user_jobs[user_email] == job_id:
-            del user_jobs[user_email]
+        if user_email in user_jobs:
+            user_jobs[user_email].discard(job_id)
+            if not user_jobs[user_email]:
+                del user_jobs[user_email]
         cleanup_temp_file(job_id)
         # The job thread will terminate itself in the next iteration of the transcribe_job function
 

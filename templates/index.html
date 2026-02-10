@@ -2675,6 +2675,9 @@
           const resp = await fetch('/languages')
           const data = await resp.json()
           const langs = (data && data.languages) ? data.languages : {}
+          if (data.batch) {
+            serverBatchConfig = data.batch
+          }
           if (!languageSelect) return
           languageSelect.innerHTML = ''
           const KNOWN = [
@@ -2727,12 +2730,18 @@
         }
       }
 
-      let selectedFile = null
       let selectedFiles = []
-      let batchMode = false
       const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024 // 300MB in bytes
       const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024 // 3GB in bytes
       const IN_LOCAL_MODE = {{ 'true' if in_local_mode else 'false' }}
+      let serverBatchConfig = null  // populated from /languages endpoint
+      function getBatchLimit() {
+        if (!serverBatchConfig) return 1
+        if (IN_LOCAL_MODE) return serverBatchConfig.max_batch_local || 1
+        const token = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
+        return token ? (serverBatchConfig.max_batch_private || 1) : (serverBatchConfig.max_batch_default || 1)
+      }
+      function isBatchAllowed() { return getBatchLimit() > 1 }
       let transcriptionSegments = []
       let activeTranscription = false
       let currentJobId = null
@@ -2815,7 +2824,7 @@
       }
 
       function removeFile() {
-        selectedFile = null
+        selectedFiles = []
         transcribeBtn.disabled = true
         document.getElementById("file-preview").classList.remove("show")
         document.getElementById("file-name").style.display = "block"
@@ -3709,9 +3718,7 @@
 
       async function handleDrop(e) {
         const dt = e.dataTransfer
-        // Allow dropping multiple files/folders only with private key (not available in local mode)
-        const isPrivate = IN_LOCAL_MODE ? false : ((runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token"))
-        if (isPrivate && dt.items && dt.items.length) {
+        if (isBatchAllowed() && dt.items && dt.items.length) {
           const files = await extractFilesFromDataTransfer(dt)
           handleFiles(files)
         } else {
@@ -3777,61 +3784,48 @@
       })
 
       function handleFiles(files) {
-        // Batch mode only available with private key (not available in local mode)
-        const isPrivate = IN_LOCAL_MODE ? false : ((runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token"))
         const list = Array.from(files || [])
         if (!list.length) return
 
-        if (isPrivate && list.length > 1) {
-          // Multi-file mode (private key only)
-          const maxSize = getMaxFileSize()
-          const maxText = getMaxFileSizeText()
-          const valid = []
-          for (const f of list) {
-            if (f.size > maxSize) {
-              showToast((window.I18N ? window.I18N.t('fileTooLarge', { size: maxText }) : `הקובץ גדול מדי. הגודל המקסימלי המותר הוא ${maxText}`) + `: ${f.name}`, "error")
-              continue
-            }
-            valid.push(f)
+        const maxSize = getMaxFileSize()
+        const maxText = getMaxFileSizeText()
+        const batchLimit = getBatchLimit()
+
+        // Filter by size
+        const valid = []
+        for (const f of list) {
+          if (f.size > maxSize) {
+            showToast((window.I18N ? window.I18N.t('fileTooLarge', { size: maxText }) : `הקובץ גדול מדי. הגודל המקסימלי המותר הוא ${maxText}`) + `: ${f.name}`, "error")
+            continue
           }
-          if (!valid.length) {
-            selectedFiles = []
-            batchMode = false
-            transcribeBtn.disabled = true
-            return
-          }
-          selectedFiles = valid
-          selectedFile = null
-          batchMode = true
-          transcribeBtn.disabled = false
+          valid.push(f)
+        }
+        if (!valid.length) return
+
+        // Merge with existing selection
+        const existing = [...selectedFiles]
+        const merged = [...existing, ...valid]
+        if (merged.length > batchLimit) {
+          showToast(window.I18N ? window.I18N.t('batchLimitExceeded', { limit: batchLimit }) : `Too many files. Only first ${batchLimit} will be processed.`, "warning")
+          merged.splice(batchLimit)
+        }
+
+        selectedFiles = merged
+        transcribeBtn.disabled = false
+
+        if (merged.length === 1) {
+          showFilePreview(merged[0])
+          showToast((window.I18N ? window.I18N.t('fileSelectedSuccess') : "קובץ נבחר בהצלחה"), "success")
+        } else {
           document.getElementById("file-preview").classList.remove("show")
           document.getElementById("file-name").style.display = "block"
-          document.getElementById("file-name").textContent = (window.I18N ? window.I18N.t('filesSelectedCount', { count: valid.length }) : `${valid.length} קבצים נבחרו`)
-          showToast((window.I18N ? window.I18N.t('filesSelectedSuccess', { count: valid.length }) : `${valid.length} קבצים נבחרו בהצלחה`), "success")
-        } else {
-          // Single-file mode
-          selectedFile = list[0]
-          const maxFileSize = getMaxFileSize()
-          const maxFileSizeText = getMaxFileSizeText()
-          if (selectedFile.size > maxFileSize) {
-            showToast((window.I18N ? window.I18N.t('fileTooLarge', { size: maxFileSizeText }) : `הקובץ גדול מדי. הגודל המקסימלי המותר הוא ${maxFileSizeText}`), "error")
-            selectedFile = null
-            transcribeBtn.disabled = true
-            fileName.textContent = ""
-          } else {
-            selectedFiles = []
-            batchMode = false
-            transcribeBtn.disabled = false
-            showFilePreview(selectedFile)
-            showToast((window.I18N ? window.I18N.t('fileSelectedSuccess') : "קובץ נבחר בהצלחה"), "success")
-          }
+          document.getElementById("file-name").textContent = (window.I18N ? window.I18N.t('filesSelectedCount', { count: selectedFiles.length }) : `${selectedFiles.length} קבצים נבחרו`)
+          showToast((window.I18N ? window.I18N.t('filesSelectedSuccess', { count: selectedFiles.length }) : `${selectedFiles.length} קבצים נבחרו בהצלחה`), "success")
         }
       }
 
       dropArea.addEventListener("click", () => {
-        // Multiple file selection only available with private key (not available in local mode)
-        const isPrivate = IN_LOCAL_MODE ? false : ((runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token"))
-        if (isPrivate) {
+        if (isBatchAllowed()) {
           fileInput.setAttribute("multiple", "multiple")
         } else {
           fileInput.removeAttribute("multiple")
@@ -3841,87 +3835,8 @@
       })
 
       transcribeBtn.addEventListener("click", function () {
-        if (batchMode && selectedFiles.length > 0) {
-          uploadBatch()
-        } else {
-          uploadFile()
-        }
+        uploadBatch()
       })
-
-      async function uploadFile() {
-        if (!selectedFile) return
-
-        // In local mode, ensure no RunPod token is used
-        const token = IN_LOCAL_MODE ? "" : getCookie("runpod_token")
-        let selectedLang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
-        try {
-          if (languageSelect && languageSelect.value) {
-            selectedLang = languageSelect.value
-          }
-        } catch {}
-
-        const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
-        const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
-
-        const precheckResult = await runUploadPrecheck({
-          fileSize: selectedFile.size,
-          language: selectedLang,
-          runpodToken: token,
-          saveAudio: saveAudioValue,
-        })
-
-        if (!precheckResult.ok) {
-          return
-        }
-
-        const formData = new FormData()
-        formData.append("file", selectedFile)
-
-        if (token) {
-          formData.append("runpod_token", token)
-        }
-        formData.append("language", selectedLang)
-        formData.append("save_audio", saveAudioValue)
-
-        transcribeBtn.disabled = true
-        transcriptionSegments = []
-        currentJobId = null
-        streamingUploadActive = true
-        startUploadPhaseUI()
-
-        const handleUploadProgress = (event) => {
-          if (!progressBar || !event.lengthComputable) return
-          const percentComplete = Math.round((event.loaded / event.total) * 100)
-          progressBar.style.width = percentComplete + "%"
-          setProgressStatusText("uploadingProgress", { progress: percentComplete })
-        }
-
-        let uploadSucceeded = false
-        const uploadedFilename = selectedFile.name
-        try {
-          await sendStreamingUpload({
-            formData,
-            onUploadProgress: handleUploadProgress,
-            onUploadComplete: () => startTranscodingPhaseUI("uploadTranscodingPending", { resetBar: true }),
-            onStreamEvent: handleUploadStreamEvent,
-          })
-          uploadSucceeded = true
-          resetUploadState()
-          activeTranscription = false
-          showToast((window.I18N ? window.I18N.t('transcriptionQueued') : 'הקובץ נשלח לתמלול בהצלחה.'), 'success')
-          // Switch to viewer tab with processing state
-          showViewerProcessingState(uploadedFilename, selectedLang)
-        } catch (error) {
-          showError(error)
-        } finally {
-          streamingUploadActive = false
-          if (!uploadSucceeded) {
-            transcribeBtn.disabled = false
-          } else {
-            transcribeBtn.disabled = !(selectedFile || (batchMode && selectedFiles.length > 0))
-          }
-        }
-      }
 
       async function uploadBatch() {
         if (!selectedFiles || selectedFiles.length === 0) return
@@ -3937,8 +3852,10 @@
         const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
 
         let successCount = 0
-        for (let i = 0; i < selectedFiles.length; i++) {
-          const file = selectedFiles[i]
+        const totalFiles = selectedFiles.length
+        const filesToUpload = [...selectedFiles]
+        for (let i = 0; i < filesToUpload.length; i++) {
+          const file = filesToUpload[i]
 
           const precheckResult = await runUploadPrecheck({
             fileSize: file.size,
@@ -3948,22 +3865,21 @@
           })
 
           if (!precheckResult.ok) {
-            transcribeBtn.disabled = false
-            hideProgressUI()
-            return
+            // Stop on first precheck failure; already-uploaded files continue server-side
+            break
           }
 
           const formData = new FormData()
           formData.append("file", file)
           formData.append('language', selectedLang)
           if (token) formData.append("runpod_token", token)
-          
+
           // Include save_audio checkbox value
           formData.append('save_audio', saveAudioValue)
 
           setProgressStatusText("batchUploading", {
             index: i + 1,
-            total: selectedFiles.length,
+            total: totalFiles,
             filename: file.name,
           })
 
@@ -3973,13 +3889,17 @@
               onStreamEvent: () => {},
             })
             successCount++
+            // Remove uploaded file from selectedFiles
+            const idx = selectedFiles.indexOf(file)
+            if (idx !== -1) selectedFiles.splice(idx, 1)
           } catch (err) {
             const translated = translateServerError(err) || (window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')
             showToast(`${file.name}: ${translated}`, "error")
-            continue
+            // Stop on first upload failure; already-uploaded files continue server-side
+            break
           } finally {
             if (progressBar) {
-              progressBar.style.width = `${Math.min(100, ((i + 1) / selectedFiles.length) * 100)}%`
+              progressBar.style.width = `${Math.min(100, ((i + 1) / totalFiles) * 100)}%`
             }
           }
         }
@@ -4394,9 +4314,7 @@
 
       function resetUploadState() {
         transcribeBtn.disabled = true
-        selectedFile = null
         selectedFiles = []
-        batchMode = false
         fileName.textContent = ""
         const filePreview = document.getElementById("file-preview")
         if (filePreview) {
@@ -4415,7 +4333,7 @@
 
       function resetAllState() {
         transcribeBtn.disabled = false
-        selectedFile = null
+        selectedFiles = []
         fileName.textContent = ""
         hideProgressUI()
         currentJobId = null
@@ -7705,9 +7623,7 @@
             const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
             const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
             
-            selectedFile = file
-            selectedFiles = []
-            batchMode = false
+            selectedFiles = [file]
             transcribeBtn.disabled = false
 
             // Show file preview
@@ -7829,9 +7745,7 @@
             const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
             const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
             
-            selectedFile = file
-            selectedFiles = []
-            batchMode = false
+            selectedFiles = [file]
             transcribeBtn.disabled = false
 
             // Show file preview
@@ -7993,9 +7907,7 @@
             const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
             const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
             
-            selectedFile = file
-            selectedFiles = []
-            batchMode = false
+            selectedFiles = [file]
             transcribeBtn.disabled = false
 
             // Show file preview
