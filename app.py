@@ -401,6 +401,7 @@ PRIVATE = "private"
 MAX_PARALLEL_SHORT_JOBS = 1
 MAX_PARALLEL_LONG_JOBS = 1
 MAX_PARALLEL_PRIVATE_JOBS = 1 if in_local_mode else 1000
+MAX_PARALLEL_JOBS_PER_USER = 1
 MAX_PARALLEL_TRANSCODES = 4
 MAX_QUEUED_JOBS = 20
 MAX_QUEUED_PRIVATE_JOBS = 5000
@@ -3233,12 +3234,22 @@ async def transcribe_job(job_desc):
 
 async def submit_next_task(job_queue, running_jobs, max_parallel_jobs, queue_type):
     async with queue_locks[queue_type]:
-        # Submit all possible tasks until max_parallel_jobs are reached or queue is empty
+        # Build per-user running count from current running jobs
+        user_running_count = {}
+        for j in running_jobs.values():
+            user_running_count[j.user_email] = user_running_count.get(j.user_email, 0) + 1
+
+        deferred = []
         while len(running_jobs) < max_parallel_jobs and not job_queue.empty():
             job_desc = job_queue.get()
-            running_jobs[job_desc.id] = job_desc
-            # Create async task for transcription
-            asyncio.create_task(transcribe_job(job_desc))
+            if user_running_count.get(job_desc.user_email, 0) < MAX_PARALLEL_JOBS_PER_USER:
+                running_jobs[job_desc.id] = job_desc
+                user_running_count[job_desc.user_email] = user_running_count.get(job_desc.user_email, 0) + 1
+                asyncio.create_task(transcribe_job(job_desc))
+            else:
+                deferred.append(job_desc)
+        for job_desc in deferred:
+            job_queue.put(job_desc)
 
 
 async def submit_next_transcoding_task():

@@ -3877,6 +3877,8 @@
           // Include save_audio checkbox value
           formData.append('save_audio', saveAudioValue)
 
+          // Reset progress bar for this file
+          if (progressBar) progressBar.style.width = '0%'
           setProgressStatusText("batchUploading", {
             index: i + 1,
             total: totalFiles,
@@ -3886,7 +3888,22 @@
           try {
             await sendStreamingUpload({
               formData,
-              onStreamEvent: () => {},
+              onUploadProgress: (event) => {
+                if (!progressBar || !event.lengthComputable) return
+                const percent = Math.round((event.loaded / event.total) * 100)
+                progressBar.style.width = percent + '%'
+              },
+              onUploadComplete: () => {
+                if (progressBar) progressBar.style.width = '0%'
+                setProgressStatusText("uploadTranscodingPending")
+              },
+              onStreamEvent: (event) => {
+                if (event.type === 'transcoding_progress' && event.progress_percent != null) {
+                  const percent = Math.round(event.progress_percent)
+                  if (progressBar) progressBar.style.width = percent + '%'
+                  setProgressStatusText("uploadTranscodingProgress", { progress: percent })
+                }
+              },
             })
             successCount++
             // Remove uploaded file from selectedFiles
@@ -3897,10 +3914,6 @@
             showToast(`${file.name}: ${translated}`, "error")
             // Stop on first upload failure; already-uploaded files continue server-side
             break
-          } finally {
-            if (progressBar) {
-              progressBar.style.width = `${Math.min(100, ((i + 1) / totalFiles) * 100)}%`
-            }
           }
         }
 
