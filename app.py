@@ -400,7 +400,7 @@ PRIVATE = "private"
 
 MAX_PARALLEL_SHORT_JOBS = 1
 MAX_PARALLEL_LONG_JOBS = 1
-MAX_PARALLEL_PRIVATE_JOBS = 1000
+MAX_PARALLEL_PRIVATE_JOBS = 1 if in_local_mode else 1000
 MAX_PARALLEL_TRANSCODES = 4
 MAX_QUEUED_JOBS = 20
 MAX_QUEUED_PRIVATE_JOBS = 5000
@@ -898,8 +898,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
         job_desc.save_audio = save_audio
 
         # Determine queue type based on job characteristics
-        if job_desc.uses_custom_runpod:
-            # Private queue for jobs with custom RunPod credentials
+        if job_desc.uses_custom_runpod or in_local_mode:
             queue_to_use = queues[PRIVATE]
             job_type = PRIVATE
             running_jobs_to_update = running_jobs[PRIVATE]
