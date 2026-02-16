@@ -45,6 +45,7 @@ from contextlib import asynccontextmanager
 import dataclasses
 from pathlib import Path
 
+import glob
 import traceback
 import copy
 import hashlib
@@ -61,6 +62,7 @@ import re
 import ivrit
 import json as _json
 from cachetools import LRUCache
+import yt_dlp
 
 dotenv.load_dotenv()
 
@@ -603,6 +605,14 @@ async def find_drive_file_by_name_cached(refresh_token: str, filename: str, user
 
 
 
+
+
+YOUTUBE_URL_PATTERN = re.compile(
+    r'^https?://(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[A-Za-z0-9_-]{11}'
+)
+
+def validate_youtube_url(url: str) -> bool:
+    return bool(YOUTUBE_URL_PATTERN.match(url))
 
 
 class LeakyBucket:
@@ -2420,6 +2430,61 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
         return response
 
 
+async def queue_transcoding_job(
+    *,
+    job_id: str,
+    filename: str,
+    user_email: str,
+    input_path: str,
+    file_size_bytes: int,
+    estimated_duration: float,
+    runpod_token: str,
+    language: str,
+    refresh_token: Optional[str],
+    save_audio: bool,
+) -> Optional[int]:
+    """
+    Create a transcoding job descriptor, queue it, initialize results,
+    emit a transcoding_waiting event, and kick the transcoding scheduler.
+
+    Returns the queue depth on success, or None if the queue is full.
+    """
+    transcoding_job = box.Box()
+    transcoding_job.id = job_id
+    transcoding_job.filename = filename
+    transcoding_job.user_email = user_email
+    transcoding_job.duration = estimated_duration
+    transcoding_job.runpod_token = runpod_token
+    transcoding_job.language = language
+    transcoding_job.refresh_token = refresh_token
+    transcoding_job.input_path = input_path
+    transcoding_job.file_size_bytes = file_size_bytes
+    transcoding_job.qtime = time.time()
+    transcoding_job.save_audio = save_audio
+
+    temp_files[job_id] = input_path
+
+    try:
+        async with transcoding_lock:
+            queue_depth = transcoding_queue.qsize()
+            transcoding_queue.put_nowait(transcoding_job)
+    except queue.Full:
+        cleanup_temp_file(job_id)
+        return None
+
+    job_results[job_id] = {"results": [], "completion_time": None}
+
+    await emit_upload_event(
+        job_id,
+        "transcoding_waiting",
+        {"job_id": job_id, "queue_depth": queue_depth, "filename": filename},
+    )
+
+    asyncio.create_task(submit_next_transcoding_task())
+
+    return queue_depth
+
+
 @app.post("/upload", dependencies=[Depends(require_google_login)])
 async def upload_file(
     request: Request,
@@ -2528,59 +2593,280 @@ async def upload_file(
     # Estimate duration based on file size: 1 minute per 1MB (for transcoding progress only)
     estimated_duration = (file_size / (1024 * 1024)) * 60
 
-    # Store the temporary file path
-    temp_files[job_id] = temp_file_path
-    
-    log_message(f"{user_email}: Creating transcoding job descriptor (job_id={job_id})")
-    # Create transcoding job descriptor
-    transcoding_job = box.Box()
-    transcoding_job.id = job_id
-    transcoding_job.filename = filename
-    transcoding_job.user_email = user_email
-    transcoding_job.duration = estimated_duration  # Estimated based on file size, will be validated after transcoding
-    transcoding_job.runpod_token = runpod_token
-    transcoding_job.language = requested_lang
-    transcoding_job.refresh_token = refresh_token
-    transcoding_job.input_path = temp_file_path
-    transcoding_job.file_size_bytes = metadata.get("file_size_bytes", file_size)
-    transcoding_job.qtime = time.time()
-    transcoding_job.save_audio = save_audio_bool
-    
-    # Queue transcoding job instead of starting immediately
+    event_queue = asyncio.Queue()
+    upload_event_streams[job_id] = event_queue
+
     log_message(f"{user_email}: Queueing transcoding job (job_id={job_id})")
-    try:
-        async with transcoding_lock:
-            queue_depth = transcoding_queue.qsize()
-            transcoding_queue.put_nowait(transcoding_job)
-        
-        # Initialize job results
-        job_results[job_id] = {"results": [], "completion_time": None}
-        
-        log_message(f"{user_email}: Transcoding job queued (job_id={job_id}, queue_depth={queue_depth})")
-
-        event_queue = asyncio.Queue()
-        upload_event_streams[job_id] = event_queue
-        await event_queue.put(
-            {
-                "type": "transcoding_waiting",
-                "job_id": job_id,
-                "queue_depth": queue_depth,
-                "filename": filename,
-            }
-        )
-
-        log_message(f"{user_email}: Returning streaming response (job_id={job_id})")
-        return StreamingResponse(
-            upload_event_generator(job_id),
-            media_type="application/x-ndjson",
-            headers={"Cache-Control": "no-store"},
-        )
-    except queue.Full:
-        cleanup_temp_file(job_id)
+    queue_depth = await queue_transcoding_job(
+        job_id=job_id,
+        filename=filename,
+        user_email=user_email,
+        input_path=temp_file_path,
+        file_size_bytes=metadata.get("file_size_bytes", file_size),
+        estimated_duration=estimated_duration,
+        runpod_token=runpod_token,
+        language=requested_lang,
+        refresh_token=refresh_token,
+        save_audio=save_audio_bool,
+    )
+    if queue_depth is None:
         log_message(f"{user_email}: ERROR - Transcoding queue full (job_id={job_id})")
         return JSONResponse({"error": "errorServerBusy", "i18n_key": "errorServerBusy"}, status_code=503)
 
+    log_message(f"{user_email}: Returning streaming response (job_id={job_id})")
+    return StreamingResponse(
+        upload_event_generator(job_id),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store"},
+    )
 
+
+async def get_youtube_video_info(url: str) -> Optional[dict]:
+    """
+    Fetch metadata for a YouTube video without downloading it.
+    Returns the yt-dlp info dict (with 'duration', 'title', etc.) on success, None on error.
+    """
+    ydl_opts = {
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+    def do_extract():
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(url, download=False)
+        except Exception as e:
+            log_message(f"yt-dlp info extraction failed for {url}: {type(e).__name__}: {e}")
+            return None
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, do_extract)
+
+
+async def download_youtube_audio(url: str, output_path: str, job_id: str) -> Optional[dict]:
+    """
+    Download audio from a YouTube URL using yt-dlp.
+    Returns the yt-dlp info dict on success, None on failure.
+    Emits youtube_download_progress events via upload_event_streams.
+    """
+    loop = asyncio.get_event_loop()
+
+    def progress_hook(d):
+        if d.get("status") == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            downloaded = d.get("downloaded_bytes", 0)
+            if total > 0:
+                percent = round((downloaded / total) * 100)
+            else:
+                percent = 0
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    emit_upload_event(job_id, "youtube_download_progress", {"progress_percent": percent}),
+                    loop,
+                )
+            except Exception:
+                pass
+
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "outtmpl": output_path + ".%(ext)s",
+        "progress_hooks": [progress_hook],
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+    def do_download():
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return info
+        except Exception as e:
+            log_message(f"yt-dlp download failed for job {job_id}: {type(e).__name__}: {e}")
+            return None
+
+    info = await loop.run_in_executor(None, do_download)
+    return info
+
+
+@app.post("/upload/youtube", dependencies=[Depends(require_google_login)])
+async def upload_youtube(request: Request):
+    job_id = str(uuid.uuid4())
+    user_email = get_user_email(request)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "errorInvalidJson", "i18n_key": "errorInvalidJson"}, status_code=400)
+
+    youtube_url = body.get("youtube_url", "").strip()
+    language = body.get("language")
+    runpod_token = body.get("runpod_token")
+    save_audio = body.get("save_audio", "false")
+    rights_confirmed = body.get("rights_confirmed", False)
+
+    log_message(f"{user_email}: YouTube upload request started - job_id={job_id}, url={youtube_url}, language={language}")
+
+    if in_hiatus_mode:
+        return JSONResponse({"error": "errorServiceUnavailable", "i18n_key": "errorServiceUnavailable"}, status_code=503)
+
+    if not rights_confirmed:
+        return JSONResponse({"error": "errorYoutubeRightsNotConfirmed", "i18n_key": "errorYoutubeRightsNotConfirmed"}, status_code=400)
+
+    if not youtube_url or not validate_youtube_url(youtube_url):
+        return JSONResponse({"error": "errorInvalidYoutubeUrl", "i18n_key": "errorInvalidYoutubeUrl"}, status_code=400)
+
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+
+    metadata, error_response = await validate_upload_request_metadata(
+        request,
+        user_email=user_email,
+        language=language,
+        runpod_token=runpod_token,
+        save_audio=save_audio,
+        file_size=None,
+        refresh_token=refresh_token,
+    )
+    if error_response:
+        return error_response
+
+    runpod_token = metadata["normalized_runpod_token"]
+    max_file_size = metadata["max_file_size"]
+    max_file_size_text = metadata["max_file_size_text"]
+    save_audio_bool = metadata["save_audio_bool"]
+    requested_lang = language
+
+    capture_event(job_id, "youtube-upload", {"user": user_email, "url": youtube_url})
+
+    # --- Pre-download checks: fetch video info without downloading ---
+    info = await get_youtube_video_info(youtube_url)
+    if info is None:
+        log_message(f"{user_email}: YouTube info extraction failed (job_id={job_id})")
+        return JSONResponse({"error": "errorYoutubeDownloadFailed", "i18n_key": "errorYoutubeDownloadFailed"}, status_code=400)
+
+    video_duration = info.get("duration") or 0
+
+    # Check duration limit (mirrors queue_job check)
+    max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
+    if video_duration > max_duration_seconds:
+        log_message(f"{user_email}: YouTube video too long ({video_duration}s) (job_id={job_id})")
+        return JSONResponse({
+            "error": "errorFileTooLong",
+            "i18n_key": "errorFileTooLong",
+            "i18n_vars": {
+                "maxHours": MAX_AUDIO_DURATION_IN_HOURS,
+                "maxSeconds": f"{max_duration_seconds/3600:.1f}",
+                "fileHours": f"{video_duration/3600:.1f}",
+            },
+        }, status_code=400)
+
+    # Check credits before downloading (only when not using custom RunPod token)
+    custom_runpod_credentials = bool(runpod_token)
+    if not custom_runpod_credentials and video_duration > 0:
+        user_bucket = get_user_quota(user_email)
+        eta_seconds = user_bucket.eta_to_credits(video_duration)
+
+        if eta_seconds > 0:
+            if eta_seconds == float('inf'):
+                log_message(f"{user_email}: YouTube video too large for free service ({video_duration}s) (job_id={job_id})")
+                return JSONResponse({
+                    "error": "errorFileTooLargeForFreeService",
+                    "i18n_key": "errorFileTooLargeForFreeService",
+                }, status_code=429)
+            else:
+                wait_minutes = math.ceil(eta_seconds / 60)
+                log_message(f"{user_email}: YouTube rate limited, wait {wait_minutes}min (job_id={job_id})")
+                return JSONResponse({
+                    "error": "errorRateLimitExceeded",
+                    "i18n_key": "errorRateLimitExceeded",
+                    "i18n_vars": {"minutes": wait_minutes},
+                }, status_code=429)
+
+    event_queue = asyncio.Queue()
+    upload_event_streams[job_id] = event_queue
+
+    async def youtube_download_and_queue():
+        temp_file_path = None
+        try:
+            await emit_upload_event(job_id, "youtube_download_started", {"url": youtube_url})
+
+            # Generate a unique path prefix without creating a file — yt-dlp
+            # appends the real extension via %(ext)s, so a pre-existing empty
+            # placeholder would confuse the file-resolution logic.
+            temp_file_path = os.path.join(tempfile.gettempdir(), f"{job_id}.ytdl")
+
+            dl_info = await download_youtube_audio(youtube_url, temp_file_path, job_id)
+            if dl_info is None:
+                await emit_upload_error(job_id, "errorYoutubeDownloadFailed")
+                return
+
+            # yt-dlp may write to the exact outtmpl path, or append a real
+            # extension (e.g. .ytdl.webm).  Use glob to find whatever it created.
+            candidates = sorted(
+                [p for p in glob.glob(temp_file_path + "*") if os.path.getsize(p) > 0],
+                key=os.path.getsize,
+                reverse=True,
+            )
+            if not candidates:
+                log_message(f"{user_email}: YouTube download produced no file (job_id={job_id})")
+                await emit_upload_error(job_id, "errorYoutubeDownloadFailed")
+                return
+            actual_path = candidates[0]
+
+            file_size = os.path.getsize(actual_path)
+            if max_file_size is not None and file_size > max_file_size:
+                await emit_upload_error(
+                    job_id, "errorFileTooLarge",
+                    i18n_vars={"size": max_file_size_text},
+                )
+                os.unlink(actual_path)
+                return
+
+            # Use title from pre-download info fetch
+            video_title = info.get("title", "youtube_audio")
+            filename = video_title + ".opus"
+
+            await emit_upload_event(job_id, "youtube_download_complete", {"filename": filename})
+
+            # Use pre-fetched duration if available, fall back to file-size estimate
+            estimated_duration = video_duration if video_duration > 0 else (file_size / (1024 * 1024)) * 60
+
+            queue_depth = await queue_transcoding_job(
+                job_id=job_id,
+                filename=filename,
+                user_email=user_email,
+                input_path=actual_path,
+                file_size_bytes=file_size,
+                estimated_duration=estimated_duration,
+                runpod_token=runpod_token,
+                language=requested_lang,
+                refresh_token=refresh_token,
+                save_audio=save_audio_bool,
+            )
+            if queue_depth is None:
+                await emit_upload_error(job_id, "errorServerBusy", status_code=503)
+
+        except Exception as e:
+            log_message(f"{user_email}: YouTube upload error (job_id={job_id}): {type(e).__name__}: {e}")
+            logger.exception(f"{user_email}: YouTube upload traceback (job_id={job_id})")
+            # Clean up any files yt-dlp may have created
+            if temp_file_path:
+                for p in glob.glob(temp_file_path + "*"):
+                    try:
+                        os.unlink(p)
+                    except Exception:
+                        pass
+            await emit_upload_error(job_id, "errorYoutubeDownloadFailed")
+
+    asyncio.create_task(youtube_download_and_queue())
+
+    return StreamingResponse(
+        upload_event_generator(job_id),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def handle_transcoding(job_id: str):

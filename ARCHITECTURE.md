@@ -84,7 +84,7 @@ build_bundle.py           PyInstaller bundling script
 
 | Category | Key Endpoints |
 |----------|--------------|
-| Transcription | `POST /upload`, `POST /upload/precheck`, `GET /download/{job_id}` |
+| Transcription | `POST /upload`, `POST /upload/precheck`, `POST /upload/youtube`, `GET /download/{job_id}` |
 | Audio | `GET /appdata/audio/{id}`, `GET /appdata/audio/stream/{id}` |
 | Data | `GET /appdata/toc`, `GET /appdata/results/{id}`, `POST /appdata/edits/{id}` |
 | Management | `POST /appdata/rename`, `POST /appdata/delete`, `POST /appdata/donate_data` |
@@ -188,3 +188,67 @@ These are compile-time constants in `app.py` that require a code change to tune:
 - **RunPod** - Serverless GPU compute via REST + GraphQL APIs
 - **Hugging Face** - Model hosting and downloading
 - **PostHog** - Analytics and event tracking
+
+## Frontend Internals
+
+### Key DOM Elements
+- `drop-area`, `file-input` — file drag/drop and picker
+- `youtube-url-input`, `youtube-paste-btn` — YouTube URL input and paste button
+- `transcribe-btn`, `language-select` — transcription controls
+- `progress-bar`, `progress-status`, `progress-container` — upload/transcoding progress
+- `file-preview`, `file-name` — selected file display
+
+### Key JS State Variables
+- `selectedFiles` — array of File objects pending upload
+- `pendingYoutubeUrl` — URL awaiting rights confirmation
+- `currentJobId`, `activeTranscription` — active job tracking
+- `transcriptionSegments` — current transcription result segments
+- `uploadPhase` — `"idle"` | `"upload"` | `"transcoding"` | `"done"`
+
+### Key JS Functions
+- `handleFiles()` — validates and queues files for upload
+- `uploadBatch()` — orchestrates sequential file uploads
+- `sendStreamingUpload()` — XHR POST to `/upload` with NDJSON streaming
+- `uploadYoutubeUrl(url)` — fetch POST to `/upload/youtube` with NDJSON streaming
+- `showProgressUI()` / `hideProgressUI()` — toggle progress bar visibility
+- `setProgressStatusText(key, vars)` — update progress status with i18n
+- `resetUploadState()` — clear all upload-related UI state
+- `showError()`, `showToast()` — user notifications
+- `switchTab(tabName)` — navigate between tabs
+- `translateServerError(err)` — convert server error objects to i18n strings
+- `checkBalance()` — refresh quota display
+
+### Upload Pipeline
+- **Client:** precheck → XHR POST `/upload` → NDJSON streaming events
+- **Server:** `validate_upload_request_metadata()` → create temp file → queue to `transcoding_queue` → `StreamingResponse`
+- **Background:** `submit_next_transcoding_task()` → `handle_transcoding()` → `transcode_to_opus()` → `queue_job()` → `transcribe_job()`
+
+### YouTube Upload Pipeline
+- **Client:** validate URL → show rights modal → fetch POST `/upload/youtube` → NDJSON streaming events
+- **Server:** validate URL + rights → `download_youtube_audio()` (yt-dlp in executor) → queue to `transcoding_queue` → `StreamingResponse`
+- **Background:** same transcoding pipeline as file upload
+
+### Streaming Upload Events (NDJSON)
+- `transcoding_waiting` — job queued for transcoding
+- `transcoding_started` — transcoding in progress
+- `transcoding_progress` — transcoding percent update
+- `transcoding_complete` — terminal success event
+- `queue_position` — position in transcription queue
+- `eta` — estimated time to transcription start
+- `youtube_download_started` — YouTube download began
+- `youtube_download_progress` — YouTube download percent
+- `youtube_download_complete` — YouTube download finished
+- `error` — terminal error event
+
+Events are pushed via `upload_event_streams` dict (job_id → asyncio.Queue), emitted with `emit_upload_event()`, and streamed to client via `upload_event_generator()`.
+
+### Modal/Dialog Patterns
+- CSS: `.modal` (hidden) + `.modal.show` (visible), fixed position, z-index 1000, dark backdrop
+- HTML: `.modal > .modal-content > .modal-header + .form-group + .modal-buttons`
+- Existing modals: `settings-modal`, `speaker-rename-modal`, `donate-data-modal`, `youtube-rights-modal`
+- Checkbox-gated submit: checkbox change toggles submit button `disabled` state
+
+### i18n Pattern
+- HTML: `data-i18n` attribute on elements, `data-i18n-title` for title/aria-label
+- JS: `window.I18N.t(key, vars)` for dynamic strings
+- String tables in `static/i18n.js` with `he`, `yi`, `en` objects

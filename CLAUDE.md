@@ -13,6 +13,8 @@ ivrit.ai — a Hebrew-focused audio transcription service. See [ARCHITECTURE.md]
 - **i18n:** `static/i18n.js`
 - **Config:** `config.json` (languages and models)
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for frontend internals (DOM IDs, JS functions, state variables), upload pipeline flow, streaming event types, modal patterns, and i18n conventions.
+
 ## Running
 
 ```bash

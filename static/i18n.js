@@ -219,6 +219,24 @@
     errorDonateNoTranscript: "תמלול לא נמצא לתרומה",
     errorDonateCheckboxRequired: "יש לאשר את תיבת הסימון",
     errorAlreadyDonated: "נתונים אלה כבר נתרמו",
+    // Input method labels
+    inputUploadFile: "העלאת קובץ",
+    inputYoutube: "YouTube",
+    inputRecord: "הקלטה",
+    // YouTube
+    orSeparator: "או",
+    youtubeUrlPlaceholder: "הדבק קישור YouTube כאן",
+    youtubeUrlPaste: "הדבק",
+    youtubeRightsTitle: "אישור זכויות",
+    youtubeRightsMessage: "הורדת תוכן מ-YouTube עשויה להפר את זכויות היוצרים ואת תנאי השירות של YouTube. אנא ודא שיש לך את הזכויות הנדרשות להוריד ולתמלל תוכן זה.",
+    youtubeRightsCheckbox: "אני מאשר שיש לי את הזכויות להוריד ולתמלל תוכן זה",
+    youtubeRightsSubmit: "המשך",
+    youtubeDownloading: "מוריד אודיו מ-YouTube...",
+    youtubeDownloadingProgress: "מוריד... {progress}%",
+    youtubeDownloadComplete: "ההורדה הסתיימה. ממיר אודיו...",
+    errorInvalidYoutubeUrl: "קישור YouTube לא תקין",
+    errorYoutubeDownloadFailed: "הורדת הקובץ מ-YouTube נכשלה. ייתכן שהסרטון אינו זמין או שיש בעיה בחיבור.",
+    errorYoutubeRightsNotConfirmed: "יש לאשר את הזכויות לפני ההורדה",
   }
 
   const yi = {
@@ -441,6 +459,24 @@
     errorDonateNoTranscript: "טראַנסקריפּציע נישט געפֿונען פֿאַר נדבה",
     errorDonateCheckboxRequired: "מען דאַרף באַשטעטיקן דעם טשעקבאָקס",
     errorAlreadyDonated: "די דאַטן זענען שוין געשענקט געוואָרן",
+    // Input method labels
+    inputUploadFile: "אַרויפֿלאָדן טעקע",
+    inputYoutube: "YouTube",
+    inputRecord: "רעקאָרד",
+    // YouTube
+    orSeparator: "אָדער",
+    youtubeUrlPlaceholder: "קלעפּט אַ YouTube לינק דאָ",
+    youtubeUrlPaste: "אַרײַנקלעפּן",
+    youtubeRightsTitle: "באַשטעטיקונג פֿון רעכט",
+    youtubeRightsMessage: "אַראָפּלאָדן אינהאַלט פֿון YouTube קען פֿאַרלעצן זכות היוצרים און YouTube'ס תנאי־ניצול. ביטע פֿאַרזיכערט אַז איר האָט די נויטיקע רעכט צו אַראָפּלאָדן און טראַנסקריבירן דעם אינהאַלט.",
+    youtubeRightsCheckbox: "איך באַשטעטיק אַז איך האָב די רעכט צו אַראָפּלאָדן און טראַנסקריבירן דעם אינהאַלט",
+    youtubeRightsSubmit: "פֿאָרזעצן",
+    youtubeDownloading: "אַראָפּלאָדט אַודיאָ פֿון YouTube...",
+    youtubeDownloadingProgress: "אַראָפּלאָדט... {progress}%",
+    youtubeDownloadComplete: "אַראָפּלאָדן פֿאַרענדיקט. קאָנווערטירט אַודיאָ...",
+    errorInvalidYoutubeUrl: "אומגילטיק YouTube לינק",
+    errorYoutubeDownloadFailed: "אַראָפּלאָדן פֿון YouTube האָט דורכגעפֿאַלן. דער ווידעא איז אפֿשר נישט פֿאַראַן אָדער עס איז אַ פֿאַרבינדונגס־פּראָבלעם.",
+    errorYoutubeRightsNotConfirmed: "מען דאַרף באַשטעטיקן די רעכט פֿאַרן אַראָפּלאָדן",
   }
 
   const en = {
@@ -663,6 +699,24 @@
     errorDonateNoTranscript: "Transcription not found for donation",
     errorDonateCheckboxRequired: "Checkbox must be checked",
     errorAlreadyDonated: "This data has already been donated",
+    // Input method labels
+    inputUploadFile: "Upload File",
+    inputYoutube: "YouTube",
+    inputRecord: "Record",
+    // YouTube
+    orSeparator: "or",
+    youtubeUrlPlaceholder: "Paste a YouTube link here",
+    youtubeUrlPaste: "Paste",
+    youtubeRightsTitle: "Rights Confirmation",
+    youtubeRightsMessage: "Downloading content from YouTube may violate copyright and YouTube's Terms of Service. Please ensure you have the necessary rights to download and transcribe this content.",
+    youtubeRightsCheckbox: "I confirm I have the rights to download and transcribe this content",
+    youtubeRightsSubmit: "Continue",
+    youtubeDownloading: "Downloading audio from YouTube...",
+    youtubeDownloadingProgress: "Downloading... {progress}%",
+    youtubeDownloadComplete: "Download complete. Converting audio...",
+    errorInvalidYoutubeUrl: "Invalid YouTube URL",
+    errorYoutubeDownloadFailed: "Failed to download from YouTube. The video may be unavailable or there may be a connection issue.",
+    errorYoutubeRightsNotConfirmed: "You must confirm rights before downloading",
   }
 
   const resources = { he, yi, en }

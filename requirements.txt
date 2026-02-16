@@ -11,3 +11,4 @@ ivrit==0.2.0
 cachetools
 imageio-ffmpeg==0.6.0
 huggingface-hub==0.33.4
+yt-dlp

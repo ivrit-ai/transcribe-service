@@ -439,12 +439,14 @@
       h1 {
         margin-bottom: 2rem;
       }
+      #drop-area p {
+        margin: 0;
+      }
       #drop-area {
         border: 2px dashed var(--border-color);
         border-radius: 12px;
-        padding: 2rem;
+        padding: 1.25rem;
         cursor: pointer;
-        margin-bottom: 1rem;
         background: linear-gradient(
           135deg,
           var(--secondary-color) 0%,
@@ -1330,6 +1332,55 @@
         display: block;
       }
 
+      /* Input method segmented control */
+      .input-method-bar {
+        display: flex;
+        background: var(--secondary-color);
+        border-radius: 8px;
+        padding: 3px;
+        margin-bottom: 1rem;
+        gap: 3px;
+      }
+      .input-method-btn {
+        flex: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        padding: 0.45rem 0.5rem;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text-color);
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        opacity: 0.65;
+      }
+      .input-method-btn i {
+        width: 16px;
+        height: 16px;
+      }
+      .input-method-btn:hover {
+        opacity: 0.85;
+      }
+      .input-method-btn.active {
+        background: var(--container-bg);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        opacity: 1;
+      }
+      .input-method-panel {
+        display: none;
+      }
+      .input-method-panel.active {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 4.5rem;
+        margin-bottom: 1rem;
+      }
+
       /* Files list styles */
       .files-list {
         margin-top: 1rem;
@@ -1909,40 +1960,70 @@
         </div>
       </div>
 
-      <div id="drop-area">
-        <p data-i18n="dropPrompt">גרור קובץ לכאן או לחץ לבחירת קובץ</p>
-        <input type="file" id="file-input" accept="audio/*,video/*" />
+      <!-- Input Method Segmented Control -->
+      <div id="input-method-container">
+      <div class="input-method-bar">
+        <button class="input-method-btn active" data-input-method="upload">
+          <i data-lucide="upload" style="width: 16px; height: 16px;"></i>
+          <span data-i18n="inputUploadFile">העלאת קובץ</span>
+        </button>
+        <button class="input-method-btn" data-input-method="youtube">
+          <svg style="width: 16px; height: 16px; flex-shrink: 0;" viewBox="0 0 28.57 20" preserveAspectRatio="xMidYMid meet"><path d="M27.97 3.12a3.58 3.58 0 0 0-2.52-2.54C23.22 0 14.28 0 14.28 0S5.35 0 3.12.58A3.58 3.58 0 0 0 .6 3.12C0 5.35 0 10 0 10s0 4.65.6 6.88a3.58 3.58 0 0 0 2.52 2.54C5.35 20 14.28 20 14.28 20s8.94 0 11.17-.58a3.58 3.58 0 0 0 2.52-2.54C28.57 14.65 28.57 10 28.57 10s0-4.65-.6-6.88z" fill="#FF0000"/><path d="M11.43 14.28 18.85 10l-7.42-4.28v8.56z" fill="#FFF"/></svg>
+          <span data-i18n="inputYoutube">YouTube</span>
+        </button>
+        <button class="input-method-btn" data-input-method="record">
+          <i data-lucide="mic" style="width: 16px; height: 16px;"></i>
+          <span data-i18n="inputRecord">הקלטה</span>
+        </button>
       </div>
-      
-      <!-- Record Audio Button with Menu -->
-      <div style="text-align: center; margin-top: 1rem;">
-        <div class="record-menu" style="display: inline-block; position: relative;">
-          <button id="record-menu-btn" class="btn record-mic-only-btn" style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background-color: #dc3545; border: none; padding: 0; transition: all 0.2s ease;" data-i18n-title="recordAudio">
-            <i data-lucide="mic" style="width: 24px; height: 24px; color: white;"></i>
+
+      <div class="input-method-panel active" id="input-panel-upload">
+        <div id="drop-area">
+          <p data-i18n="dropPrompt">גרור קובץ לכאן או לחץ לבחירת קובץ</p>
+          <input type="file" id="file-input" accept="audio/*,video/*" />
+        </div>
+      </div>
+
+      <div class="input-method-panel" id="input-panel-youtube">
+        <div style="display: flex; align-items: center; gap: 0.5rem; width: 100%;">
+          <input type="text" id="youtube-url-input" data-i18n="youtubeUrlPlaceholder" placeholder="הדבק קישור YouTube כאן" style="flex: 1; padding: 0.6rem 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: var(--container-bg); color: var(--text-color); font-size: 0.95rem;" />
+          <button type="button" id="youtube-paste-btn" data-i18n-title="youtubeUrlPaste" style="display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--container-bg); color: var(--text-color); cursor: pointer; flex-shrink: 0;" title="הדבק">
+            <i data-lucide="clipboard" style="width: 18px; height: 18px;"></i>
           </button>
-          <div class="record-dropdown" style="display: none; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 0.5rem; background: var(--container-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); padding: 0.4rem 0; min-width: 200px; z-index: 200;">
-            <button type="button" id="record-mic-only-btn" style="background: none; border: none; width: 100%; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem;">
-              <span style="display: inline-flex; align-items: center; gap: 0.25rem; width: 52px; flex-shrink: 0;">
-                <i data-lucide="mic" style="width: 18px; height: 18px;"></i>
-              </span>
-              <span data-i18n="recordMicOnly">הקלט ממיקרופון בלבד</span>
+        </div>
+      </div>
+
+      <div class="input-method-panel" id="input-panel-record">
+        <div style="text-align: center;">
+          <div class="record-menu" style="display: inline-block; position: relative;">
+            <button id="record-menu-btn" class="btn record-mic-only-btn" style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background-color: #dc3545; border: none; padding: 0; transition: all 0.2s ease;" data-i18n-title="recordAudio">
+              <i data-lucide="mic" style="width: 24px; height: 24px; color: white;"></i>
             </button>
-            <button type="button" id="record-mic-screen-btn" style="background: none; border: none; width: 100%; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem;">
-              <span style="display: inline-flex; align-items: center; gap: 0.25rem; width: 52px; flex-shrink: 0;">
-                <i data-lucide="mic" style="width: 16px; height: 16px;"></i>
-                <span style="font-size: 0.9rem;">+</span>
-                <i data-lucide="monitor" style="width: 16px; height: 16px;"></i>
-              </span>
-              <span data-i18n="recordMicAndScreen">הקלט מיקרופון + מסך</span>
-            </button>
-            <button type="button" id="record-screen-only-btn" style="background: none; border: none; width: 100%; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem;">
-              <span style="display: inline-flex; align-items: center; gap: 0.25rem; width: 52px; flex-shrink: 0;">
-                <i data-lucide="monitor" style="width: 18px; height: 18px;"></i>
-              </span>
-              <span data-i18n="recordScreenOnly">הקלט ממסך בלבד</span>
-            </button>
+            <div class="record-dropdown" style="display: none; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 0.5rem; background: var(--container-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); padding: 0.4rem 0; min-width: 200px; z-index: 200;">
+              <button type="button" id="record-mic-only-btn" style="background: none; border: none; width: 100%; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem;">
+                <span style="display: inline-flex; align-items: center; gap: 0.25rem; width: 52px; flex-shrink: 0;">
+                  <i data-lucide="mic" style="width: 18px; height: 18px;"></i>
+                </span>
+                <span data-i18n="recordMicOnly">הקלט ממיקרופון בלבד</span>
+              </button>
+              <button type="button" id="record-mic-screen-btn" style="background: none; border: none; width: 100%; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem;">
+                <span style="display: inline-flex; align-items: center; gap: 0.25rem; width: 52px; flex-shrink: 0;">
+                  <i data-lucide="mic" style="width: 16px; height: 16px;"></i>
+                  <span style="font-size: 0.9rem;">+</span>
+                  <i data-lucide="monitor" style="width: 16px; height: 16px;"></i>
+                </span>
+                <span data-i18n="recordMicAndScreen">הקלט מיקרופון + מסך</span>
+              </button>
+              <button type="button" id="record-screen-only-btn" style="background: none; border: none; width: 100%; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; color: var(--text-color); display: flex; align-items: center; gap: 0.5rem;">
+                <span style="display: inline-flex; align-items: center; gap: 0.25rem; width: 52px; flex-shrink: 0;">
+                  <i data-lucide="monitor" style="width: 18px; height: 18px;"></i>
+                </span>
+                <span data-i18n="recordScreenOnly">הקלט ממסך בלבד</span>
+              </button>
+            </div>
           </div>
         </div>
+      </div>
       </div>
 
       <div class="file-preview" id="file-preview">
@@ -2444,8 +2525,31 @@
       </div>
     </div>
 
+    <!-- YouTube Rights Confirmation Modal -->
+    <div id="youtube-rights-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 data-i18n="youtubeRightsTitle">אישור זכויות</h2>
+          <button class="close" id="close-youtube-rights">&times;</button>
+        </div>
+        <div class="form-group">
+          <p style="margin-bottom: 1rem;">
+            <span data-i18n="youtubeRightsMessage">הורדת תוכן מ-YouTube עשויה להפר את זכויות היוצרים ואת תנאי השירות של YouTube. אנא ודא שיש לך את הזכויות הנדרשות להוריד ולתמלל תוכן זה.</span>
+          </p>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+            <input type="checkbox" id="youtube-rights-checkbox" style="width: auto; margin: 0;" />
+            <span data-i18n="youtubeRightsCheckbox">אני מאשר שיש לי את הזכויות להוריד ולתמלל תוכן זה</span>
+          </label>
+        </div>
+        <div class="modal-buttons">
+          <button type="button" class="btn btn-primary" id="submit-youtube-rights" data-i18n="youtubeRightsSubmit" disabled>המשך</button>
+          <button type="button" class="btn btn-secondary" id="cancel-youtube-rights" data-i18n="cancel">ביטול</button>
+        </div>
+      </div>
+    </div>
+
     <script src="{{ url_for('static', path='i18n.js') }}"></script>
-    
+
     <!-- TipTap Editor Module -->
     <script type="module">
       import { Editor, Node, mergeAttributes } from 'https://esm.sh/@tiptap/core@2.11.5'
@@ -2731,6 +2835,7 @@
       }
 
       let selectedFiles = []
+      let pendingYoutubeUrl = null
       const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024 // 300MB in bytes
       const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024 // 3GB in bytes
       const IN_LOCAL_MODE = {{ 'true' if in_local_mode else 'false' }}
@@ -3525,6 +3630,187 @@
         })
       }
 
+      // --- YouTube URL support ---
+      function isValidYoutubeUrl(url) {
+        return /^https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)[A-Za-z0-9_-]{11}/.test(url)
+      }
+
+      // YouTube URL input handlers
+      const youtubeUrlInput = document.getElementById("youtube-url-input")
+      const youtubePasteBtn = document.getElementById("youtube-paste-btn")
+
+      if (youtubeUrlInput) {
+        youtubeUrlInput.addEventListener("input", function () {
+          const url = youtubeUrlInput.value.trim()
+          if (url && isValidYoutubeUrl(url)) {
+            transcribeBtn.disabled = false
+            // Clear file selection when a YouTube URL is entered
+            selectedFiles = []
+            const fileInput = document.getElementById("file-input")
+            if (fileInput) fileInput.value = ""
+            const filePreview = document.getElementById("file-preview")
+            if (filePreview) filePreview.classList.remove("show")
+          } else if (!selectedFiles.length) {
+            transcribeBtn.disabled = true
+          }
+        })
+
+        youtubeUrlInput.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") {
+            e.preventDefault()
+            transcribeBtn.click()
+          }
+        })
+      }
+
+      if (youtubePasteBtn) {
+        youtubePasteBtn.addEventListener("click", async function () {
+          try {
+            const text = await navigator.clipboard.readText()
+            if (youtubeUrlInput) {
+              youtubeUrlInput.value = text
+              youtubeUrlInput.dispatchEvent(new Event("input"))
+            }
+          } catch {}
+        })
+      }
+
+      // YouTube rights modal handlers
+      ;(function () {
+        const modal = document.getElementById("youtube-rights-modal")
+        const checkbox = document.getElementById("youtube-rights-checkbox")
+        const submitBtn = document.getElementById("submit-youtube-rights")
+        const cancelBtn = document.getElementById("cancel-youtube-rights")
+        const closeBtn = document.getElementById("close-youtube-rights")
+        if (!modal) return
+
+        function closeModal() {
+          modal.classList.remove("show")
+          pendingYoutubeUrl = null
+        }
+
+        if (checkbox && submitBtn) {
+          checkbox.addEventListener("change", function () {
+            submitBtn.disabled = !checkbox.checked
+          })
+        }
+
+        if (submitBtn) {
+          submitBtn.addEventListener("click", function () {
+            modal.classList.remove("show")
+            if (pendingYoutubeUrl) {
+              uploadYoutubeUrl(pendingYoutubeUrl)
+              pendingYoutubeUrl = null
+            }
+          })
+        }
+
+        if (cancelBtn) cancelBtn.addEventListener("click", closeModal)
+        if (closeBtn) closeBtn.addEventListener("click", closeModal)
+
+        modal.addEventListener("click", function (e) {
+          if (e.target === modal) closeModal()
+        })
+      })()
+
+      async function uploadYoutubeUrl(url) {
+        transcribeBtn.disabled = true
+        showProgressUI()
+        setProgressStatusText("youtubeDownloading")
+
+        const token = IN_LOCAL_MODE ? "" : getCookie("runpod_token")
+        const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
+        const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
+        const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
+
+        try {
+          const resp = await fetch("/upload/youtube", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/x-ndjson, application/json" },
+            body: JSON.stringify({
+              youtube_url: url,
+              language: selectedLang,
+              runpod_token: token || "",
+              save_audio: saveAudioValue,
+              rights_confirmed: true,
+            }),
+          })
+
+          if (!resp.ok && !resp.headers.get("content-type")?.includes("ndjson")) {
+            let errPayload
+            try { errPayload = await resp.json() } catch { errPayload = { error: "errorYoutubeDownloadFailed" } }
+            throw errPayload
+          }
+
+          const reader = resp.body.getReader()
+          const decoder = new TextDecoder()
+          let buf = ""
+
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += decoder.decode(value, { stream: true })
+
+            let newlineIdx = buf.indexOf("\n")
+            while (newlineIdx !== -1) {
+              const rawLine = buf.slice(0, newlineIdx).trim()
+              buf = buf.slice(newlineIdx + 1)
+              if (rawLine) {
+                try {
+                  const event = JSON.parse(rawLine)
+                  switch (event.type) {
+                    case "youtube_download_started":
+                      setProgressStatusText("youtubeDownloading")
+                      break
+                    case "youtube_download_progress":
+                      if (event.progress_percent != null) {
+                        const pct = Math.round(event.progress_percent)
+                        if (progressBar) progressBar.style.width = pct + "%"
+                        setProgressStatusText("youtubeDownloadingProgress", { progress: pct })
+                      }
+                      break
+                    case "youtube_download_complete":
+                      if (progressBar) progressBar.style.width = "0%"
+                      setProgressStatusText("youtubeDownloadComplete")
+                      break
+                    case "transcoding_waiting":
+                      setProgressStatusText("uploadTranscodingPending")
+                      break
+                    case "transcoding_started":
+                      setProgressStatusText("uploadTranscodingStarted")
+                      break
+                    case "transcoding_progress":
+                      if (event.progress_percent != null) {
+                        const pct2 = Math.round(event.progress_percent)
+                        if (progressBar) progressBar.style.width = pct2 + "%"
+                        setProgressStatusText("uploadTranscodingProgress", { progress: pct2 })
+                      }
+                      break
+                    case "transcoding_complete":
+                      resetUploadState()
+                      activeTranscription = false
+                      checkBalance()
+                      showToast(window.I18N ? window.I18N.t("transcriptionQueued") : "הקובץ נשלח לתמלול בהצלחה.", "success")
+                      switchTab("files")
+                      return
+                    case "error":
+                      throw event
+                  }
+                } catch (parseErr) {
+                  if (parseErr && parseErr.type === "error") throw parseErr
+                }
+              }
+              newlineIdx = buf.indexOf("\n")
+            }
+          }
+        } catch (err) {
+          const translated = translateServerError(err) || (window.I18N ? window.I18N.t("errorYoutubeDownloadFailed") : "YouTube download failed")
+          showToast(translated, "error")
+        } finally {
+          resetUploadState()
+        }
+      }
+
       // Initialize settings button indicator on page load
       updateSettingsButtonIndicator()
 
@@ -3787,6 +4073,10 @@
         const list = Array.from(files || [])
         if (!list.length) return
 
+        // Clear YouTube URL when files are selected
+        const ytInput = document.getElementById("youtube-url-input")
+        if (ytInput) ytInput.value = ""
+
         const maxSize = getMaxFileSize()
         const maxText = getMaxFileSizeText()
         const batchLimit = getBatchLimit()
@@ -3835,7 +4125,19 @@
       })
 
       transcribeBtn.addEventListener("click", function () {
-        uploadBatch()
+        const ytInput = document.getElementById("youtube-url-input")
+        const ytUrl = ytInput ? ytInput.value.trim() : ""
+        if (ytUrl && isValidYoutubeUrl(ytUrl)) {
+          pendingYoutubeUrl = ytUrl
+          const modal = document.getElementById("youtube-rights-modal")
+          const checkbox = document.getElementById("youtube-rights-checkbox")
+          const submitBtn = document.getElementById("submit-youtube-rights")
+          if (checkbox) checkbox.checked = false
+          if (submitBtn) submitBtn.disabled = true
+          if (modal) modal.classList.add("show")
+        } else {
+          uploadBatch()
+        }
       })
 
       async function uploadBatch() {
@@ -4342,6 +4644,10 @@
         if (fileNameElement) {
           fileNameElement.style.display = "block"
         }
+        const ytInput = document.getElementById("youtube-url-input")
+        if (ytInput) {
+          ytInput.value = ""
+        }
         hideProgressUI()
       }
 
@@ -4465,6 +4771,21 @@
           window.lucide.createIcons()
         }
       }
+
+      // Input method switching
+      function switchInputMethod(method) {
+        document.querySelectorAll('.input-method-btn').forEach(btn =>
+          btn.classList.toggle('active', btn.dataset.inputMethod === method))
+        document.querySelectorAll('.input-method-panel').forEach(panel =>
+          panel.classList.toggle('active', panel.id === 'input-panel-' + method))
+      }
+
+      document.querySelectorAll('.input-method-btn').forEach(btn => {
+        btn.addEventListener('click', () => switchInputMethod(btn.dataset.inputMethod))
+      })
+
+      // Auto-switch to upload panel on drag-enter anywhere on the page
+      document.addEventListener('dragenter', () => switchInputMethod('upload'))
 
       // Store last known entries for comparison
       let lastKnownEntries = null
@@ -7646,8 +7967,8 @@
             // Show both player and normal UI
             recordingInterface.style.display = 'none'
             recordedAudioPreview.style.display = 'block'
-            dropArea.style.display = 'block'
-            recordMenu.style.display = 'inline-block'
+            document.getElementById('input-method-container').style.display = ''
+            switchInputMethod('upload')
 
             // Refresh icons
             if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -7662,8 +7983,7 @@
           recordingStartTime = Date.now()
 
           // Show recording interface
-          dropArea.style.display = 'none'
-          recordMenu.style.display = 'none'
+          document.getElementById('input-method-container').style.display = 'none'
           recordingInterface.style.display = 'block'
 
           // Start visualization and timer
@@ -7768,8 +8088,8 @@
             // Show both player and normal UI
             recordingInterface.style.display = 'none'
             recordedAudioPreview.style.display = 'block'
-            dropArea.style.display = 'block'
-            recordMenu.style.display = 'inline-block'
+            document.getElementById('input-method-container').style.display = ''
+            switchInputMethod('upload')
 
             // Refresh icons
             if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -7784,8 +8104,7 @@
           recordingStartTime = Date.now()
 
           // Show recording interface
-          dropArea.style.display = 'none'
-          recordMenu.style.display = 'none'
+          document.getElementById('input-method-container').style.display = 'none'
           recordingInterface.style.display = 'block'
 
           // Start visualization and timer
@@ -7930,8 +8249,8 @@
             // Show both player and normal UI
             recordingInterface.style.display = 'none'
             recordedAudioPreview.style.display = 'block'
-            dropArea.style.display = 'block'
-            recordMenu.style.display = 'inline-block'
+            document.getElementById('input-method-container').style.display = ''
+            switchInputMethod('upload')
 
             // Refresh icons
             if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -7946,8 +8265,7 @@
           recordingStartTime = Date.now()
 
           // Show recording interface
-          dropArea.style.display = 'none'
-          recordMenu.style.display = 'none'
+          document.getElementById('input-method-container').style.display = 'none'
           recordingInterface.style.display = 'block'
 
           // Start visualization and timer
