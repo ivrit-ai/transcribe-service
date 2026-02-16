@@ -2062,6 +2062,14 @@
 
       <!-- My Files Tab Content -->
       <div id="tab-files" class="tab-content">
+        {% if in_local_mode %}
+        <div style="margin-bottom: 0.75rem; text-align: start;">
+          <button type="button" id="open-data-dir-btn" class="btn btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.4rem;">
+            <i data-lucide="clipboard-copy" style="width: 16px; height: 16px;"></i>
+            <span data-i18n="openDataDir">העתק נתיב תיקייה</span>
+          </button>
+        </div>
+        {% endif %}
         <div id="files-container">
           <div class="files-loading" id="files-loading">
             <p data-i18n="filesLoading">טוען קבצים...</p>
@@ -4789,6 +4797,28 @@
 
       // Store last known entries for comparison
       let lastKnownEntries = null
+
+      // Copy local data directory path button
+      if (IN_LOCAL_MODE) {
+        const openDirBtn = document.getElementById('open-data-dir-btn')
+        if (openDirBtn) {
+          openDirBtn.addEventListener('click', async () => {
+            if (!confirm(I18N.t('dataDirWarning'))) return
+            try {
+              const resp = await fetch('/appdata/data-dir')
+              const data = await resp.json()
+              if (resp.ok && data.path) {
+                await navigator.clipboard.writeText(data.path)
+                showToast(I18N.t('dataDirCopied'), 'success')
+              } else {
+                showToast(data.error || 'Error', 'error')
+              }
+            } catch (e) {
+              showToast('Error', 'error')
+            }
+          })
+        }
+      }
 
       // Load saved files from Google Drive TOC
       async function loadSavedFiles(showLoading = true) {

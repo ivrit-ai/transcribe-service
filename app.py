@@ -1528,6 +1528,34 @@ async def delete_file(request: Request):
         return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer"}, status_code=500)
 
 
+@app.get("/appdata/data-dir", dependencies=[Depends(require_google_login)])
+async def get_data_dir(request: Request):
+    """Return the resolved path to the user's local data directory. Only available in local mode."""
+    if not in_local_mode:
+        return JSONResponse({"error": "Only available in local mode"}, status_code=403)
+
+    user_email = get_user_email(request)
+    if not user_email:
+        return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
+
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+
+    user_dir_str = await file_storage_backend.ensure_folder(user_identifier)
+    user_dir = Path(user_dir_str).resolve()
+
+    path = str(user_dir)
+    # On WSL, convert to a Windows path so users can paste it into Explorer
+    if sys.platform == "linux":
+        try:
+            path = subprocess.check_output(["wslpath", "-w", path], text=True).strip()
+        except FileNotFoundError:
+            pass  # Not WSL, keep the Linux path
+
+    return JSONResponse({"path": path})
+
+
 @app.post("/appdata/donate_data", dependencies=[Depends(require_google_login)])
 async def donate_data(request: Request):
     """Donate transcription data (audio + transcript + edits) for the ivrit.ai v2 dataset."""
