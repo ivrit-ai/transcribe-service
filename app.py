@@ -100,17 +100,16 @@ parser.add_argument('--max-batch-local', type=int, default=100, help='Max parall
 parser.add_argument('--max-batch-private', type=int, default=20, help='Max parallel transcription jobs per user with private RunPod key (default: 20)')
 args, unknown = parser.parse_known_args()
 
-# Rate limiting configuration from CLI arguments
-MAX_MINUTES_PER_WEEK = args.max_minutes_per_week  # Maximum credit grant per week
-REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically derive daily replenish rate
-MAX_BATCH_LOCAL = args.max_batch_local
-MAX_BATCH_PRIVATE = args.max_batch_private
-
-
 in_dev = args.staging or args.dev
 in_hiatus_mode = args.hiatus or os.environ.get("TS_HIATUS_MODE", "0") == "1"
 verbose = args.verbose
 in_local_mode = args.local
+
+# Rate limiting configuration from CLI arguments
+MAX_MINUTES_PER_WEEK = float('inf') if in_local_mode else args.max_minutes_per_week  # Maximum credit grant per week
+REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically derive daily replenish rate
+MAX_BATCH_LOCAL = args.max_batch_local
+MAX_BATCH_PRIVATE = args.max_batch_private
 
 # Import Google Drive backend only if not in local mode (to avoid requiring env vars)
 if not in_local_mode:
