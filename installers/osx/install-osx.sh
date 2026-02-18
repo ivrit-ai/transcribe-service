@@ -105,7 +105,7 @@ if [ -d "$APP_DIR" ] || [ -d "$UV_DIR" ] || [ -d "$VENV_DIR" ] || [ -d "$BIN_DIR
     [ -d "$BIN_DIR" ] && echo "  - bin/"
     [ -d "$VENV_DIR" ] && echo "  - venv/"
     echo ""
-    read -p "Do you want to uninstall and reinstall? (y/N): " -n 1 -r
+    read -p "Do you want to uninstall and reinstall? (y/N): " -n 1 -r < /dev/tty
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Installation aborted."
@@ -255,7 +255,7 @@ echo "Data directory: $DATA_DIR"
 MODEL_FILE="$MODELS_DIR/ivrit-ggml-model.bin"
 if [ -f "$MODEL_FILE" ]; then
     echo "Model already exists at $MODEL_FILE"
-    read -p "Do you want to re-download it? (y/N): " -n 1 -r
+    read -p "Do you want to re-download it? (y/N): " -n 1 -r < /dev/tty
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Skipping model download"
