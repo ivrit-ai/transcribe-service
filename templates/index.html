@@ -2066,9 +2066,9 @@
         <div style="margin-bottom: 0.75rem; text-align: start;">
           <button type="button" id="open-data-dir-btn" class="btn btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.4rem;">
             <i data-lucide="clipboard-copy" style="width: 16px; height: 16px;"></i>
-            <span data-i18n="openDataDir">העתק נתיב תיקייה</span>
+            <span data-i18n="openDataDir">הצג נתיב תיקייה</span>
           </button>
-        </div>
+          <input id="display-data-dir" dir="ltr" type="text" value="" style="width: 100%; font-size: 0.9em; text-align: start; font-family: monospace;display: none;">
         {% endif %}
         <div id="files-container">
           <div class="files-loading" id="files-loading">
@@ -4802,19 +4802,21 @@
       if (IN_LOCAL_MODE) {
         const openDirBtn = document.getElementById('open-data-dir-btn')
         if (openDirBtn) {
-          openDirBtn.addEventListener('click', async () => {
+            openDirBtn.addEventListener('click', async () => {
             if (!confirm(I18N.t('dataDirWarning'))) return
             try {
               const resp = await fetch('/appdata/data-dir')
               const data = await resp.json()
               if (resp.ok && data.path) {
-                await navigator.clipboard.writeText(data.path)
-                showToast(I18N.t('dataDirCopied'), 'success')
+                const displayDataDir = document.getElementById('display-data-dir')
+                displayDataDir.value = data.path
+                displayDataDir.style.display = 'block'
+                displayDataDir.select()
               } else {
                 showToast(data.error || 'Error', 'error')
               }
             } catch (e) {
-              showToast('Error', 'error')
+              showToast(e.message, 'error')
             }
           })
         }
