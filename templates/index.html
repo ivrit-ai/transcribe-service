@@ -1967,10 +1967,12 @@
           <i data-lucide="upload" style="width: 16px; height: 16px;"></i>
           <span data-i18n="inputUploadFile">העלאת קובץ</span>
         </button>
+        {% if in_local_mode %}
         <button class="input-method-btn" data-input-method="youtube">
           <svg style="width: 16px; height: 16px; flex-shrink: 0;" viewBox="0 0 28.57 20" preserveAspectRatio="xMidYMid meet"><path d="M27.97 3.12a3.58 3.58 0 0 0-2.52-2.54C23.22 0 14.28 0 14.28 0S5.35 0 3.12.58A3.58 3.58 0 0 0 .6 3.12C0 5.35 0 10 0 10s0 4.65.6 6.88a3.58 3.58 0 0 0 2.52 2.54C5.35 20 14.28 20 14.28 20s8.94 0 11.17-.58a3.58 3.58 0 0 0 2.52-2.54C28.57 14.65 28.57 10 28.57 10s0-4.65-.6-6.88z" fill="#FF0000"/><path d="M11.43 14.28 18.85 10l-7.42-4.28v8.56z" fill="#FFF"/></svg>
           <span data-i18n="inputYoutube">YouTube</span>
         </button>
+        {% endif %}
         <button class="input-method-btn" data-input-method="record">
           <i data-lucide="mic" style="width: 16px; height: 16px;"></i>
           <span data-i18n="inputRecord">הקלטה</span>
@@ -1984,6 +1986,7 @@
         </div>
       </div>
 
+      {% if in_local_mode %}
       <div class="input-method-panel" id="input-panel-youtube">
         <div style="display: flex; align-items: center; gap: 0.5rem; width: 100%;">
           <input type="text" id="youtube-url-input" data-i18n="youtubeUrlPlaceholder" placeholder="הדבק קישור YouTube כאן" style="flex: 1; padding: 0.6rem 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: var(--container-bg); color: var(--text-color); font-size: 0.95rem;" />
@@ -1992,6 +1995,7 @@
           </button>
         </div>
       </div>
+      {% endif %}
 
       <div class="input-method-panel" id="input-panel-record">
         <div style="text-align: center;">
@@ -2533,6 +2537,7 @@
       </div>
     </div>
 
+    {% if in_local_mode %}
     <!-- YouTube Rights Confirmation Modal -->
     <div id="youtube-rights-modal" class="modal">
       <div class="modal-content">
@@ -2555,6 +2560,7 @@
         </div>
       </div>
     </div>
+    {% endif %}
 
     <script src="{{ url_for('static', path='i18n.js') }}"></script>
 

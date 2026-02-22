@@ -2719,6 +2719,9 @@ async def download_youtube_audio(url: str, output_path: str, job_id: str) -> Opt
 
 @app.post("/upload/youtube", dependencies=[Depends(require_google_login)])
 async def upload_youtube(request: Request):
+    if not in_local_mode:
+        return JSONResponse({"error": "YouTube upload is only available in local mode"}, status_code=404)
+
     job_id = str(uuid.uuid4())
     user_email = get_user_email(request)
 
