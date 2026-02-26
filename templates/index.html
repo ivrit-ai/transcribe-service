@@ -2073,6 +2073,7 @@
             <span data-i18n="openDataDir">הצג נתיב תיקייה</span>
           </button>
           <input id="display-data-dir" dir="ltr" type="text" value="" style="width: 100%; font-size: 0.9em; text-align: start; font-family: monospace;display: none;">
+        </div>
         {% endif %}
         <div id="files-container">
           <div class="files-loading" id="files-loading">
@@ -5901,21 +5902,21 @@
       async function viewSavedFileFromTOC(entry) {
         // Show spinner to block access while loading
         showSpinner(window.I18N ? window.I18N.t('loadingFile') : 'טוען קובץ...')
-        
+
         // Force a reflow to ensure spinner is visible
         void document.getElementById('spinner-overlay')?.offsetHeight
-        
+
         try {
           // Fetch results (gzipped)
           const response = await fetch(`/appdata/results/${entry.results_id}`)
-          
+
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
             showToast(translateServerError(errorData) || (window.I18N ? window.I18N.t('filesLoadError') : 'שגיאה בטעינת הקובץ'), 'error')
             hideSpinner()
             return
           }
-          
+
           // Decompress gzipped data
           const arrayBuffer = await response.arrayBuffer()
           const decompressed = await decompressGzip(arrayBuffer)
@@ -5925,14 +5926,14 @@
           currentViewerData = { results: data.results || [] }
           currentViewerLanguage = data.language || entry.language || 'he'
           currentViewerEntry = entry
-          
+
           // Load edits if they exist
           await loadEdits(entry.results_id)
-          
+
           // Show view mode button (available in both edit and non-edit modes)
           document.getElementById('viewer-edit-mode-toggle').style.display = 'inline-block'
           updateViewModeButtonUI()
-          
+
           // Hide processing state if it was showing
           hideViewerProcessingState()
           pendingViewerFilename = null
@@ -6138,7 +6139,7 @@
         if (!currentViewerData || !currentViewerData.results) return
 
         const viewerTranscription = document.getElementById('viewer-transcription')
-        
+
         // Determine which data to use based on edit mode view
         let segments
         if (editModeView === 'original') {

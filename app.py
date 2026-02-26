@@ -1154,14 +1154,24 @@ async def get_transcription_results(results_id: str, request: Request):
     if file_content is None:
         return JSONResponse({"error": "errorResultsDownloadFailed", "i18n_key": "errorResultsDownloadFailed"}, status_code=500)
     
-    # Return gzipped data for client-side decompression
+    # Return gzipped data for client-side decompression.
+    # Use no-cache + ETag so the browser always revalidates instead of serving
+    # stale data from its HTTP cache (which caused blank transcript pages).
     from fastapi.responses import Response
+    etag = hashlib.md5(file_content).hexdigest()
+    cache_headers = {"Cache-Control": "no-cache", "ETag": f'"{etag}"'}
+
+    # Return 304 if the client already has this version cached.
+    # The browser's HTTP cache layer intercepts 304 transparently —
+    # fetch() sees status 200 with the cached body.
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and if_none_match.strip('" ') == etag:
+        return Response(status_code=304, headers=cache_headers)
+
     return Response(
         content=file_content,
         media_type="application/gzip",
-        headers={
-            "Cache-Control": "max-age=864000",
-        },
+        headers=cache_headers,
     )
 
 
