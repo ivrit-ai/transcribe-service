@@ -551,6 +551,9 @@ stats_transcoding_total_duration_seconds = 0.0
 # Quota statistics
 stats_quota_denied = 0
 
+# Queue full statistics
+stats_queue_full_errors = 0
+
 # Dictionary to keep track of user's active jobs
 user_jobs = {}
 
@@ -837,7 +840,7 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
 async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he", refresh_token: Optional[str] = None, save_audio: bool = False):
     # Try to add the job to the queue
     log_message(f"{user_email}: Queuing job {job_id}...")
-    global stats_quota_denied
+    global stats_quota_denied, stats_queue_full_errors
 
     def build_error(error_key, *, status_code=400, i18n_vars=None):
         payload = {"error": error_key, "i18n_key": error_key, "status_code": status_code}
@@ -949,6 +952,8 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
                 "time_ahead_seconds": int(time_ahead_seconds),
             }
     except queue.Full:
+        async with stats_lock:
+            stats_queue_full_errors += 1
         capture_event(job_id, "job-queue-failed", {"queue-depth": queue_depth, "job-type": job_type})
 
         log_message(f"{user_email}: Job queuing failed: {job_id}")
@@ -2253,7 +2258,8 @@ async def get_stats(request: Request):
             "transcoding": transcoding_stats,
             "errors": {
                 "google_drive": drive_errors,
-                "quota_denied": stats_quota_denied
+                "quota_denied": stats_quota_denied,
+                "queue_full": stats_queue_full_errors
             }
         }
 
@@ -2506,6 +2512,8 @@ async def queue_transcoding_job(
             queue_depth = transcoding_queue.qsize()
             transcoding_queue.put_nowait(transcoding_job)
     except queue.Full:
+        async with stats_lock:
+            stats_queue_full_errors += 1
         cleanup_temp_file(job_id)
         return None
 
