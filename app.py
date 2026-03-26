@@ -3403,6 +3403,7 @@ async def transcribe_job(job_desc):
         log_message(f"{job_desc.user_email}: done transcribing job {job_id}, audio duration was {duration}.")
 
         transcribe_done_time = time.time()
+        output_text_length = sum(len(seg.get("text", "")) for seg in job_results[job_id]["results"])
         capture_event(
             job_id,
             "transcribe-done",
@@ -3410,6 +3411,7 @@ async def transcribe_job(job_desc):
                 "user": job_desc.user_email,
                 "transcription_seconds": transcribe_done_time - job_desc.transcribe_start_time,
                 "audio_duration_seconds": duration,
+                "output_text_length": output_text_length,
                 "job-type": job_desc.job_type,
                 "language": job_desc.language,
                 "custom-runpod": job_desc.uses_custom_runpod,
