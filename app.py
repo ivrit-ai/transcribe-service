@@ -1282,26 +1282,30 @@ async def get_audio_file(results_id: str, request: Request):
     
     user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
     
-    # Find the opus file
-    filename = f"{results_id}.opus"
+    # Find the audio file — try .webm (new) then fall back to .opus (legacy)
+    filename = f"{results_id}.webm"
+    media_type = "audio/webm; codecs=opus"
     file_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
-    
+    if not file_id:
+        filename = f"{results_id}.opus"
+        media_type = "audio/ogg"
+        file_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
+
     if not file_id:
         return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
-    
-    # Download opus file as bytes
+
+    # Download audio file as bytes
     file_content = await file_storage_backend.download_file_bytes(file_id, user_identifier)
-    
+
     if file_content is None:
         async with stats_lock:
             stats_gdrive_errors["audio_download"] += 1
         return JSONResponse({"error": "errorAudioDownloadFailed", "i18n_key": "errorAudioDownloadFailed"}, status_code=500)
-    
-    # Return opus audio file
+
     from fastapi.responses import Response
     return Response(
         content=file_content,
-        media_type="audio/ogg",
+        media_type=media_type,
         headers={
             "Cache-Control": "max-age=864000",
         },
@@ -1320,57 +1324,62 @@ async def stream_audio_file(results_id: str, request: Request):
     
     user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
     
-    # Find the opus file (using cache to avoid repeated lookups for range requests)
-    filename = f"{results_id}.opus"
+    # Find the audio file — try .webm (new) then fall back to .opus (legacy)
+    filename = f"{results_id}.webm"
+    media_type = "audio/webm; codecs=opus"
     file_id = await find_drive_file_by_name_cached(refresh_token, filename, user_email=user_email, session_id=session_id)
-    
+    if not file_id:
+        filename = f"{results_id}.opus"
+        media_type = "audio/ogg"
+        file_id = await find_drive_file_by_name_cached(refresh_token, filename, user_email=user_email, session_id=session_id)
+
     if not file_id:
         return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
-    
+
     # For HEAD requests, verify file exists and return headers without content
     if request.method == "HEAD":
         metadata = await file_storage_backend.get_file_metadata(file_id, user_identifier)
-        
+
         from fastapi.responses import Response
         return Response(
             status_code=200,
-            media_type="audio/ogg",
+            media_type=media_type,
             headers={
                 "Accept-Ranges": "bytes",
                 "Cache-Control": "max-age=864000",
                 "Content-Length": str(metadata.get("size", 0) if metadata else 0),
             },
         )
-    
+
     # Get range header from request
     range_header = request.headers.get("range")
-    
+
     # Stream file with range support
     result = await file_storage_backend.stream_file_range(file_id, range_header, user_identifier)
-    
+
     if result is None:
         async with stats_lock:
             stats_gdrive_errors["audio_download"] += 1
         return JSONResponse({"error": "errorAudioStreamFailed", "i18n_key": "errorAudioStreamFailed"}, status_code=500)
-    
+
     content, status_code, start_byte, end_byte, total_size = result
-    
+
     # Build response headers
     headers = {
         "Accept-Ranges": "bytes",
         "Cache-Control": "max-age=864000",
     }
-    
+
     if status_code == 206:
         # Partial content response
         headers["Content-Range"] = f"bytes {start_byte}-{end_byte}/{total_size}"
         headers["Content-Length"] = str(len(content))
-    
+
     from fastapi.responses import Response
     return Response(
         content=content,
         status_code=status_code,
-        media_type="audio/ogg",
+        media_type=media_type,
         headers=headers,
     )
 
@@ -1497,17 +1506,17 @@ async def delete_file(request: Request):
                 return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
         
         # After TOC update, delete associated files
-        # Delete opus file if it exists
-        opus_filename = f"{results_id}.opus"
-        opus_file_id = await file_storage_backend.find_file_by_name(opus_filename, user_identifier)
-        if opus_file_id:
-            delete_success = await file_storage_backend.delete_file(opus_file_id, user_identifier, user_email)
-            if not delete_success:
-                async with stats_lock:
-                    stats_gdrive_errors["delete"] += 1
-            # Invalidate file ID cache for deleted file
-            cache_key = get_drive_file_id_cache_key(refresh_token, opus_filename) if not in_local_mode else f"{user_identifier}:{opus_filename}"
-            drive_file_id_cache.pop(cache_key, None)
+        # Delete audio file if it exists — check both .webm (new) and .opus (legacy)
+        for audio_filename in [f"{results_id}.webm", f"{results_id}.opus"]:
+            audio_file_id = await file_storage_backend.find_file_by_name(audio_filename, user_identifier)
+            if audio_file_id:
+                delete_success = await file_storage_backend.delete_file(audio_file_id, user_identifier, user_email)
+                if not delete_success:
+                    async with stats_lock:
+                        stats_gdrive_errors["delete"] += 1
+                # Invalidate file ID cache for deleted file
+                cache_key = get_drive_file_id_cache_key(refresh_token, audio_filename) if not in_local_mode else f"{user_identifier}:{audio_filename}"
+                drive_file_id_cache.pop(cache_key, None)
 
         # Delete json.gz results file
         json_filename = f"{results_id}.json.gz"
@@ -1618,13 +1627,16 @@ async def donate_data(request: Request):
             if entry.get("donated"):
                 return JSONResponse({"error": "errorAlreadyDonated", "i18n_key": "errorAlreadyDonated"}, status_code=400)
             
-            # Download opus audio file
-            opus_filename = f"{results_id}.opus"
+            # Download audio file — try .webm (new) then fall back to .opus (legacy)
+            opus_filename = f"{results_id}.webm"
             opus_file_id = await file_storage_backend.find_file_by_name(opus_filename, user_identifier)
+            if not opus_file_id:
+                opus_filename = f"{results_id}.opus"
+                opus_file_id = await file_storage_backend.find_file_by_name(opus_filename, user_identifier)
             opus_content = None
             if opus_file_id:
                 opus_content = await file_storage_backend.download_file_bytes(opus_file_id, user_identifier)
-            
+
             if not opus_content:
                 return JSONResponse({"error": "errorDonateNoAudio", "i18n_key": "errorDonateNoAudio"}, status_code=404)
             
@@ -2921,8 +2933,8 @@ async def handle_transcoding(job_id: str):
     transcoding_job = transcoding_running_jobs[job_id]
     input_path = transcoding_job.input_path
     
-    # Create output path for transcoded file
-    output_path = input_path + ".opus"
+    # Create output path for transcoded file (WebM container with Opus codec)
+    output_path = input_path + ".webm"
 
     duration_hint_seconds = None
     try:
@@ -3477,9 +3489,9 @@ async def transcribe_job(job_desc):
                         with open(opus_file_path, 'rb') as f:
                             opus_data = f.read()
                         
-                        # Upload as uuid4.opus
-                        opus_filename = f"{results_id}.opus"
-                        opus_mime_type = "audio/opus"
+                        # Upload as uuid4.webm
+                        opus_filename = f"{results_id}.webm"
+                        opus_mime_type = "audio/webm; codecs=opus"
                         opus_upload_success = await file_storage_backend.upload_file(
                             opus_filename,
                             opus_data,
@@ -3487,15 +3499,15 @@ async def transcribe_job(job_desc):
                             user_identifier,
                             job_desc.user_email
                         )
-                        
+
                         if opus_upload_success:
-                            log_message(f"{job_desc.user_email}: Uploaded opus file for {job_id} as {opus_filename}")
+                            log_message(f"{job_desc.user_email}: Uploaded audio file for {job_id} as {opus_filename}")
                         else:
                             async with stats_lock:
                                 stats_gdrive_errors["audio_upload"] += 1
-                            logger.warning(f"Failed to upload opus file for {job_id}, but continuing")
+                            logger.warning(f"Failed to upload audio file for {job_id}, but continuing")
                     else:
-                        logger.warning(f"Opus file not found for {job_id} at {opus_file_path}, skipping audio upload")
+                        logger.warning(f"Audio file not found for {job_id} at {opus_file_path}, skipping audio upload")
                 except Exception as e:
                     logger.error(f"Error uploading opus file for {job_id}: {e}")
                         

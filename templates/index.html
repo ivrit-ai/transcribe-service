@@ -5218,9 +5218,9 @@
                   const start = parseFloat(segmentEl.dataset.start)
                   const audioPlayer = document.getElementById('viewer-audio-player')
                   
-                  // Only seek if audio is already playing
-                  if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc && !audioPlayer.paused) {
+                  if (!isNaN(start) && audioPlayer && audioPlayer.currentSrc) {
                     audioPlayer.currentTime = start
+                    audioPlayer.play().catch(err => { console.log('Play failed:', err) })
                     // Don't prevent default or stop propagation - let the editor handle cursor positioning
                   }
                 }
@@ -5999,9 +5999,11 @@
           if (checkResponse.ok) {
             // Audio file exists, set up player
             audioSource.src = `/appdata/audio/stream/${resultsId}`
+            // Set MIME type dynamically from server response so Safari picks the right codec
+            audioSource.type = checkResponse.headers.get('content-type') || 'audio/webm; codecs=opus'
             audioPlayer.load()
             playerContainer.classList.add('visible')
-            
+
             // Add timeupdate listener to sync text with audio
             audioPlayer.addEventListener('timeupdate', handleAudioTimeUpdate)
           }
