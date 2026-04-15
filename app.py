@@ -554,6 +554,10 @@ stats_transcoding_total_duration_seconds = 0.0
 # Quota statistics
 stats_quota_denied = 0
 
+# Job timeout statistics
+stats_job_timeouts = 0
+stats_job_timeouts_private = 0
+
 # Dictionary to keep track of user's active jobs
 user_jobs = {}
 
@@ -2260,7 +2264,9 @@ async def get_stats(request: Request):
             "transcoding": transcoding_stats,
             "errors": {
                 "google_drive": drive_errors,
-                "quota_denied": stats_quota_denied
+                "quota_denied": stats_quota_denied,
+                "job_timeouts": stats_job_timeouts,
+                "job_timeouts_private": stats_job_timeouts_private
             }
         }
 
@@ -3294,7 +3300,7 @@ async def process_segment(job_id, segment, duration):
 
 
 async def transcribe_job(job_desc):
-    global stats_total_jobs_started, stats_total_minutes_processed
+    global stats_total_jobs_started, stats_total_minutes_processed, stats_job_timeouts, stats_job_timeouts_private
     job_id = job_desc.id
     segs = None
 
@@ -3549,6 +3555,13 @@ async def transcribe_job(job_desc):
             async with stats_lock:
                 stats_gdrive_errors["toc_download" if "download" in str(e).lower() else "toc_upload"] += 1
             logger.error(f"Failed to upload transcription for {job_id}: {e}")
+    except TimeoutError as e:
+        async with stats_lock:
+            stats_job_timeouts += 1
+            if job_desc.job_type == PRIVATE:
+                stats_job_timeouts_private += 1
+        log_message(f"Error in transcription job {job_id}: {str(e)}")
+        await emit_upload_error(job_id, "errorInternalServer", details=str(e))
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
         await emit_upload_error(job_id, "errorInternalServer", details=str(e))
