@@ -2377,6 +2377,15 @@
                     <span class="stats-row-label">Transcription Quota Exceeded:</span>
                     <span class="stats-row-value" id="quota-denied-errors">-</span>
                   </div>
+                  <h4 style="margin: 0; color: var(--text-color); font-size: 0.95rem; text-align: left; margin-top: 1rem;">Timeouts</h4>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Job Timeouts (Total):</span>
+                    <span class="stats-row-value" id="job-timeouts">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Job Timeouts (Private):</span>
+                    <span class="stats-row-value" id="job-timeouts-private">-</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -8529,6 +8538,8 @@
           document.getElementById('gdrive-rename-errors').textContent = driveErrors.rename ?? '-'
           document.getElementById('gdrive-delete-errors').textContent = driveErrors.delete ?? '-'
           document.getElementById('quota-denied-errors').textContent = data.errors?.quota_denied ?? '-'
+          document.getElementById('job-timeouts').textContent = data.errors?.job_timeouts ?? '-'
+          document.getElementById('job-timeouts-private').textContent = data.errors?.job_timeouts_private ?? '-'
 
           // Show content, hide loading
           statsLoading.style.display = 'none'
