@@ -459,6 +459,9 @@ max_parallel_jobs = {
 # Keep track of job results
 job_results = {}
 
+# Transcription progress tracking (job_id -> {percent, description})
+transcription_progress = {}
+
 # Upload streaming subscribers per job_id
 upload_event_streams = {}
 
@@ -1119,6 +1122,10 @@ async def get_toc(request: Request):
                     }
                     if eta_seconds is not None:
                         entry["eta_seconds"] = int(eta_seconds)
+                    progress = transcription_progress.get(job_desc.id)
+                    if progress is not None:
+                        entry["progress_percent"] = progress["percent"]
+                        entry["progress_description"] = progress["description"]
                     in_memory_entries.append(entry)
     
     # Prepend in-memory entries (they should appear first)
@@ -3317,9 +3324,15 @@ async def transcribe_job(job_desc):
 
         log_message(f"{job_desc.user_email}: job {job_desc} has a duration of {duration} seconds")
 
+        # Progress callback for transcription and diarization
+        def progress_callback(progress_info):
+            percent = int(progress_info.get("step_fraction", 0) * 100)
+            description = progress_info.get("description", "")
+            transcription_progress[job_id] = {"percent": percent, "description": description}
+
         # Resolve model by language from config
         lang_cfg = APP_CONFIG["languages"][job_desc.language]
-        
+
         # Select appropriate model based on mode (local vs server)
         if in_local_mode:
             # Use ggml_model for local mode
@@ -3332,7 +3345,7 @@ async def transcribe_job(job_desc):
             log_message(f"{job_desc.user_email}: using local model: {selected_model}")
             m = ivrit.load_model(engine='whisper-cpp', model=selected_model)
             # In local mode, transcribe first without diarization
-            segs = m.transcribe_async(path=temp_file_path, diarize=False)
+            segs = m.transcribe_async(path=temp_file_path, diarize=False, on_progress=progress_callback)
 
             # Collect all segments for diarization
             all_segments = []
@@ -3348,7 +3361,8 @@ async def transcribe_job(job_desc):
                 transcription_segments=all_segments,
                 verbose=True,
                 engine="ivrit",
-                device=diarize_device
+                device=diarize_device,
+                on_progress=progress_callback
             )
 
             # Convert to async generator for consistent processing
@@ -3360,9 +3374,9 @@ async def transcribe_job(job_desc):
         else:
             # Use ct2_model for server/RunPod mode
             selected_model = lang_cfg["ct2_model"]
-            
+
             log_message(f"{job_desc.user_email}: using server model: {selected_model}")
-            
+
             # Load model using ivrit package
             # Pass custom RunPod credentials if provided
             if job_desc.uses_custom_runpod:
@@ -3378,18 +3392,18 @@ async def transcribe_job(job_desc):
                 api_key = os.environ["RUNPOD_API_KEY"]
                 endpoint_id = os.environ["RUNPOD_ENDPOINT_ID"]
                 log_message(f"{job_desc.user_email}: using default RunPod credentials")
-            
+
             m = ivrit.load_model(engine='runpod', model=selected_model, api_key=api_key, endpoint_id=endpoint_id, core_engine='stable-whisper')
-            
+
             # Process streaming results
             if in_dev:
                 # In dev mode, use the local file
-                segs = m.transcribe_async(path=temp_file_path, diarize=True)
+                segs = m.transcribe_async(path=temp_file_path, diarize=True, on_progress=progress_callback)
             else:
                 # In production mode, send file as URL
                 base_url = os.environ["BASE_URL"]
                 download_url = urljoin(base_url, f"/download/{job_id}")
-                segs = m.transcribe_async(url=download_url, diarize=True)
+                segs = m.transcribe_async(url=download_url, diarize=True, on_progress=progress_callback)
         
         try:
             async for segment in segs:
@@ -3546,6 +3560,9 @@ async def transcribe_job(job_desc):
             #except Exception as e:
             #    log_message(f"Failed to close runpod job: {e}")
         
+        # Clean up transcription progress tracking
+        transcription_progress.pop(job_id, None)
+
         # Remove job from the appropriate running jobs dictionary
         del running_jobs[job_desc.job_type][job_id]
         # Remove job from user's active jobs

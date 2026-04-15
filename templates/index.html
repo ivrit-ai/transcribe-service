@@ -5560,8 +5560,11 @@
           // Update status display
           const statusEl = document.getElementById('viewer-processing-status')
           const etaEl = document.getElementById('viewer-processing-eta')
-          
-          const statusText = getStatusText(entry.status)
+
+          let statusText = entry.progress_description || getStatusText(entry.status)
+          if (entry.progress_percent !== undefined && entry.progress_percent !== null) {
+            statusText += ` (${entry.progress_percent}%)`
+          }
           statusEl.textContent = statusText
           
           if (entry.eta_seconds !== undefined && entry.eta_seconds !== null) {
@@ -5674,9 +5677,12 @@
         
         // Add status text and ETA for non-ready items
         if (status !== 'Ready') {
-          const statusText = getStatusText(status)
+          let statusText = entry.progress_description || getStatusText(status)
+          if (entry.progress_percent !== undefined && entry.progress_percent !== null) {
+            statusText += ` (${entry.progress_percent}%)`
+          }
           let metaText = `${dateStr} (${statusText})`
-          
+
           // Add ETA if available
           if (entry.eta_seconds !== undefined && entry.eta_seconds !== null) {
             const etaFormatted = formatETA(entry.eta_seconds)
@@ -5686,7 +5692,7 @@
               metaText += ` • ${etaLabel}${etaFormatted}`
             }
           }
-          
+
           meta.textContent = metaText
         } else {
           meta.textContent = dateStr
