@@ -88,6 +88,7 @@ parser.add_argument('--max-minutes-per-week', type=int, default=180, help='Maxim
 parser.add_argument('--staging', action='store_true', help='Enable staging mode')
 parser.add_argument('--hiatus', action='store_true', help='Enable hiatus mode')
 parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
+parser.add_argument('--debug', action='store_true', help='Enable DEBUG level logging on all components (including the ivrit package)')
 parser.add_argument('--dev', action='store_true', help='Enable development mode')
 parser.add_argument('--dev-user-email', help='User email for development mode')
 parser.add_argument('--dev-https', action='store_true', help='Enable HTTPS in development mode with self-signed certificates')
@@ -159,7 +160,7 @@ if not isinstance(APP_CONFIG["quota_increase_url"], str) or not APP_CONFIG["quot
 QUOTA_INCREASE_URL = APP_CONFIG["quota_increase_url"]
 
 # Configure logging EARLY - before any other imports that might create loggers
-LOG_FORMAT = "[%(asctime)s] %(message)s"
+LOG_FORMAT = "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"
 LOGGER_NAME = "transcribe_service"
 
 # Determine log directory (use data directory in local mode, otherwise script directory)
@@ -179,7 +180,8 @@ else:
 LOG_FILE_PATH = str(log_dir / "app.log")
 
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
+root_log_level = logging.DEBUG if args.debug else logging.INFO
+root_logger.setLevel(root_log_level)
 root_logger.handlers.clear()
 
 # Add file handler for app.log (no console handler - logs only to file)
@@ -189,11 +191,16 @@ file_handler = RotatingFileHandler(
 file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 root_logger.addHandler(file_handler)
 
+# Ensure the ivrit package's loggers propagate into our handler at the requested level.
+# ivrit uses logging.getLogger(__name__) in each submodule, so configuring the parent
+# 'ivrit' logger covers all of them via propagation.
+logging.getLogger("ivrit").setLevel(root_log_level)
+
 # Log a test message to verify file handler is working
 root_logger.info("File logging initialized - this message should appear in app.log")
 
 logger = logging.getLogger(LOGGER_NAME)
-logger.info("Logger configured for transcribe_service")
+logger.info(f"Logger configured for transcribe_service (level={logging.getLevelName(root_log_level)})")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
