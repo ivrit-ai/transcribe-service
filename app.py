@@ -177,16 +177,52 @@ else:
     else:
         log_dir = Path(__file__).parent.absolute()
 
-LOG_FILE_PATH = str(log_dir / "app.log")
+LOG_FILE_PATH = str(log_dir / "app.log.gz")
+
+
+class GzipRotatingFileHandler(RotatingFileHandler):
+    """RotatingFileHandler that writes gzip-compressed data on the fly.
+
+    The active log file and all rotated backups are gzip streams — there is no
+    separate compress-after-rotation step. maxBytes is measured against the
+    on-disk compressed size (i.e. what `ls -la` shows).
+
+    flush() is a no-op: per-emit flushes would defeat the deflate window and
+    hurt compression. Data is written when gzip's internal block buffer fills,
+    on rotation, and on handler close (the trailer-writing path).
+    """
+
+    def _open(self):
+        return gzip.open(self.baseFilename, mode="at", encoding=self.encoding or "utf-8")
+
+    def flush(self):
+        pass
+
+    def shouldRollover(self, record):
+        if self.stream is None:
+            self.stream = self._open()
+        if self.maxBytes > 0:
+            # Bypass our no-op flush() and push pending bytes through the gzip
+            # stream so the on-disk size check reflects real usage.
+            try:
+                if self.stream is not None:
+                    self.stream.flush()
+                if os.path.getsize(self.baseFilename) >= self.maxBytes:
+                    return True
+            except OSError:
+                return False
+        return False
+
 
 root_logger = logging.getLogger()
 root_log_level = logging.DEBUG if args.debug else logging.INFO
 root_logger.setLevel(root_log_level)
 root_logger.handlers.clear()
 
-# Add file handler for app.log (no console handler - logs only to file)
-file_handler = RotatingFileHandler(
-    filename=LOG_FILE_PATH, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"  # 10MB
+# Add file handler for app.log.gz (no console handler - logs only to file).
+# Writes gzip-compressed on the fly; default cap is 100MB of compressed bytes per file.
+file_handler = GzipRotatingFileHandler(
+    filename=LOG_FILE_PATH, maxBytes=100 * 1024 * 1024, backupCount=20, encoding="utf-8"
 )
 file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 root_logger.addHandler(file_handler)
