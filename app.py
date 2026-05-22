@@ -232,6 +232,12 @@ root_logger.addHandler(file_handler)
 # 'ivrit' logger covers all of them via propagation.
 logging.getLogger("ivrit").setLevel(root_log_level)
 
+# Even in --debug mode, suppress noisy third-party DEBUG output that overwhelms the log
+# (each multipart upload emits a "Calling on_part_data" line per chunk; urllib3 dumps
+# connection pool internals on every request). Pin these to INFO regardless of root level.
+logging.getLogger("urllib3.connectionpool").setLevel(logging.INFO)
+logging.getLogger("python_multipart.multipart").setLevel(logging.INFO)
+
 # Log a test message to verify file handler is working
 root_logger.info("File logging initialized - this message should appear in app.log")
 
