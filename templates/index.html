@@ -2293,6 +2293,18 @@
                     <span class="stats-row-label">Total Duration:</span>
                     <span class="stats-row-value" id="transcoding-total-duration">-</span>
                   </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Queued / Capacity:</span>
+                    <span class="stats-row-value" id="transcoding-queued">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Running / Capacity:</span>
+                    <span class="stats-row-value" id="transcoding-running">-</span>
+                  </div>
+                  <div class="stats-row">
+                    <span class="stats-row-label">Oldest running:</span>
+                    <span class="stats-row-value" id="transcoding-oldest">-</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -8528,6 +8540,10 @@
           document.getElementById('transcoding-total-jobs').textContent = data.transcoding.jobs
           document.getElementById('transcoding-total-gb').textContent = data.transcoding.total_gb.toFixed(2)
           document.getElementById('transcoding-total-duration').textContent = data.transcoding.total_duration_formatted
+          document.getElementById('transcoding-queued').textContent = `${data.transcoding.queued_count} / ${data.transcoding.queued_capacity}`
+          document.getElementById('transcoding-running').textContent = `${data.transcoding.running_count} / ${data.transcoding.running_capacity}`
+          const oldestSec = data.transcoding.running_max_elapsed_seconds || 0
+          document.getElementById('transcoding-oldest').textContent = oldestSec > 0 ? `${Math.round(oldestSec)}s` : '-'
 
           // Update errors
           const driveErrors = data.errors?.google_drive || {}

@@ -454,7 +454,18 @@ MAX_PARALLEL_PRIVATE_JOBS = 1 if in_local_mode else 1000
 MAX_PARALLEL_JOBS_PER_USER = 1
 MAX_PARALLEL_TRANSCODES = 4
 MAX_QUEUED_JOBS = 20
+MAX_TRANSCODING_QUEUED_JOBS = 400
 MAX_QUEUED_PRIVATE_JOBS = 5000
+
+# Per-pass ffmpeg wall-clock ceiling: max(floor, factor * known_duration).
+# Both the transcode and the duration probe use this; if either runs longer,
+# we kill ffmpeg and fail the job.
+TRANSCODE_TIMEOUT_FLOOR_SECONDS = 60.0
+TRANSCODE_TIMEOUT_FACTOR = 0.5
+
+
+def transcode_timeout(duration_hint):
+    return max(TRANSCODE_TIMEOUT_FLOOR_SECONDS, TRANSCODE_TIMEOUT_FACTOR * (duration_hint or 0.0))
 SHORT_JOB_THRESHOLD = 20 * 60
 
 # Set speedup factor based on mode and platform
@@ -478,7 +489,7 @@ UPLOAD_CHUNK_SIZE = 50 * 1024 * 1024  # 50MB chunks
 temp_files = {}
 
 # Transcoding queue and running jobs
-transcoding_queue = queue.Queue(maxsize=MAX_QUEUED_JOBS)
+transcoding_queue = queue.Queue(maxsize=MAX_TRANSCODING_QUEUED_JOBS)
 transcoding_running_jobs = {}
 
 # Transcoding queue lock
@@ -731,28 +742,31 @@ class LeakyBucket:
         return self.seconds_remaining >= self.max_seconds
 
 
-async def get_media_duration(file_path):
+async def get_media_duration(file_path, *, duration_hint: Optional[float] = None):
+    # Needs stderr because ffmpeg's "Duration:" line is part of input-info
+    # output, which lives at loglevel "info". communicate() drains both pipes
+    # safely, so a timeout is the only failure path to handle.
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    timeout = transcode_timeout(duration_hint)
+    proc = await asyncio.create_subprocess_exec(
+        ffmpeg_exe, "-i", file_path, "-f", "null", "-",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
     try:
-        # Use ffmpeg directly to get media duration (async to avoid blocking event loop)
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        proc = await asyncio.create_subprocess_exec(
-            ffmpeg_exe, "-i", file_path, "-f", "null", "-",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr_bytes = await proc.communicate()
-        # ffmpeg outputs info to stderr
-        output = stderr_bytes.decode("utf-8", errors="replace")
-        # Parse duration from output (format: Duration: HH:MM:SS.ms)
-        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", output)
-        if match:
-            hours, minutes, seconds = match.groups()
-            duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
-            return duration
+        _, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        log_message(f"ffmpeg duration probe timed out after {timeout:.0f}s for {file_path}; killing ffmpeg")
+        proc.kill()
+        await proc.wait()
         return None
-    except Exception as e:
-        log_message(f"ffmpeg duration error: {str(e)}")
-        return None
+
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", stderr_bytes.decode("utf-8", errors="replace"))
+    if match:
+        hours, minutes, seconds = match.groups()
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    log_message(f"ffmpeg duration probe returned no Duration line for {file_path} (exit code {proc.returncode})")
+    return None
 
 
 async def transcode_to_opus(
@@ -762,14 +776,14 @@ async def transcode_to_opus(
     progress_callback=None,
     duration_hint: Optional[float] = None,
 ) -> bool:
-    """
-    Transcode audio file to Opus format with progress reporting.
-    """
+    # `-loglevel quiet` + stderr=DEVNULL means ffmpeg never blocks on a stderr
+    # write, so the only pipe we read is stdout, and the only failure modes
+    # are: timeout (we kill it) and non-zero exit (we report it).
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [
         ffmpeg_exe,
         '-hide_banner',
-        '-loglevel', 'error',
+        '-loglevel', 'quiet',
         '-nostats',
         '-progress', 'pipe:1',
         '-i', input_path,
@@ -786,43 +800,40 @@ async def transcode_to_opus(
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
     )
 
-    async def emit_progress(out_time_ms: str):
-        if not progress_callback:
-            return
-        try:
-            progress_seconds = int(out_time_ms) / 1_000_000
-        except (ValueError, TypeError):
-            return
-        try:
-            await progress_callback(progress_seconds, duration_hint)
-        except Exception as exc:
-            log_message(f"Progress callback failed: {exc}")
-
-    try:
+    async def consume_progress():
         while True:
             line = await process.stdout.readline()
             if not line:
-                break
-            decoded = line.decode(errors="ignore").strip()
-            if not decoded or "=" not in decoded:
+                return
+            if not progress_callback:
                 continue
-            key, value = decoded.split("=", 1)
-            if key == "out_time_ms":
-                await emit_progress(value)
-            elif key == "progress" and value == "end":
-                break
-    except Exception as exc:
-        log_message(f"Transcoding progress loop failed: {exc}")
+            decoded = line.decode(errors="ignore").strip()
+            if not decoded.startswith("out_time_ms="):
+                continue
+            try:
+                progress_seconds = int(decoded[len("out_time_ms="):]) / 1_000_000
+            except ValueError:
+                continue
+            try:
+                await progress_callback(progress_seconds, duration_hint)
+            except Exception as exc:
+                log_message(f"Progress callback failed: {exc}")
 
-    stderr_data = await process.stderr.read()
+    timeout = transcode_timeout(duration_hint)
+    try:
+        await asyncio.wait_for(consume_progress(), timeout=timeout)
+    except asyncio.TimeoutError:
+        log_message(f"Transcoding timed out after {timeout:.0f}s (duration_hint={duration_hint}); killing ffmpeg")
+        process.kill()
+        await process.wait()
+        return False
+
     return_code = await process.wait()
-
     if return_code != 0:
-        stderr_text = stderr_data.decode(errors="ignore")
-        log_message(f"Transcoding error (code {return_code}): {stderr_text}")
+        log_message(f"Transcoding failed: ffmpeg exit code {return_code}")
         return False
 
     return True
@@ -2243,11 +2254,25 @@ async def get_stats(request: Request):
         uptime_display = f"{uptime_days}d {uptime_hours % 24}h" if uptime_days > 0 else f"{uptime_hours}h"
 
         drive_errors = dict(stats_gdrive_errors)
+
+        transcoding_queued_jobs = list(transcoding_queue.queue)
+        transcoding_running_snapshot = list(transcoding_running_jobs.values())
+        now_ts = time.time()
+        transcoding_running_elapsed = []
+        for tj in transcoding_running_snapshot:
+            start = getattr(tj, "transcode_start_time", None)
+            transcoding_running_elapsed.append(now_ts - start if start else None)
+
         transcoding_stats = {
             "jobs": stats_transcoding_jobs,
             "total_gb": stats_transcoding_total_gb,
             "total_duration_seconds": stats_transcoding_total_duration_seconds,
-            "total_duration_formatted": format_duration(stats_transcoding_total_duration_seconds / 60.0 if stats_transcoding_total_duration_seconds else 0)
+            "total_duration_formatted": format_duration(stats_transcoding_total_duration_seconds / 60.0 if stats_transcoding_total_duration_seconds else 0),
+            "queued_count": len(transcoding_queued_jobs),
+            "queued_capacity": MAX_TRANSCODING_QUEUED_JOBS,
+            "running_count": len(transcoding_running_snapshot),
+            "running_capacity": MAX_PARALLEL_TRANSCODES,
+            "running_max_elapsed_seconds": max((e for e in transcoding_running_elapsed if e is not None), default=0.0),
         }
 
         stats_data = {
@@ -2709,7 +2734,11 @@ async def upload_file(
         save_audio=save_audio_bool,
     )
     if queue_depth is None:
-        log_message(f"{user_email}: ERROR - Transcoding queue full (job_id={job_id})")
+        log_message(
+            f"{user_email}: ERROR - Transcoding queue full (job_id={job_id}, "
+            f"queued={transcoding_queue.qsize()}/{MAX_TRANSCODING_QUEUED_JOBS}, "
+            f"running={len(transcoding_running_jobs)}/{MAX_PARALLEL_TRANSCODES})"
+        )
         return JSONResponse({"error": "errorServerBusy", "i18n_key": "errorServerBusy"}, status_code=503)
 
     log_message(f"{user_email}: Returning streaming response (job_id={job_id})")
@@ -3024,7 +3053,10 @@ async def handle_transcoding(job_id: str):
         )
         
         if not success:
-            log_message(f"Transcoding failed for job {job_id}")
+            log_message(
+                f"{transcoding_job.user_email}: Transcoding failed for job {job_id} "
+                f"(filename={transcoding_job.filename!r}, duration_hint={duration_hint_seconds})"
+            )
             await emit_upload_error(job_id, "errorTranscodingFailed")
             # Clean up
             if job_id in transcoding_running_jobs:
@@ -3033,9 +3065,24 @@ async def handle_transcoding(job_id: str):
             if os.path.exists(output_path):
                 os.unlink(output_path)
             return
-        
+
         # Get duration from the generated Opus file before replacing the original
-        duration = await get_media_duration(output_path)
+        duration = await get_media_duration(output_path, duration_hint=duration_hint_seconds)
+        if duration is None:
+            log_message(
+                f"{transcoding_job.user_email}: Could not determine duration after transcoding "
+                f"for job {job_id} (filename={transcoding_job.filename!r}); failing job"
+            )
+            await emit_upload_error(job_id, "errorTranscodingFailed")
+            if job_id in transcoding_running_jobs:
+                del transcoding_running_jobs[job_id]
+            cleanup_temp_file(job_id)
+            if os.path.exists(output_path):
+                try:
+                    os.unlink(output_path)
+                except Exception:
+                    pass
+            return
 
         # Replace original file with transcoded file
         try:
@@ -3113,7 +3160,15 @@ async def handle_transcoding(job_id: str):
                 stats_transcoding_total_duration_seconds += duration
         
     except Exception as e:
-        log_message(f"Error in transcoding task for job {job_id}: {str(e)}")
+        log_message(
+            f"{transcoding_job.user_email}: Error in transcoding task for job {job_id} "
+            f"(filename={transcoding_job.filename!r}): {type(e).__name__}: {e}"
+        )
+        logger.exception(f"Full traceback for transcoding task failure (job_id={job_id})")
+        try:
+            await emit_upload_error(job_id, "errorTranscodingFailed")
+        except Exception:
+            pass
         # Clean up
         if job_id in transcoding_running_jobs:
             del transcoding_running_jobs[job_id]
