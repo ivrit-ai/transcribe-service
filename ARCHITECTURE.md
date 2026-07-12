@@ -84,7 +84,7 @@ build_bundle.py           PyInstaller bundling script
 
 | Category | Key Endpoints |
 |----------|--------------|
-| Transcription | `POST /upload`, `POST /upload/precheck`, `POST /upload/youtube`, `GET /download/{job_id}` |
+| Transcription | `POST /upload`, `POST /upload/precheck`, `POST /upload/youtube`, `POST /upload/defer/{job_id}`, `GET /download/{job_id}` |
 | Audio | `GET /appdata/audio/{id}`, `GET /appdata/audio/stream/{id}` |
 | Data | `GET /appdata/toc`, `GET /appdata/results/{id}`, `POST /appdata/edits/{id}` |
 | Management | `POST /appdata/rename`, `POST /appdata/delete`, `POST /appdata/donate_data` |
@@ -99,6 +99,136 @@ Three queue types with configurable parallelism:
 - **Private** (custom RunPod): max 1000 parallel, 5000 queued
 
 Jobs go through: upload -> pre-transcoding (ffmpeg to OPUS) -> queue -> RunPod/local inference -> results.
+
+When the transcoding queue or the short/long transcription queue is full, cloud/Drive
+users with a non-custom-RunPod job are offered an opt-in deferral instead of an
+immediate reject (local mode and private/custom-RunPod jobs keep the original
+reject-on-full behavior). See [Deferred Jobs (Queue-Full Handling)](#deferred-jobs-queue-full-handling).
+
+## Deferred Jobs (Queue-Full Handling)
+
+Cloud/Drive users only (not local mode, not custom-RunPod/private jobs) can opt into
+deferring an upload instead of losing it when a queue is full. Deferability itself is
+computed by the caller from information already in scope (`in_local_mode`,
+`runpod_token`) — neither `queue_transcoding_job()` nor `queue_job()` needs a changed
+return contract to signal it; `queue_transcoding_job()` keeps its existing
+`Optional[int]` return (queue depth or `None` on full), and `queue_job()` keeps
+returning `(bool, dict)`, with `deferrable`/`job_id` simply added into the existing
+`build_error(...)` payload dict on the `queue.Full` branch.
+
+Two-phase flow:
+1. **Grace window (in-memory, ~5 min):** On queue-full (transcoding queue or the
+   short/long transcription queue), the server holds the local file and responds with
+   `errorServerBusy` + `deferrable: true` + `job_id`. If the user does nothing, the file
+   is deleted after `DEFERRAL_GRACE_PERIOD_SECONDS`, matching pre-existing behavior.
+2. **Deferred (durable, up to 48h):** If the user calls `POST /upload/defer/{job_id}`
+   within the grace window, the endpoint uploads the held file to the user's own Drive
+   and, only on a successful Drive upload, appends a `status: "Deferred"` entry to their
+   `toc.json.gz`.
+
+**Local file lifecycle during `POST /upload/defer/{job_id}`:** the local temp file (and
+the remaining grace-window timer) is only deleted/consumed *after* both the Drive
+upload and the TOC write succeed. If the Drive upload fails partway (e.g. a network
+blip), the endpoint leaves the temp file and grace timer untouched, returns an error to
+the client, and the client can call `POST /upload/defer/{job_id}` again — or just wait
+— within the remaining grace window. Only a fully successful upload+TOC-write cancels
+the grace timer and calls `cleanup_temp_file()`. If the Drive upload succeeds but the
+subsequent TOC write fails, and the client retries the defer call, the retry uploads
+to Drive again — this can leave a harmless orphaned duplicate Drive file with no TOC
+entry pointing to it. This is an accepted low-severity side effect (no data loss, no
+correctness impact) and does not need a cleanup mechanism.
+
+**Atomic pending-deferral check:** `POST /upload/defer/{job_id}` does not check for an
+existing pending deferral as a separate read before a separate write. The check and the
+append happen inside a single `async with get_toc_lock(user_email):` block — one
+`download_toc()` → scan for a non-expired `status: "Deferred"` entry → if found, abort
+and return a rejection (a second deferral is not allowed) → otherwise append the new
+`Deferred` entry → `upload_toc()` — matching the check-then-mutate-under-lock pattern
+already used for every other TOC mutation in this codebase (e.g. `app.py:1476-1477,
+1538-1539, 1668-1669, 3639-3648`). This closes the race where two near-simultaneous
+defer calls (two tabs, a double-click) could otherwise both pass an unlocked check
+before either had written, producing two `Deferred` entries.
+
+**Deferred TOC entry fields**, sufficient to faithfully resume the job later without
+touching any other data source:
+
+| Field | Description |
+|-------|--------------|
+| `job_id` | Original job UUID, reused across defer → resume → completion |
+| `source_filename` | Original filename, for display and re-submission |
+| `language` | Selected transcription language |
+| `duration_seconds` | Estimated duration (pre_transcode) or actual duration (post_transcode) |
+| `save_audio` | Whether the user opted to save the source audio |
+| `stage` | `"pre_transcode"` (needs re-transcoding on resume) or `"post_transcode"` (already transcoded, resume goes straight to `queue_job()`) |
+| `drive_file_id` | Drive file ID of the deferred raw/transcoded audio |
+| `file_size_bytes` | Size of the deferred file, needed to reconstruct the original `queue_transcoding_job()`/`queue_job()` call |
+| `queued_at` | Timestamp the deferral was created |
+| `expires_at` | `queued_at` + `DEFERRED_JOB_TTL_HOURS` (48h); past this, cleanup is unconditional |
+| `status` | Always `"Deferred"` while pending |
+
+No `refresh_token` or `runpod_token` field — these are secrets and are never persisted;
+resume always reads the live `refresh_token` from `sessions`, and custom-RunPod jobs
+are excluded from deferral eligibility entirely.
+
+Resume/expiry sweeps run inside the single existing scheduler loop, `event_loop()`
+(`app.py:3789-3797`) — there is no separate background task. `deferred_job_watcher()`
+is a self-throttled function called every tick of `event_loop()`, following the exact
+same pattern as `check_heartbeat_timeout()` (`app.py:3751-3769`): a module-level
+`last_deferred_watcher_check_time` guarded by `DEFERRED_WATCHER_INTERVAL_SECONDS`,
+returning immediately if the interval hasn't elapsed. When it does run, it checks queue
+depth against `DEFERRED_RESUME_QUEUE_THRESHOLD` and, for users who are both currently
+logged in (`sessions` has their `refresh_token`) and have a pending `Deferred` TOC
+entry, pulls the file back from Drive and resubmits it through the normal
+`queue_transcoding_job`/`queue_job` pipeline. Resume is therefore inherently limited to
+users who are logged in at check time; there is no persisted-token fallback. On a
+successful resume the deferred Drive file is also deleted (not just the TOC entry) —
+the only case where the Drive file outlives its TOC entry is the already-documented
+low-severity orphan from a retried defer call after a Drive-upload-succeeds/TOC-write-
+fails race.
+
+Resuming a `post_transcode` entry goes straight to `queue_job()`, whose own batch-limit
+check calls `has_pending_deferred_job()` — which would otherwise always find the very
+entry being resumed and block it forever. To avoid this, resume removes the TOC entry
+*before* calling `queue_job()` and re-inserts it unchanged (same `job_id`/`expires_at`)
+if the attempt fails for a reason other than success. `pre_transcode` resume has no
+such internal check in `queue_transcoding_job()`, so it keeps the simpler order (remove
+only on success).
+
+**Terminal vs. transient outcomes on a resume attempt** are handled differently, not
+collapsed into one cleanup path:
+- **Terminal (drop the entry permanently, delete the Drive file if present):**
+  `expires_at` has passed (TTL expiry), or the Drive file is confirmed gone (a 404 /
+  not-found response when attempting to download `drive_file_id`). Neither condition
+  can self-resolve, so the entry and its Drive file are removed via the same TOC-locked
+  update pattern used to create the entry.
+- **Transient (leave the entry in place, retry on the next tick):** a quota rejection
+  (`eta_to_credits` returning a positive wait or `inf`, `app.py:939-961` — quota buckets
+  refill over time, so this can legitimately succeed on a later tick) or a token-refresh
+  / auth failure when contacting Drive or RunPod at resume time (the user's session may
+  simply be mid-refresh; also self-resolving). These are logged but otherwise left
+  untouched; the entry keeps being retried on each subsequent watcher tick until either
+  it succeeds or it hits the terminal TTL-expiry condition above. Any exception raised
+  during resume that doesn't match one of the two listed terminal conditions (e.g. an
+  unexpected error from `queue_transcoding_job()`/`queue_job()`) is treated as
+  transient by default — logged and retried on the next tick — since silently dropping
+  a job on an unrecognized error would defeat the feature's purpose.
+
+**Enforcing "1 pending deferred job" / counting against the active-job limit:** the
+existing `user_jobs`-based batch-limit check (`app.py:923-925`, mirrored in
+`validate_upload_request_metadata` at `app.py:3219`) does not cover deferred jobs —
+`user_jobs` is only populated inside `queue_job()` at `app.py:1003`, *after* the
+batch-limit check, and both queue-full paths return before that line runs. Enforcement
+is instead a new explicit check, `has_pending_deferred_job(user_email, refresh_token,
+session_id)`, which downloads the user's TOC and looks for a non-expired
+`status: "Deferred"` entry. This is called from `validate_upload_request_metadata()`
+and `queue_job()`'s batch-limit check (both treat a pending deferral as occupying the
+user's single active-job slot); `POST /upload/defer/{job_id}` performs its own check
+under the TOC lock as described above rather than calling this helper, to keep the
+check and the write atomic.
+
+The frontend surfaces `"Deferred"` through the existing generic TOC status rendering
+and the existing 5-second My-Files polling loop — no new push/live-update channel was
+introduced.
 
 ## Configuration
 
@@ -180,6 +310,10 @@ These are compile-time constants in `app.py` that require a code change to tune:
 | `MAX_FILE_SIZE_PRIVATE` | 3 GB | Upload limit for private (custom RunPod) users |
 | `UPLOAD_CHUNK_SIZE` | 50 MB | Chunked upload size |
 | `DRIVE_FILE_ID_CACHE_SIZE` | 1000 | LRU cache size for Google Drive file ID lookups |
+| `DEFERRAL_GRACE_PERIOD_SECONDS` | 300 | Time a queue-full file is held in memory before deletion, awaiting opt-in defer |
+| `DEFERRED_JOB_TTL_HOURS` | 48 | How long a deferred job persists in Drive/TOC before expiry cleanup |
+| `DEFERRED_WATCHER_INTERVAL_SECONDS` | 180 | Self-throttle interval for deferred-job resume/expiry sweeps, checked inside `event_loop()` (same pattern as `HEARTBEAT_INTERVAL_SECONDS`) |
+| `DEFERRED_RESUME_QUEUE_THRESHOLD` | 0.25 | Queue fill fraction (of max) below which deferred jobs are resumed |
 
 ## External Services
 
@@ -222,6 +356,7 @@ These are compile-time constants in `app.py` that require a code change to tune:
 - **Client:** precheck → XHR POST `/upload` → NDJSON streaming events
 - **Server:** `validate_upload_request_metadata()` → create temp file → queue to `transcoding_queue` → `StreamingResponse`
 - **Background:** `submit_next_transcoding_task()` → `handle_transcoding()` → `transcode_to_opus()` → `queue_job()` → `transcribe_job()`
+- **Queue-full:** either `queue_transcoding_job()` (pre-transcode) or `queue_job()` (post-transcode) can be deferred instead of a hard reject; client shows `queue-busy-modal`. Opting in calls `POST /upload/defer/{job_id}`, which uploads the held file to Drive and appends a `Deferred` TOC entry, later picked up by `deferred_job_watcher()` on its next self-throttled check inside `event_loop()` — see [Deferred Jobs (Queue-Full Handling)](#deferred-jobs-queue-full-handling).
 
 ### YouTube Upload Pipeline
 - **Client:** validate URL → show rights modal → fetch POST `/upload/youtube` → NDJSON streaming events
@@ -245,7 +380,7 @@ Events are pushed via `upload_event_streams` dict (job_id → asyncio.Queue), em
 ### Modal/Dialog Patterns
 - CSS: `.modal` (hidden) + `.modal.show` (visible), fixed position, z-index 1000, dark backdrop
 - HTML: `.modal > .modal-content > .modal-header + .form-group + .modal-buttons`
-- Existing modals: `settings-modal`, `speaker-rename-modal`, `donate-data-modal`, `youtube-rights-modal`
+- Existing modals: `settings-modal`, `speaker-rename-modal`, `donate-data-modal`, `youtube-rights-modal`, `queue-busy-modal` (offers "Retry now" / "Finish automatically" on a `deferrable` queue-full error)
 - Checkbox-gated submit: checkbox change toggles submit button `disabled` state
 
 ### i18n Pattern
