@@ -153,7 +153,7 @@
     errorJobAlreadyActive: "יש לך כבר עבודה בתור או בביצוע. אנא המתן לסיומה לפני העלאת קובץ חדש.",
     errorRateLimitExceeded: "עברת את מגבלת השימוש החופשי. אנא המתן {minutes} דקות לפני העלאת קובץ חדש, או השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://youtu.be/xr8RQRFERLs",
     errorFileTooLargeForFreeService: "הקובץ המבוקש גדול מדי ועובר את מגבלת השימוש החופשי הכוללת. אנא השתמש במפתח פרטי בעזרת ההוראות בסרטון הבא: https://youtu.be/xr8RQRFERLs",
-    errorServerBusy: "השרת עמוס כרגע. אנא נסה שוב מאוחר יותר.",
+    errorServerBusy: "הפרויקט מבוסס על תרומות והשרת החינמי עמוס כרגע. באפשרותך לנסות שוב מאוחר יותר (בעדיפות לשעות הלילה) או לתמלל במחיר עלות בעזרת ההוראות בסרטון: https://youtu.be/xr8RQRFERLs.",
     errorDrivePermissionsRequired: "השירות דורש הרשאות Google Drive כדי לשמור את התמלולים שלך. אנא אשר את כל ההרשאות המבוקשות כדי להמשיך.",
     errorServiceUnavailable: "השירות כרגע לא פעיל. אנא נסה שוב מאוחר יותר.",
     errorNoFileSelected: "לא נבחר קובץ. אנא בחר קובץ להעלאה.",
