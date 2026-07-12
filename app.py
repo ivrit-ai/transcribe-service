@@ -430,6 +430,25 @@ def get_toc_lock(user_email: str) -> asyncio.Lock:
         toc_locks[user_email] = asyncio.Lock()
     return toc_locks[user_email]
 
+
+def _is_deferred_entry_active(entry: dict) -> bool:
+    """Return True if a TOC entry is a still-valid (non-expired) 'Deferred' entry."""
+    if entry.get("status") != "Deferred":
+        return False
+    expires_at = entry.get("expires_at")
+    if not expires_at:
+        return False
+    try:
+        return datetime.fromisoformat(expires_at) > datetime.utcnow()
+    except ValueError:
+        return False
+
+
+async def has_pending_deferred_job(user_email: Optional[str], refresh_token: Optional[str], session_id: Optional[str]) -> bool:
+    """Check whether the user already has a non-expired 'Deferred' TOC entry."""
+    toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+    return any(_is_deferred_entry_active(entry) for entry in toc_data.get("entries", []))
+
 # PostHog configuration
 ph = None
 if "POSTHOG_API_KEY" in os.environ:
@@ -488,6 +507,51 @@ UPLOAD_CHUNK_SIZE = 50 * 1024 * 1024  # 50MB chunks
 # Dictionary to store temporary file paths
 temp_files = {}
 
+# Jobs held in memory during the deferral grace window (job_id -> metadata), see
+# register_pending_grace() and "Deferred Jobs (Queue-Full Handling)" in ARCHITECTURE.md
+pending_grace = {}
+
+
+async def _expire_grace_period(job_id: str):
+    """After the grace window elapses, delete the held file unless the user opted to defer."""
+    await asyncio.sleep(DEFERRAL_GRACE_PERIOD_SECONDS)
+    if job_id in pending_grace:
+        log_message(f"Deferral grace period expired for job {job_id}; deleting held file")
+        cleanup_temp_file(job_id)
+        pending_grace.pop(job_id, None)
+
+
+def register_pending_grace(
+    job_id: str,
+    *,
+    user_email: str,
+    filename: str,
+    language: str,
+    duration_seconds: float,
+    save_audio: bool,
+    stage: str,
+    file_size_bytes: int,
+):
+    """Hold a queue-full job's local file in memory for DEFERRAL_GRACE_PERIOD_SECONDS,
+    awaiting an opt-in POST /upload/defer/{job_id} call instead of an immediate delete."""
+    existing = pending_grace.get(job_id)
+    if existing is not None:
+        # A prior grace window for this job_id (e.g. an earlier resume attempt that hit
+        # queue-full again) is being superseded — cancel its expiry timer so it can't
+        # fire later and delete this newer registration's file out from under it.
+        existing["task"].cancel()
+    task = asyncio.create_task(_expire_grace_period(job_id))
+    pending_grace[job_id] = {
+        "task": task,
+        "user_email": user_email,
+        "filename": filename,
+        "language": language,
+        "duration_seconds": duration_seconds,
+        "save_audio": save_audio,
+        "stage": stage,
+        "file_size_bytes": file_size_bytes,
+    }
+
 # Transcoding queue and running jobs
 transcoding_queue = queue.Queue(maxsize=MAX_TRANSCODING_QUEUED_JOBS)
 transcoding_running_jobs = {}
@@ -545,6 +609,7 @@ async def emit_upload_error(
     status_code: int = 400,
     i18n_vars: Optional[dict] = None,
     details: Optional[str] = None,
+    deferrable: bool = False,
 ):
     """Send a terminal error event to the streaming client."""
     payload = {
@@ -556,6 +621,9 @@ async def emit_upload_error(
         payload["i18n_vars"] = i18n_vars
     if details:
         payload["details"] = details
+    if deferrable:
+        payload["deferrable"] = True
+        payload["job_id"] = job_id
     await emit_upload_event(job_id, "error", payload)
 
 
@@ -636,6 +704,12 @@ TOC_CACHE_ENABLED = False
 # Key: (refresh_token_hash_prefix, filename) -> file_id
 DRIVE_FILE_ID_CACHE_SIZE = 1000
 drive_file_id_cache = LRUCache(maxsize=DRIVE_FILE_ID_CACHE_SIZE)
+
+# Deferred jobs (queue-full handling): grace window, durable TTL, and resume-sweep tuning
+DEFERRAL_GRACE_PERIOD_SECONDS = 300
+DEFERRED_JOB_TTL_HOURS = 48
+DEFERRED_WATCHER_INTERVAL_SECONDS = 180
+DEFERRED_RESUME_QUEUE_THRESHOLD = 0.25
 
 def get_toc_cache_key(refresh_token: Optional[str]) -> Optional[str]:
     """Generate cache key from refresh_token."""
@@ -924,6 +998,9 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
     if active_count >= user_batch_limit:
         return build_error("errorBatchLimitReached", status_code=400)
 
+    if not in_local_mode and await has_pending_deferred_job(user_email, refresh_token, None):
+        return build_error("errorBatchLimitReached", status_code=400)
+
     max_duration_seconds = MAX_AUDIO_DURATION_IN_HOURS * 3600
     if duration > max_duration_seconds:
         return build_error(
@@ -1020,8 +1097,31 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
 
         log_message(f"{user_email}: Job queuing failed: {job_id}")
 
-        cleanup_temp_file(job_id)
-        return build_error("errorServerBusy", status_code=503)
+        deferral_eligible = not in_local_mode and not bool(runpod_token)
+        if deferral_eligible:
+            file_size_bytes = 0
+            try:
+                file_size_bytes = os.path.getsize(temp_files[job_id])
+            except (KeyError, OSError):
+                logger.exception(f"{user_email}: Failed to stat held file for deferral (job_id={job_id})")
+            register_pending_grace(
+                job_id,
+                user_email=user_email,
+                filename=filename,
+                language=language,
+                duration_seconds=duration,
+                save_audio=save_audio,
+                stage="post_transcode",
+                file_size_bytes=file_size_bytes,
+            )
+        else:
+            cleanup_temp_file(job_id)
+
+        payload = {"error": "errorServerBusy", "i18n_key": "errorServerBusy", "status_code": 503}
+        if deferral_eligible:
+            payload["deferrable"] = True
+            payload["job_id"] = job_id
+        return False, payload
 
 
 @app.get("/", dependencies=[Depends(require_google_login)])
@@ -2593,7 +2693,20 @@ async def queue_transcoding_job(
             queue_depth = transcoding_queue.qsize()
             transcoding_queue.put_nowait(transcoding_job)
     except queue.Full:
-        cleanup_temp_file(job_id)
+        deferral_eligible = not in_local_mode and not bool(runpod_token)
+        if deferral_eligible:
+            register_pending_grace(
+                job_id,
+                user_email=user_email,
+                filename=filename,
+                language=language,
+                duration_seconds=estimated_duration,
+                save_audio=save_audio,
+                stage="pre_transcode",
+                file_size_bytes=file_size_bytes,
+            )
+        else:
+            cleanup_temp_file(job_id)
         return None
 
     job_results[job_id] = {"results": [], "completion_time": None}
@@ -2739,7 +2852,12 @@ async def upload_file(
             f"queued={transcoding_queue.qsize()}/{MAX_TRANSCODING_QUEUED_JOBS}, "
             f"running={len(transcoding_running_jobs)}/{MAX_PARALLEL_TRANSCODES})"
         )
-        return JSONResponse({"error": "errorServerBusy", "i18n_key": "errorServerBusy"}, status_code=503)
+        deferrable = not in_local_mode and not bool(runpod_token)
+        response_payload = {"error": "errorServerBusy", "i18n_key": "errorServerBusy"}
+        if deferrable:
+            response_payload["deferrable"] = True
+            response_payload["job_id"] = job_id
+        return JSONResponse(response_payload, status_code=503)
 
     log_message(f"{user_email}: Returning streaming response (job_id={job_id})")
     return StreamingResponse(
@@ -2977,7 +3095,8 @@ async def upload_youtube(request: Request):
                 save_audio=save_audio_bool,
             )
             if queue_depth is None:
-                await emit_upload_error(job_id, "errorServerBusy", status_code=503)
+                deferrable = not in_local_mode and not bool(runpod_token)
+                await emit_upload_error(job_id, "errorServerBusy", status_code=503, deferrable=deferrable)
 
         except Exception as e:
             log_message(f"{user_email}: YouTube upload error (job_id={job_id}): {type(e).__name__}: {e}")
@@ -3123,7 +3242,10 @@ async def handle_transcoding(job_id: str):
             log_message(f"Failed to queue job {job_id} after transcoding")
             if isinstance(queue_info, dict):
                 await emit_upload_event(job_id, "error", queue_info)
-            cleanup_temp_file(job_id)
+                if not queue_info.get("deferrable"):
+                    cleanup_temp_file(job_id)
+            else:
+                cleanup_temp_file(job_id)
         else:
             await emit_upload_event(
                 job_id,
@@ -3230,6 +3352,9 @@ async def validate_upload_request_metadata(
 
     total_active = active_job_count + transcoding_count
     if total_active >= user_batch_limit:
+        return None, JSONResponse({"error": "errorBatchLimitReached", "i18n_key": "errorBatchLimitReached"}, status_code=400)
+
+    if not in_local_mode and await has_pending_deferred_job(user_email, refresh_token, get_session_id(request)):
         return None, JSONResponse({"error": "errorBatchLimitReached", "i18n_key": "errorBatchLimitReached"}, status_code=400)
 
     if save_audio is None:
@@ -3362,6 +3487,95 @@ async def precheck_upload(request: Request):
         "has_private_credentials": metadata["has_private_credentials"],
     }
     return JSONResponse(response_payload)
+
+
+@app.post("/upload/defer/{job_id}", dependencies=[Depends(require_google_login)])
+async def defer_upload(job_id: str, request: Request):
+    """Opt in to deferring a queue-full upload: upload the held file to Drive and
+    record a durable 'Deferred' TOC entry, to be resumed later by deferred_job_watcher()."""
+    if in_local_mode:
+        return JSONResponse({"error": "errorDeferralNotAvailable", "i18n_key": "errorDeferralNotAvailable"}, status_code=400)
+
+    user_email = get_user_email(request)
+    if not user_email:
+        return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
+
+    session_id = get_session_id(request)
+    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    if not refresh_token:
+        return JSONResponse({"error": "errorDriveNotConnected", "i18n_key": "errorDriveNotConnected"}, status_code=401)
+
+    grace_entry = pending_grace.get(job_id)
+    file_path = temp_files.get(job_id)
+    if not grace_entry or grace_entry["user_email"] != user_email or not file_path or not os.path.exists(file_path):
+        return JSONResponse({"error": "errorDeferralExpired", "i18n_key": "errorDeferralExpired"}, status_code=404)
+
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+
+    try:
+        with open(file_path, "rb") as f:
+            file_data = f.read()
+    except OSError:
+        logger.exception(f"{user_email}: Failed to read held file for deferral (job_id={job_id})")
+        return JSONResponse({"error": "errorDeferralFailed", "i18n_key": "errorDeferralFailed"}, status_code=500)
+
+    drive_filename = f"{job_id}.deferred"
+    try:
+        upload_success = await file_storage_backend.upload_file(
+            drive_filename, file_data, "application/octet-stream", user_identifier, user_email
+        )
+    except Exception:
+        logger.exception(f"{user_email}: Drive upload failed while deferring job (job_id={job_id})")
+        upload_success = False
+
+    if not upload_success:
+        # Leave the temp file and grace timer untouched; the client can retry within the grace window.
+        return JSONResponse({"error": "errorDeferralFailed", "i18n_key": "errorDeferralFailed"}, status_code=500)
+
+    drive_file_id = await find_drive_file_by_name_cached(refresh_token, drive_filename, user_email=user_email, session_id=session_id)
+    if not drive_file_id:
+        logger.error(f"{user_email}: Deferred file uploaded but could not be located afterwards (job_id={job_id})")
+        return JSONResponse({"error": "errorDeferralFailed", "i18n_key": "errorDeferralFailed"}, status_code=500)
+
+    queued_at = datetime.utcnow()
+    expires_at = queued_at + timedelta(hours=DEFERRED_JOB_TTL_HOURS)
+    deferred_entry = {
+        "job_id": job_id,
+        "source_filename": grace_entry["filename"],
+        "language": grace_entry["language"],
+        "duration_seconds": grace_entry["duration_seconds"],
+        "save_audio": grace_entry["save_audio"],
+        "stage": grace_entry["stage"],
+        "drive_file_id": drive_file_id,
+        "file_size_bytes": grace_entry["file_size_bytes"],
+        "queued_at": queued_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "status": "Deferred",
+    }
+
+    toc_lock = get_toc_lock(user_email)
+    async with toc_lock:
+        toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+        if "entries" not in toc_data:
+            toc_data["entries"] = []
+
+        if any(_is_deferred_entry_active(entry) for entry in toc_data["entries"]):
+            return JSONResponse({"error": "errorDeferralAlreadyPending", "i18n_key": "errorDeferralAlreadyPending"}, status_code=400)
+
+        toc_data["entries"].append(deferred_entry)
+        success = await upload_toc(refresh_token, toc_data, user_email=user_email, session_id=session_id)
+
+    if not success:
+        async with stats_lock:
+            stats_gdrive_errors["toc_upload"] += 1
+        return JSONResponse({"error": "errorDeferralFailed", "i18n_key": "errorDeferralFailed"}, status_code=500)
+
+    grace_entry["task"].cancel()
+    cleanup_temp_file(job_id)
+    pending_grace.pop(job_id, None)
+
+    log_message(f"{user_email}: Job {job_id} deferred to Drive (drive_file_id={drive_file_id})")
+    return JSONResponse({"success": True, "job_id": job_id})
 
 
 def clean_some_unicode_from_text(text):
@@ -3786,6 +4000,248 @@ async def check_heartbeat_timeout():
         os._exit(0)
 
 
+last_deferred_watcher_check_time = None
+
+
+def _queue_fill_fraction(qsize: int, max_size: int) -> float:
+    if max_size <= 0:
+        return 1.0
+    return qsize / max_size
+
+
+def _deferred_entry_target_has_room(entry: dict) -> bool:
+    """Whether the queue this deferred entry would resume into currently has room,
+    per DEFERRED_RESUME_QUEUE_THRESHOLD."""
+    if entry.get("stage") == "pre_transcode":
+        return _queue_fill_fraction(transcoding_queue.qsize(), MAX_TRANSCODING_QUEUED_JOBS) <= DEFERRED_RESUME_QUEUE_THRESHOLD
+
+    duration_seconds = entry.get("duration_seconds") or 0
+    target_queue = queues[SHORT] if duration_seconds <= SHORT_JOB_THRESHOLD else queues[LONG]
+    return _queue_fill_fraction(target_queue.qsize(), MAX_QUEUED_JOBS) <= DEFERRED_RESUME_QUEUE_THRESHOLD
+
+
+async def _remove_deferred_toc_entry(user_email: str, refresh_token: str, session_id: Optional[str], job_id: str) -> Optional[dict]:
+    """Remove the 'Deferred' TOC entry for job_id under the TOC lock. Returns the removed entry, or None if not found/failed."""
+    toc_lock = get_toc_lock(user_email)
+    async with toc_lock:
+        toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+        entries = toc_data.get("entries", [])
+        removed = None
+        remaining = []
+        for entry in entries:
+            if removed is None and entry.get("status") == "Deferred" and entry.get("job_id") == job_id:
+                removed = entry
+                continue
+            remaining.append(entry)
+        if removed is None:
+            return None
+        toc_data["entries"] = remaining
+        success = await upload_toc(refresh_token, toc_data, user_email=user_email, session_id=session_id)
+        if not success:
+            async with stats_lock:
+                stats_gdrive_errors["toc_upload"] += 1
+            logger.error(f"{user_email}: Failed to remove deferred TOC entry for job {job_id}")
+            return None
+        return removed
+
+
+async def _reinsert_deferred_toc_entry(user_email: str, refresh_token: str, session_id: Optional[str], entry: dict) -> bool:
+    """Re-add a previously removed 'Deferred' TOC entry (used when a resume attempt fails transiently)."""
+    toc_lock = get_toc_lock(user_email)
+    async with toc_lock:
+        toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+        if "entries" not in toc_data:
+            toc_data["entries"] = []
+        toc_data["entries"].append(entry)
+        success = await upload_toc(refresh_token, toc_data, user_email=user_email, session_id=session_id)
+        if not success:
+            async with stats_lock:
+                stats_gdrive_errors["toc_upload"] += 1
+            logger.error(f"{user_email}: Failed to reinsert deferred TOC entry for job {entry.get('job_id')}")
+        return success
+
+
+async def _delete_deferred_drive_file(drive_file_id: str, user_identifier: str, user_email: str, job_id: str):
+    """Best-effort delete of a deferred job's held Drive file; tolerates it already being gone."""
+    try:
+        await file_storage_backend.delete_file(drive_file_id, user_identifier, user_email)
+    except GoogleDriveError as e:
+        if e.status_code != 404:
+            logger.exception(f"{user_email}: Failed to delete deferred Drive file (job_id={job_id}): {e}")
+    except Exception as e:
+        logger.exception(f"{user_email}: Failed to delete deferred Drive file (job_id={job_id}): {e}")
+
+
+async def _drop_deferred_entry(user_email: str, refresh_token: str, session_id: Optional[str], job_id: str, *, delete_drive_file: bool, user_identifier: str):
+    """Terminally drop a deferred entry (TTL expiry or confirmed-missing Drive file)."""
+    removed = await _remove_deferred_toc_entry(user_email, refresh_token, session_id, job_id)
+    if removed and delete_drive_file:
+        drive_file_id = removed.get("drive_file_id")
+        if drive_file_id:
+            await _delete_deferred_drive_file(drive_file_id, user_identifier, user_email, job_id)
+
+
+async def _resume_deferred_entry(user_email: str, refresh_token: str, session_id: Optional[str], entry: dict):
+    """Attempt to resume a single deferred entry whose target queue currently has room."""
+    job_id = entry.get("job_id")
+    drive_file_id = entry.get("drive_file_id")
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+
+    try:
+        file_bytes = await file_storage_backend.download_file_bytes(drive_file_id, user_identifier)
+    except GoogleDriveError as e:
+        if e.status_code == 404:
+            log_message(f"{user_email}: Deferred job {job_id} Drive file missing; dropping entry: {e}")
+            await _drop_deferred_entry(user_email, refresh_token, session_id, job_id, delete_drive_file=False, user_identifier=user_identifier)
+        else:
+            logger.exception(f"{user_email}: Transient error downloading deferred file for job {job_id}; will retry")
+        return
+    except Exception:
+        logger.exception(f"{user_email}: Unexpected error downloading deferred file for job {job_id}; will retry")
+        return
+
+    if not file_bytes:
+        logger.warning(f"{user_email}: Deferred file for job {job_id} came back empty; will retry")
+        return
+
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    temp_file_path = temp_file.name
+    temp_file.close()
+    try:
+        with open(temp_file_path, "wb") as f:
+            f.write(file_bytes)
+    except OSError:
+        logger.exception(f"{user_email}: Failed to write resumed file to disk for job {job_id}; will retry")
+        try:
+            os.unlink(temp_file_path)
+        except OSError:
+            pass
+        return
+
+    if entry.get("stage") == "pre_transcode":
+        try:
+            result = await queue_transcoding_job(
+                job_id=job_id,
+                filename=entry.get("source_filename"),
+                user_email=user_email,
+                input_path=temp_file_path,
+                file_size_bytes=entry.get("file_size_bytes"),
+                estimated_duration=entry.get("duration_seconds"),
+                runpod_token="",
+                language=entry.get("language"),
+                refresh_token=refresh_token,
+                save_audio=entry.get("save_audio", False),
+            )
+        except Exception:
+            logger.exception(f"{user_email}: Unexpected error resuming deferred job {job_id}; will retry")
+            try:
+                os.unlink(temp_file_path)
+            except OSError:
+                pass
+            return
+
+        if result is None:
+            # queue_transcoding_job already held the file for a fresh grace window (or cleaned it up
+            # if not deferral-eligible); nothing further to do here, the entry stays for retry.
+            log_message(f"{user_email}: Deferred job {job_id} resume hit a full transcoding queue again; will retry")
+            return
+
+        await _remove_deferred_toc_entry(user_email, refresh_token, session_id, job_id)
+        await _delete_deferred_drive_file(drive_file_id, user_identifier, user_email, job_id)
+        log_message(f"{user_email}: Deferred job {job_id} resumed into transcoding queue")
+        return
+
+    # post_transcode: resuming goes straight to queue_job(). Remove the TOC entry first so
+    # queue_job()'s own has_pending_deferred_job() batch-limit check doesn't see this very
+    # entry and reject the resume; re-insert it if the attempt fails transiently.
+    removed_entry = await _remove_deferred_toc_entry(user_email, refresh_token, session_id, job_id)
+    if removed_entry is None:
+        logger.error(f"{user_email}: Could not remove deferred TOC entry for job {job_id} before resume; will retry")
+        try:
+            os.unlink(temp_file_path)
+        except OSError:
+            pass
+        return
+
+    temp_files[job_id] = temp_file_path
+    try:
+        resumed, queue_info = await queue_job(
+            job_id,
+            user_email,
+            entry.get("source_filename"),
+            entry.get("duration_seconds"),
+            "",
+            entry.get("language"),
+            refresh_token,
+            entry.get("save_audio", False),
+        )
+    except Exception:
+        logger.exception(f"{user_email}: Unexpected error resuming deferred job {job_id}; will retry")
+        cleanup_temp_file(job_id)
+        await _reinsert_deferred_toc_entry(user_email, refresh_token, session_id, removed_entry)
+        return
+
+    if not resumed:
+        log_message(f"{user_email}: Deferred job {job_id} resume rejected ({queue_info}); will retry")
+        if isinstance(queue_info, dict) and queue_info.get("deferrable"):
+            # queue_job() already held the file for a fresh grace window (or cleaned it up).
+            pass
+        else:
+            cleanup_temp_file(job_id)
+        await _reinsert_deferred_toc_entry(user_email, refresh_token, session_id, removed_entry)
+        return
+
+    await _delete_deferred_drive_file(drive_file_id, user_identifier, user_email, job_id)
+    log_message(f"{user_email}: Deferred job {job_id} resumed into transcription queue")
+
+
+async def deferred_job_watcher():
+    """Self-throttled sweep that resumes deferred jobs once their target queue has room,
+    and drops entries that have hit their TTL or whose Drive file is confirmed gone."""
+    global last_deferred_watcher_check_time
+
+    if in_local_mode:
+        return
+
+    current_time = time.time()
+
+    if last_deferred_watcher_check_time is None:
+        last_deferred_watcher_check_time = current_time
+        return
+
+    if current_time - last_deferred_watcher_check_time < DEFERRED_WATCHER_INTERVAL_SECONDS:
+        return
+
+    last_deferred_watcher_check_time = current_time
+
+    for session_id, session in list(sessions.items()):
+        refresh_token = session.get("refresh_token")
+        user_email = session.get("user_email")
+        if not refresh_token or not user_email:
+            continue
+
+        try:
+            toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+            entry = next((e for e in toc_data.get("entries", []) if e.get("status") == "Deferred"), None)
+            if entry is None:
+                continue
+
+            user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+            job_id = entry.get("job_id")
+
+            if not _is_deferred_entry_active(entry):
+                log_message(f"{user_email}: Deferred job {job_id} expired (TTL); cleaning up")
+                await _drop_deferred_entry(user_email, refresh_token, session_id, job_id, delete_drive_file=True, user_identifier=user_identifier)
+                continue
+
+            if not _deferred_entry_target_has_room(entry):
+                continue
+
+            await _resume_deferred_entry(user_email, refresh_token, session_id, entry)
+        except Exception:
+            logger.exception(f"{user_email}: Error processing deferred job during watcher sweep")
+
+
 async def event_loop():
     while True:
         await submit_next_transcoding_task()
@@ -3794,6 +4250,7 @@ async def event_loop():
         await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
         await cleanup_old_results()
         await check_heartbeat_timeout()
+        await deferred_job_watcher()
         await asyncio.sleep(0.1)
 
 
