@@ -35,6 +35,10 @@ class GoogleAuthError(GoogleAPIError):
 class GoogleDriveError(GoogleAPIError):
     """Raised when Google Drive operations fail."""
 
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 def _get_token_cache_key(refresh_token: str) -> str:
     """Generate a cache key from a refresh token."""

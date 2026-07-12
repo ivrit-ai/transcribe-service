@@ -83,7 +83,8 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                             err,
                         )
                         raise GoogleDriveError(
-                            f"Failed to query Drive folder: {resp.status} {err}"
+                            f"Failed to query Drive folder: {resp.status} {err}",
+                            status_code=resp.status,
                         )
 
                 create_headers = {
@@ -122,7 +123,8 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                         err,
                     )
                     raise GoogleDriveError(
-                        f"Failed to create Drive folder: {create_resp.status} {err}"
+                        f"Failed to create Drive folder: {create_resp.status} {err}",
+                        status_code=create_resp.status,
                     )
         except GoogleDriveError:
             raise
@@ -184,7 +186,8 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                         err,
                     )
                     raise GoogleDriveError(
-                        f"Failed to upload to Drive: {resp.status} {err}"
+                        f"Failed to upload to Drive: {resp.status} {err}",
+                        status_code=resp.status,
                     )
         except GoogleDriveError:
             raise
@@ -233,7 +236,8 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                         err,
                     )
                     raise GoogleDriveError(
-                        f"Failed to update Drive file {file_id}: {resp.status} {err}"
+                        f"Failed to update Drive file {file_id}: {resp.status} {err}",
+                        status_code=resp.status,
                     )
         except GoogleDriveError:
             raise
@@ -275,7 +279,8 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                         err,
                     )
                     raise GoogleDriveError(
-                        f"Failed to download Drive file {file_id}: {resp.status} {err}"
+                        f"Failed to download Drive file {file_id}: {resp.status} {err}",
+                        status_code=resp.status,
                     )
         except GoogleDriveError:
             raise
@@ -329,7 +334,8 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                         err,
                     )
                     raise GoogleDriveError(
-                        f"Failed to search Drive file {filename}: {resp.status} {err}"
+                        f"Failed to search Drive file {filename}: {resp.status} {err}",
+                        status_code=resp.status,
                     )
         except GoogleDriveError:
             raise
@@ -375,7 +381,8 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                         err,
                     )
                     raise GoogleDriveError(
-                        f"Failed to delete Drive file {file_id}: {resp.status} {err}"
+                        f"Failed to delete Drive file {file_id}: {resp.status} {err}",
+                        status_code=resp.status,
                     )
         except GoogleDriveError:
             raise

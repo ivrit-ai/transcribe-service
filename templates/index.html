@@ -1417,6 +1417,10 @@
       .status-ready {
         background-color: #4caf50;
       }
+      .status-deferred {
+        background-color: #ff9800;
+        animation: pulse 2s ease-in-out infinite;
+      }
       @keyframes pulse {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.5; }
@@ -2584,6 +2588,25 @@
     </div>
     {% endif %}
 
+    <!-- Queue Busy / Deferral Modal -->
+    <div id="queue-busy-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 data-i18n="queueBusyTitle">התור מלא כרגע</h2>
+          <button class="close" id="close-queue-busy">&times;</button>
+        </div>
+        <div class="form-group">
+          <p style="margin-bottom: 1rem;">
+            <span data-i18n="queueBusyMessage">התור מלא כרגע. תוכל לנסות להעלות שוב מיד, או לבחור שהקובץ יועלה אוטומטית לתמלול כשיתפנה מקום בתור (עד 48 שעות). הקובץ שלך נשמר זמנית עד שתבחר.</span>
+          </p>
+        </div>
+        <div class="modal-buttons">
+          <button type="button" class="btn btn-primary" id="queue-busy-retry" data-i18n="queueBusyRetryBtn">נסה שוב עכשיו</button>
+          <button type="button" class="btn btn-secondary" id="queue-busy-defer" data-i18n="queueBusyDeferBtn">סיים אוטומטית</button>
+        </div>
+      </div>
+    </div>
+
     <script src="{{ url_for('static', path='i18n.js') }}"></script>
 
     <!-- TipTap Editor Module -->
@@ -3749,6 +3772,104 @@
         })
       })()
 
+      // Queue-busy / deferral modal: shared state + handlers
+      let pendingDeferJobId = null
+      let pendingDeferRetryFn = null
+      let pendingDeferSuccessFn = null
+
+      // Called from an upload error catch site when the server offers deferral.
+      // Shows the queue-busy modal instead of the normal error toast + reset,
+      // and remembers how to retry / clean up once the user picks an option.
+      // Returns true if the error was deferrable and the modal was shown.
+      function handleDeferrableError(err, retryFn, onDeferSuccess) {
+        if (!err || err.deferrable !== true || !err.job_id) return false
+        pendingDeferJobId = err.job_id
+        pendingDeferRetryFn = retryFn
+        pendingDeferSuccessFn = onDeferSuccess
+        const modal = document.getElementById("queue-busy-modal")
+        if (modal) modal.classList.add("show")
+        return true
+      }
+
+      ;(function () {
+        const modal = document.getElementById("queue-busy-modal")
+        const closeBtn = document.getElementById("close-queue-busy")
+        const retryBtn = document.getElementById("queue-busy-retry")
+        const deferBtn = document.getElementById("queue-busy-defer")
+        if (!modal) return
+
+        function clearPendingDefer() {
+          pendingDeferJobId = null
+          pendingDeferRetryFn = null
+          pendingDeferSuccessFn = null
+        }
+
+        function closeModal() {
+          modal.classList.remove("show")
+        }
+
+        // Dismissing without choosing behaves like the pre-deferral behavior:
+        // give up on the upload and restore the normal UI state.
+        function cancelDeferral() {
+          closeModal()
+          clearPendingDefer()
+          resetUploadState()
+        }
+
+        if (closeBtn) closeBtn.addEventListener("click", cancelDeferral)
+
+        modal.addEventListener("click", function (e) {
+          if (e.target === modal) cancelDeferral()
+        })
+
+        if (retryBtn) {
+          retryBtn.addEventListener("click", function () {
+            const retryFn = pendingDeferRetryFn
+            closeModal()
+            clearPendingDefer()
+            if (typeof retryFn === "function") retryFn()
+          })
+        }
+
+        if (deferBtn) {
+          deferBtn.addEventListener("click", async function () {
+            const jobId = pendingDeferJobId
+            const onDeferSuccess = pendingDeferSuccessFn
+            closeModal()
+            clearPendingDefer()
+            if (!jobId) return
+
+            try {
+              const resp = await fetch(`/upload/defer/${jobId}`, { method: "POST" })
+              if (resp.ok) {
+                showToast(window.I18N ? window.I18N.t("deferralQueued") : "הקובץ שלך יתומלל אוטומטית כשיתפנה מקום בתור.", "success")
+                // onDeferSuccess may itself continue a multi-file batch (returning true) —
+                // in that case it owns finishing up, so skip doing it again here.
+                let continued = false
+                if (typeof onDeferSuccess === "function") continued = await onDeferSuccess()
+                if (!continued) {
+                  hideProgressUI()
+                  activeTranscription = false
+                  checkBalance()
+                  switchTab("files")
+                }
+              } else {
+                let errPayload
+                try {
+                  errPayload = await resp.json()
+                } catch {
+                  errPayload = { error: "errorDeferralFailed" }
+                }
+                showError(errPayload)
+              }
+            } catch (fetchErr) {
+              console.error("Failed to defer upload job", fetchErr)
+              showError({ error: "errorDeferralFailed" })
+            }
+          })
+        }
+      })()
+
       async function uploadYoutubeUrl(url) {
         transcribeBtn.disabled = true
         showProgressUI()
@@ -3840,11 +3961,18 @@
             }
           }
         } catch (err) {
+          if (handleDeferrableError(err, () => uploadYoutubeUrl(url), () => {
+            const ytInput = document.getElementById("youtube-url-input")
+            if (ytInput) ytInput.value = ""
+          })) {
+            return
+          }
           const translated = translateServerError(err) || (window.I18N ? window.I18N.t("errorYoutubeDownloadFailed") : "YouTube download failed")
           showToast(translated, "error")
-        } finally {
           resetUploadState()
+          return
         }
+        resetUploadState()
       }
 
       // Initialize settings button indicator on page load
@@ -4248,6 +4376,20 @@
             const idx = selectedFiles.indexOf(file)
             if (idx !== -1) selectedFiles.splice(idx, 1)
           } catch (err) {
+            if (handleDeferrableError(err, () => uploadBatch(), async () => {
+              const idx = selectedFiles.indexOf(file)
+              if (idx !== -1) selectedFiles.splice(idx, 1)
+              // Any files still left in the batch (after the deferred one) still need
+              // to be uploaded — resume the batch instead of abandoning them.
+              if (selectedFiles.length > 0) {
+                await uploadBatch()
+                return true
+              }
+              return false
+            })) {
+              // Pause here; the queue-busy modal drives the next action (retry or defer)
+              return
+            }
             const translated = translateServerError(err) || (window.I18N ? window.I18N.t('uploadError') : 'שגיאת העלאה')
             showToast(`${file.name}: ${translated}`, "error")
             // Stop on first upload failure; already-uploaded files continue server-side
@@ -4961,7 +5103,7 @@
         }
         
         // Check if there are active jobs
-        const hasActiveJobs = entries.some(e => e.status === 'Queued' || e.status === 'Being processed' || e.status === 'Transcoding...')
+        const hasActiveJobs = entries.some(e => e.status === 'Queued' || e.status === 'Being processed' || e.status === 'Transcoding...' || e.status === 'Deferred')
         
         // Only poll if there are active jobs - stop polling when all done
         if (!hasActiveJobs) {
@@ -4980,6 +5122,9 @@
 
       // Get localized status text
       function getStatusText(status) {
+        if (status === 'Deferred') {
+          return window.I18N ? window.I18N.t('statusDeferred') : 'Deferred'
+        }
         const statusTexts = {
           'he': {
             'Queued': 'ממתין בתור',
