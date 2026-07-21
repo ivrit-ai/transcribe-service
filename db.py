@@ -1,0 +1,151 @@
+"""Unified async SQL state layer.
+
+Source of truth for durable data (quota buckets, stats counters).
+Sessions stay in memory — they're keyed on an ephemeral cookie and re-login
+after a restart is cheap, so there's nothing worth persisting.
+Uses SQLite (aiosqlite) when running locally and Postgres (asyncpg) on xhost.
+
+Write ``?``-style SQL everywhere; the Postgres adapter rewrites ``?`` -> ``$n``.
+Both backends support ``INSERT ... ON CONFLICT(...) DO UPDATE`` with ``excluded``.
+
+The schema is owned by Alembic (see ``alembic/``); ``run_migrations`` applies it
+at startup. Runtime queries use the async drivers below, not SQLAlchemy.
+"""
+
+import re
+import os
+import asyncio
+import logging
+
+logger = logging.getLogger("transcribe_service.db")
+
+
+def run_migrations(url: str):
+    """Apply Alembic migrations up to head against ``url`` (synchronous).
+
+    ``url`` is a SQLAlchemy URL: ``sqlite:///abs/path/state.db`` locally or the
+    ``postgresql://`` DSN on xhost. Uses sync drivers (stdlib sqlite3 / psycopg2)
+    independently of the async runtime pool.
+    """
+    from alembic.config import Config
+    from alembic import command
+
+    if url.startswith("sqlite:///"):
+        path = url[len("sqlite:///"):]
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    cfg = Config(os.path.join(here, "alembic.ini"))
+    cfg.set_main_option("script_location", os.path.join(here, "alembic"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.upgrade(cfg, "head")
+    logger.info("Database migrations applied (head)")
+
+
+class Database:
+    def __init__(self, *, backend: str, dsn: str = None, path: str = None):
+        assert backend in ("sqlite", "postgres")
+        self.backend = backend
+        self._dsn = dsn
+        self._path = path
+        self._pool = None          # postgres
+        self._conn = None          # sqlite connection
+        self._lock = None          # serialize sqlite writes
+
+    # ---- connection lifecycle ----
+
+    async def connect(self):
+        if self.backend == "postgres":
+            import asyncpg
+            self._pool = await asyncpg.create_pool(self._dsn, min_size=1, max_size=5)
+        else:
+            import aiosqlite
+            os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
+            self._conn = await aiosqlite.connect(self._path)
+            self._conn.row_factory = aiosqlite.Row
+            await self._conn.execute("PRAGMA journal_mode=WAL")
+            self._lock = asyncio.Lock()
+        logger.info("Database connected (backend=%s)", self.backend)
+
+    async def close(self):
+        if self._pool is not None:
+            await self._pool.close()
+        if self._conn is not None:
+            await self._conn.close()
+
+    def _q(self, sql: str) -> str:
+        if self.backend != "postgres":
+            return sql
+        counter = {"i": 0}
+
+        def repl(_):
+            counter["i"] += 1
+            return f"${counter['i']}"
+
+        return re.sub(r"\?", repl, sql)
+
+    async def execute(self, sql: str, *params):
+        sql = self._q(sql)
+        if self.backend == "postgres":
+            await self._pool.execute(sql, *params)
+        else:
+            async with self._lock:
+                await self._conn.execute(sql, params)
+                await self._conn.commit()
+
+    async def fetchrow(self, sql: str, *params):
+        sql = self._q(sql)
+        if self.backend == "postgres":
+            row = await self._pool.fetchrow(sql, *params)
+            return dict(row) if row else None
+        else:
+            async with self._lock:
+                cur = await self._conn.execute(sql, params)
+                row = await cur.fetchone()
+                await cur.close()
+            return dict(row) if row else None
+
+    async def fetch(self, sql: str, *params):
+        sql = self._q(sql)
+        if self.backend == "postgres":
+            rows = await self._pool.fetch(sql, *params)
+            return [dict(r) for r in rows]
+        else:
+            async with self._lock:
+                cur = await self._conn.execute(sql, params)
+                rows = await cur.fetchall()
+                await cur.close()
+            return [dict(r) for r in rows]
+
+    # ---- quota buckets ----
+
+    async def get_quota(self, user_email: str):
+        return await self.fetchrow(
+            "SELECT seconds_remaining, last_update, max_seconds FROM quota_buckets WHERE user_email = ?",
+            user_email,
+        )
+
+    async def save_quota(self, user_email: str, seconds_remaining: float, last_update: float, max_seconds: float):
+        await self.execute(
+            "INSERT INTO quota_buckets (user_email, seconds_remaining, last_update, max_seconds) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (user_email) DO UPDATE SET "
+            "seconds_remaining = excluded.seconds_remaining, last_update = excluded.last_update, max_seconds = excluded.max_seconds",
+            user_email,
+            seconds_remaining,
+            last_update,
+            max_seconds,
+        )
+
+    # ---- stats counters ----
+
+    async def incr_stat(self, key: str, amount: float):
+        await self.execute(
+            "INSERT INTO stats (key, value) VALUES (?, ?) "
+            "ON CONFLICT (key) DO UPDATE SET value = stats.value + excluded.value",
+            key,
+            amount,
+        )
+
+    async def get_stats(self) -> dict:
+        rows = await self.fetch("SELECT key, value FROM stats")
+        return {r["key"]: r["value"] for r in rows}
