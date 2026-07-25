@@ -12,6 +12,7 @@ cachetools
 imageio-ffmpeg==0.6.0
 huggingface-hub==0.33.4
 yt-dlp
+loggingredactor
 torchaudio<2.9
 aiosqlite
 sqlalchemy

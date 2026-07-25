@@ -200,7 +200,11 @@ if not isinstance(APP_CONFIG["quota_increase_url"], str) or not APP_CONFIG["quot
     raise RuntimeError("Invalid configuration: 'quota_increase_url' must be a non-empty string")
 QUOTA_INCREASE_URL = APP_CONFIG["quota_increase_url"]
 
-# Configure logging EARLY - before any other imports that might create loggers
+# Configure logging EARLY - before any other imports that might create loggers.
+# log_redaction snapshots the environment's secrets at import, so it must come
+# after dotenv has loaded.
+from log_redaction import RedactingFormatter, redact_handlers
+
 LOG_FORMAT = "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"
 LOGGER_NAME = "transcribe_service"
 
@@ -256,17 +260,27 @@ class GzipRotatingFileHandler(RotatingFileHandler):
 
 
 root_logger = logging.getLogger()
-root_log_level = logging.DEBUG if args.debug else logging.INFO
+root_log_level = logging.DEBUG if (args.debug or os.environ.get("TS_DEBUG") == "1") else logging.INFO
 root_logger.setLevel(root_log_level)
 root_logger.handlers.clear()
 
-# Add file handler for app.log.gz (no console handler - logs only to file).
-# Writes gzip-compressed on the fly; default cap is 100MB of compressed bytes per file.
-file_handler = GzipRotatingFileHandler(
-    filename=LOG_FILE_PATH, maxBytes=100 * 1024 * 1024, backupCount=20, encoding="utf-8"
-)
-file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-root_logger.addHandler(file_handler)
+if in_xhost_mode:
+    # The container filesystem is unreachable from outside and wiped on redeploy;
+    # stdout is what the platform captures and retains, so log there instead.
+    log_handler = logging.StreamHandler(sys.stdout)
+else:
+    # Log to app.log.gz (no console handler). Writes gzip-compressed on the fly;
+    # default cap is 100MB of compressed bytes per file.
+    log_handler = GzipRotatingFileHandler(
+        filename=LOG_FILE_PATH, maxBytes=100 * 1024 * 1024, backupCount=20, encoding="utf-8"
+    )
+log_handler.setFormatter(RedactingFormatter(logging.Formatter(LOG_FORMAT)))
+root_logger.addHandler(log_handler)
+
+# uvicorn logs through its own handlers, bypassing ours; its access lines carry
+# full query strings, which include OAuth codes on the login callback.
+for _uvicorn_logger in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    redact_handlers(logging.getLogger(_uvicorn_logger))
 
 # Ensure the ivrit package's loggers propagate into our handler at the requested level.
 # ivrit uses logging.getLogger(__name__) in each submodule, so configuring the parent
