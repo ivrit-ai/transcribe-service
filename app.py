@@ -293,8 +293,7 @@ logging.getLogger("ivrit").setLevel(root_log_level)
 logging.getLogger("urllib3.connectionpool").setLevel(logging.INFO)
 logging.getLogger("python_multipart.multipart").setLevel(logging.INFO)
 
-# Log a test message to verify file handler is working
-root_logger.info("File logging initialized - this message should appear in app.log")
+root_logger.info("Logging initialized")
 
 logger = logging.getLogger(LOGGER_NAME)
 logger.info(f"Logger configured for transcribe_service (level={logging.getLevelName(root_log_level)})")
