@@ -1,7 +1,7 @@
 {
   "languages": {
     "he": {
-      "ct2_model": "ivrit-whisper-v2-turbo",
+      "ct2_model": "ivrit-ai/whisper-large-v3-turbo-ct2",
       "ggml_model": "ivrit-ggml-model.bin",
       "general_availability": true,
       "enabled": true
@@ -34,6 +34,12 @@
       "ct2_model": "large-v3-turbo",
       "ggml_model": "large-v3-turbo",
       "general_availability": false,
+      "enabled": true
+    },
+    "yi": {
+      "ct2_model": "ivrit-ai/yi-whisper-large-v3-turbo-ct2",
+      "ggml_model": "unknown",
+      "general_availability": true,
       "enabled": true
     }
   },
