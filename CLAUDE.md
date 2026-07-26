@@ -39,6 +39,10 @@ python run.py --dev --dev-user-email you@example.com
 - No over-engineering: simplest solution that meets requirements wins
 - No hacks: localized solutions that should be solved more generally are not acceptable unless explicitly justified
 
+## Tooling
+
+- Never use `sed` to read or edit files. Use the Read tool with offset/limit instead of `sed -n`, and the Edit tool instead of `sed -i`.
+
 ## Agents
 
 Specialized agents live in `.claude/agents/`. They are invoked automatically as subagents during non-trivial work. You can also request a specific agent by name (e.g. "run the reviewer agent on this change").
