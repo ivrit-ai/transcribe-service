@@ -180,6 +180,15 @@ These are compile-time constants in `app.py` that require a code change to tune:
 | `MAX_FILE_SIZE_PRIVATE` | 3 GB | Upload limit for private (custom RunPod) users |
 | `UPLOAD_CHUNK_SIZE` | 50 MB | Chunked upload size |
 | `DRIVE_FILE_ID_CACHE_SIZE` | 1000 | LRU cache size for Google Drive file ID lookups |
+| `QUEUE_SAMPLE_BUCKET_SECONDS` | 15 min (900s) | Width of each queue-depth history bucket |
+| `QUEUE_SAMPLE_INTERVAL_SECONDS` | 60s | How often queue depths are sampled into the current bucket |
+| `QUEUE_SAMPLE_RETENTION_DAYS` | 30 | How long queue-depth samples are kept before pruning |
+| `JOB_EVENT_RETENTION_DAYS` | 90 | How long finished-job events are kept before pruning |
+| `HISTORY_PRUNE_INTERVAL_SECONDS` | 3600s | How often expired history rows are deleted |
+| `HISTORY_QUEUE_BUCKETS` | 96 | Queue-depth buckets served by `/stats` (24h at 15 min) |
+| `HISTORY_HOURLY_BUCKETS` | 48 | Hourly job buckets served by `/stats` (48h) |
+| `HISTORY_DAILY_BUCKETS` | 30 | Daily job buckets served by `/stats` (30d) |
+| `HISTORY_LANGUAGE_DAYS` | 7 | Window for the per-language breakdown on `/stats` |
 
 ## External Services
 

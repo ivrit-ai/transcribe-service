@@ -154,7 +154,7 @@ else:
 # Durable state (quota buckets, stats counters): Postgres under xhost, SQLite
 # everywhere else. Schema is applied by Alembic (DB_URL) in the lifespan startup,
 # then the async pool (db) is connected.
-from db import Database, run_migrations
+from db import QUEUE_DEPTH_FIELDS, Database, run_migrations
 
 if in_xhost_mode:
     DB_URL = os.environ["DATABASE_URL"]
@@ -646,6 +646,23 @@ queue_locks = {
 # sites), e.g. "jobs_transcribed_short", "gdrive_error_toc_upload".
 # stats_app_start_time is process uptime, not a durable counter — keep it local.
 stats_app_start_time = time.time()
+
+# Queue depth history: sampled often, but stored as the peak within each bucket so a
+# burst between two samples is still visible on the graph.
+QUEUE_SAMPLE_BUCKET_SECONDS = 15 * 60
+QUEUE_SAMPLE_INTERVAL_SECONDS = 60
+QUEUE_SAMPLE_RETENTION_DAYS = 30
+# Deliberately outlives the 30-day graph window: raw events are small and are the
+# only way to answer questions the dashboard does not already ask.
+JOB_EVENT_RETENTION_DAYS = 90
+HISTORY_PRUNE_INTERVAL_SECONDS = 3600
+# Windows the /stats history graphs cover.
+HISTORY_QUEUE_BUCKETS = 96  # 24h of 15-minute buckets
+HISTORY_HOURLY_BUCKETS = 48  # 48h of hourly buckets
+HISTORY_DAILY_BUCKETS = 30  # 30 days of daily buckets
+HISTORY_LANGUAGE_DAYS = 7
+last_queue_sample_time = 0.0
+last_history_prune_time = 0.0
 
 # Google Drive error kinds; each maps to a stats key "gdrive_error_<kind>".
 GDRIVE_ERROR_KINDS = (
@@ -2247,6 +2264,55 @@ async def client_heartbeat():
     
     return JSONResponse({"status": "ok"})
 
+def history_axis(bucket_seconds: int, count: int, now: float) -> list:
+    """Bucket start timestamps, oldest first, ending with the bucket containing now."""
+    latest = int(now // bucket_seconds) * bucket_seconds
+    return [latest - (count - 1 - i) * bucket_seconds for i in range(count)]
+
+
+async def build_job_history(bucket_seconds: int, count: int, now: float) -> dict:
+    axis = history_axis(bucket_seconds, count, now)
+    slot = {ts: i for i, ts in enumerate(axis)}
+    completed = [0] * count
+    failed = [0] * count
+    audio_hours = [0.0] * count
+    transcribe_hours = [0.0] * count
+
+    for row in await db.get_job_buckets(axis[0], bucket_seconds):
+        i = slot.get(int(row["bucket"]))
+        if i is None:
+            continue
+        if row["status"] == "completed":
+            completed[i] += row["jobs"]
+            audio_hours[i] += (row["audio_seconds"] or 0.0) / 3600.0
+            transcribe_hours[i] += (row["transcribe_seconds"] or 0.0) / 3600.0
+        else:
+            failed[i] += row["jobs"]
+
+    return {
+        "buckets": axis,
+        "completed": completed,
+        "failed": failed,
+        "audio_hours": audio_hours,
+        "transcribe_hours": transcribe_hours,
+    }
+
+
+async def build_queue_history(now: float) -> dict:
+    axis = history_axis(QUEUE_SAMPLE_BUCKET_SECONDS, HISTORY_QUEUE_BUCKETS, now)
+    slot = {ts: i for i, ts in enumerate(axis)}
+    series = {field: [0] * HISTORY_QUEUE_BUCKETS for field in QUEUE_DEPTH_FIELDS}
+
+    for row in await db.get_queue_samples(axis[0]):
+        i = slot.get(int(row["bucket_ts"]))
+        if i is None:
+            continue
+        for field in QUEUE_DEPTH_FIELDS:
+            series[field][i] = row[field] or 0
+
+    return {"buckets": axis, "series": series}
+
+
 @app.get("/stats", dependencies=[Depends(require_google_login)])
 async def get_stats(request: Request):
     """Get application statistics"""
@@ -2372,7 +2438,21 @@ async def get_stats(request: Request):
             "quota_denied": s.get("quota_denied", 0),
             "job_timeouts": s.get("job_timeouts", 0),
             "job_timeouts_private": s.get("job_timeouts_private", 0)
-        }
+        },
+        "history": {
+            "queue": await build_queue_history(now_ts),
+            "jobs_hourly": await build_job_history(3600, HISTORY_HOURLY_BUCKETS, now_ts),
+            "jobs_daily": await build_job_history(86400, HISTORY_DAILY_BUCKETS, now_ts),
+            "language_days": HISTORY_LANGUAGE_DAYS,
+            "languages": [
+                {
+                    "language": row["language"],
+                    "jobs": row["jobs"],
+                    "audio_hours": (row["audio_seconds"] or 0.0) / 3600.0,
+                }
+                for row in await db.get_job_languages(int(now_ts - HISTORY_LANGUAGE_DAYS * 86400))
+            ],
+        },
     }
 
     return JSONResponse(stats_data)
@@ -3432,6 +3512,19 @@ async def process_segment(job_id, segment, duration):
     return True
 
 
+async def record_unfinished_job(job_desc, status):
+    """Record a job that never produced a transcript, so the history shows failures."""
+    now = time.time()
+    await db.record_job_event(
+        ts=int(now),
+        job_type=job_desc.job_type,
+        language=job_desc.language,
+        audio_seconds=job_desc.duration,
+        transcribe_seconds=now - getattr(job_desc, "transcribe_start_time", now),
+        status=status,
+    )
+
+
 async def transcribe_job(job_desc):
     job_id = job_desc.id
     segs = None
@@ -3581,6 +3674,14 @@ async def transcribe_job(job_desc):
         await db.incr_stat(f"minutes_transcribed_{job_desc.job_type}", duration / 60.0)
         await db.incr_stat("total_jobs_started", 1)
         await db.incr_stat("total_minutes_processed", duration / 60.0)
+        await db.record_job_event(
+            ts=int(transcribe_done_time),
+            job_type=job_desc.job_type,
+            language=job_desc.language,
+            audio_seconds=duration,
+            transcribe_seconds=transcribe_done_time - job_desc.transcribe_start_time,
+            status="completed",
+        )
 
         # After completion, store results separately and update TOC
         try:
@@ -3696,9 +3797,11 @@ async def transcribe_job(job_desc):
             await db.incr_stat("job_timeouts_private", 1)
         log_message(f"Error in transcription job {job_id}: {str(e)}")
         await emit_upload_error(job_id, "errorInternalServer", details=str(e))
+        await record_unfinished_job(job_desc, "timeout")
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
         await emit_upload_error(job_id, "errorInternalServer", details=str(e))
+        await record_unfinished_job(job_desc, "failed")
     finally:
         # Close segs if it exists
         #if segs:
@@ -3806,6 +3909,47 @@ async def check_heartbeat_timeout():
         os._exit(0)
 
 
+async def sample_queue_depths():
+    """Fold the current queue depths into this 15-minute bucket, keeping the peak."""
+    global last_queue_sample_time
+
+    now = time.time()
+    if now - last_queue_sample_time < QUEUE_SAMPLE_INTERVAL_SECONDS:
+        return
+    last_queue_sample_time = now
+
+    depths = {
+        "queued_short": queues[SHORT].qsize(),
+        "queued_long": queues[LONG].qsize(),
+        "queued_private": queues[PRIVATE].qsize(),
+        "running_short": len(running_jobs[SHORT]),
+        "running_long": len(running_jobs[LONG]),
+        "running_private": len(running_jobs[PRIVATE]),
+        "transcoding_queued": transcoding_queue.qsize(),
+        "transcoding_running": len(transcoding_running_jobs),
+    }
+
+    bucket_ts = int(now // QUEUE_SAMPLE_BUCKET_SECONDS) * QUEUE_SAMPLE_BUCKET_SECONDS
+    existing = await db.get_queue_sample(bucket_ts)
+    if existing:
+        depths = {field: max(value, existing[field] or 0) for field, value in depths.items()}
+    await db.save_queue_sample(bucket_ts, depths)
+
+
+async def prune_stats_history():
+    global last_history_prune_time
+
+    now = time.time()
+    if now - last_history_prune_time < HISTORY_PRUNE_INTERVAL_SECONDS:
+        return
+    last_history_prune_time = now
+
+    await db.prune_history(
+        int(now - JOB_EVENT_RETENTION_DAYS * 86400),
+        int(now - QUEUE_SAMPLE_RETENTION_DAYS * 86400),
+    )
+
+
 async def event_loop():
     while True:
         await submit_next_transcoding_task()
@@ -3814,6 +3958,12 @@ async def event_loop():
         await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
         await cleanup_old_results()
         await check_heartbeat_timeout()
+        # Bookkeeping only: a database blip must not take the scheduler down with it.
+        try:
+            await sample_queue_depths()
+            await prune_stats_history()
+        except Exception as e:
+            logger.error(f"Failed to update stats history: {e}", exc_info=True)
         await asyncio.sleep(0.1)
 
 

@@ -19,6 +19,18 @@ import logging
 
 logger = logging.getLogger("transcribe_service.db")
 
+# Depth columns of queue_samples, in the order they are bound to SQL parameters.
+QUEUE_DEPTH_FIELDS = (
+    "queued_short",
+    "queued_long",
+    "queued_private",
+    "running_short",
+    "running_long",
+    "running_private",
+    "transcoding_queued",
+    "transcoding_running",
+)
+
 
 def run_migrations(url: str):
     """Apply Alembic migrations up to head against ``url`` (synchronous).
@@ -149,3 +161,66 @@ class Database:
     async def get_stats(self) -> dict:
         rows = await self.fetch("SELECT key, value FROM stats")
         return {r["key"]: r["value"] for r in rows}
+
+    # ---- history: finished jobs and queue depth over time ----
+
+    async def record_job_event(
+        self, ts: int, job_type: str, language: str, audio_seconds: float, transcribe_seconds: float, status: str
+    ):
+        await self.execute(
+            "INSERT INTO job_events (ts, job_type, language, audio_seconds, transcribe_seconds, status) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ts,
+            job_type,
+            language,
+            audio_seconds,
+            transcribe_seconds,
+            status,
+        )
+
+    async def get_job_buckets(self, since_ts: int, bucket_seconds: int) -> list:
+        """Jobs and audio grouped into fixed-width time buckets, split by status.
+
+        Groups by the output ordinal: repeating the bucket expression in GROUP BY would
+        bind a second pair of parameters, which Postgres refuses to match to the first.
+        """
+        return await self.fetch(
+            "SELECT (ts / ?) * ? AS bucket, status, "
+            "COUNT(*) AS jobs, SUM(audio_seconds) AS audio_seconds, SUM(transcribe_seconds) AS transcribe_seconds "
+            "FROM job_events WHERE ts >= ? "
+            "GROUP BY 1, status",
+            bucket_seconds,
+            bucket_seconds,
+            since_ts,
+        )
+
+    async def get_job_languages(self, since_ts: int) -> list:
+        return await self.fetch(
+            "SELECT language, COUNT(*) AS jobs, SUM(audio_seconds) AS audio_seconds "
+            "FROM job_events WHERE ts >= ? AND status = 'completed' "
+            "GROUP BY language ORDER BY COUNT(*) DESC",
+            since_ts,
+        )
+
+    async def get_queue_sample(self, bucket_ts: int):
+        return await self.fetchrow("SELECT * FROM queue_samples WHERE bucket_ts = ?", bucket_ts)
+
+    async def save_queue_sample(self, bucket_ts: int, depths: dict):
+        cols = ", ".join(QUEUE_DEPTH_FIELDS)
+        placeholders = ", ".join("?" for _ in QUEUE_DEPTH_FIELDS)
+        updates = ", ".join(f"{f} = excluded.{f}" for f in QUEUE_DEPTH_FIELDS)
+        await self.execute(
+            f"INSERT INTO queue_samples (bucket_ts, {cols}) VALUES (?, {placeholders}) "
+            f"ON CONFLICT (bucket_ts) DO UPDATE SET {updates}",
+            bucket_ts,
+            *(depths[f] for f in QUEUE_DEPTH_FIELDS),
+        )
+
+    async def get_queue_samples(self, since_ts: int) -> list:
+        return await self.fetch(
+            "SELECT * FROM queue_samples WHERE bucket_ts >= ? ORDER BY bucket_ts", since_ts
+        )
+
+    async def prune_history(self, job_events_before: int, queue_samples_before: int):
+        await self.execute("DELETE FROM job_events WHERE ts < ?", job_events_before)
+        await self.execute("DELETE FROM queue_samples WHERE bucket_ts < ?", queue_samples_before)

@@ -1685,28 +1685,6 @@
         background-color: var(--hover-bg);
       }
 
-      #tab-stats {
-        direction: ltr;
-        text-align: left;
-      }
-      #tab-stats .stats-card {
-        text-align: left;
-      }
-      .stats-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 0.75rem;
-      }
-      .stats-row-label {
-        flex: 1;
-        text-align: left;
-      }
-      .stats-row-value {
-        min-width: 80px;
-        text-align: right;
-        font-variant-numeric: tabular-nums;
-      }
       .stats-footer-link {
         background: none;
         border: none;
@@ -1858,6 +1836,177 @@
         position: relative;
         height: 220px;
         margin: 0.5rem 0;
+      }
+
+      /* "Stats for nerds" dashboard. English-only ops view, so it is forced LTR
+         regardless of the surrounding RTL layout. */
+      #tab-stats {
+        --nerd-bg: #f5f6f8;
+        --nerd-panel: #ffffff;
+        --nerd-line: #e3e6ea;
+        --nerd-row-line: #eceef1;
+        --nerd-head: #fafbfc;
+        --nerd-ink: #1c1f24;
+        --nerd-dim: #6b7280;
+        --nerd-faint: #9aa0a8;
+      }
+      [data-theme='dark'] #tab-stats {
+        --nerd-bg: #16181c;
+        --nerd-panel: #1e2126;
+        --nerd-line: #2c3037;
+        --nerd-row-line: #262a30;
+        --nerd-head: #23262b;
+        --nerd-ink: #e6e8eb;
+        --nerd-dim: #9aa0a8;
+        --nerd-faint: #6b7280;
+      }
+      .nerd {
+        /* Break out of the app's narrow centred container — the charts need width. */
+        position: relative;
+        left: 50%;
+        transform: translateX(-50%);
+        width: min(1100px, 92vw);
+        direction: ltr;
+        text-align: left;
+        background: var(--nerd-bg);
+        color: var(--nerd-ink);
+        padding: 1.5rem;
+        border-radius: 12px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      .nerd h1 {
+        font-weight: 600;
+        font-size: 1.5rem;
+        margin: 0 0 0.25rem;
+        color: var(--nerd-ink);
+      }
+      .nerd h2 {
+        font-weight: 600;
+        font-size: 1.05rem;
+        margin: 0 0 0.75rem;
+        color: var(--nerd-ink);
+      }
+      .nerd .sub {
+        color: var(--nerd-dim);
+        margin-bottom: 1.5rem;
+        font-size: 0.9rem;
+      }
+      .nerd-grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        margin-bottom: 1.5rem;
+      }
+      .nerd-panel {
+        background: var(--nerd-panel);
+        border: 1px solid var(--nerd-line);
+        border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+      }
+      .nerd-card {
+        padding: 1.1rem 1.25rem;
+      }
+      .nerd-card .label {
+        color: var(--nerd-dim);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .nerd-card .value {
+        font-size: 1.8rem;
+        font-weight: 600;
+        margin-top: 0.35rem;
+      }
+      .nerd-card .unit {
+        font-size: 0.85rem;
+        color: var(--nerd-dim);
+        font-weight: 400;
+      }
+      .nerd-chart {
+        padding: 1.1rem 1.25rem;
+        margin-bottom: 1.5rem;
+      }
+      .nerd-chart-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 1rem;
+        margin-bottom: 0.75rem;
+      }
+      .nerd-chart-head .label {
+        color: var(--nerd-dim);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .nerd-chart-head .peak {
+        color: var(--nerd-faint);
+        font-size: 0.8rem;
+        white-space: nowrap;
+      }
+      .nerd-chart svg {
+        width: 100%;
+        height: 160px;
+        display: block;
+      }
+      .nerd-chart svg .axis {
+        stroke: var(--nerd-row-line);
+        stroke-width: 1;
+      }
+      .nerd-chart svg .axis-label {
+        fill: var(--nerd-faint);
+        font-size: 10px;
+      }
+      .nerd-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem 1rem;
+        margin-top: 0.75rem;
+      }
+      .nerd-legend .item {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.8rem;
+        color: var(--nerd-dim);
+      }
+      .nerd-legend .swatch {
+        width: 12px;
+        height: 3px;
+        border-radius: 2px;
+        display: inline-block;
+      }
+      .nerd table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+        background: var(--nerd-panel);
+        border: 1px solid var(--nerd-line);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+      }
+      .nerd th,
+      .nerd td {
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--nerd-row-line);
+      }
+      .nerd tr:last-child td {
+        border-bottom: none;
+      }
+      .nerd th {
+        color: var(--nerd-dim);
+        font-weight: 500;
+        background: var(--nerd-head);
+      }
+      .nerd th.num,
+      .nerd td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .nerd .muted {
+        color: var(--nerd-faint);
       }
     </style>
   </head>
@@ -2226,185 +2375,93 @@
 
       <!-- Statistics Tab Content -->
       <div id="tab-stats" class="tab-content">
-        <div style="text-align: center; padding: 2rem;">
-          <h2 style="color: var(--text-color); margin-bottom: 2rem;">System Statistics</h2>
+        <div class="nerd">
+          <h1>Stats for Nerds</h1>
+          <div class="sub" id="nerd-updated">Loading…</div>
 
-          <div id="stats-loading" class="stats-loading" style="display: block;">
-            <p>Loading statistics...</p>
-          </div>
+          <div id="nerd-error" class="muted" style="display: none;">Failed to load statistics.</div>
 
-          <div id="stats-content" class="stats-content" style="display: none;">
-            <div class="stats-section" style="margin-bottom: 2rem;">
-              <h3 style="color: var(--text-color); margin-bottom: 1rem;">System Uptime</h3>
-              <div class="stats-value" id="stats-uptime" style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);">-</div>
+          <div id="nerd-body" style="display: none;">
+            <div class="nerd-grid" id="nerd-cards"></div>
+
+            <div class="nerd-panel nerd-chart">
+              <div class="nerd-chart-head">
+                <span class="label" id="nerd-title-queue"></span>
+                <span class="peak" id="nerd-peak-queue"></span>
+              </div>
+              <svg id="nerd-chart-queue" role="img" aria-labelledby="nerd-title-queue">
+                <!-- Area gradient for every chart on this tab, not just this one. -->
+                <defs>
+                  <linearGradient id="nerd-area-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#2563eb" stop-opacity="0.28" />
+                    <stop offset="100%" stop-color="#2563eb" stop-opacity="0.02" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div class="nerd-legend" id="nerd-legend-queue"></div>
             </div>
 
-            <div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; margin-bottom: 2rem;">
-              <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
-                <h3 style="color: var(--text-color); margin-bottom: 1rem;">Queued Jobs</h3>
-                <div class="stats-job-type" style="display: flex; flex-direction: column; gap: 0.5rem;">
-                  <div class="stats-row">
-                    <span class="stats-row-label">Short:</span>
-                    <span class="stats-row-value" id="queued-short-count">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Long:</span>
-                    <span class="stats-row-value" id="queued-long-count">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Private:</span>
-                    <span class="stats-row-value" id="queued-private-count">-</span>
-                  </div>
-                </div>
+            <div class="nerd-panel nerd-chart">
+              <div class="nerd-chart-head">
+                <span class="label" id="nerd-title-jobs-hourly"></span>
+                <span class="peak" id="nerd-peak-jobs-hourly"></span>
               </div>
-
-              <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
-                <h3 style="color: var(--text-color); margin-bottom: 1rem;">Running Jobs</h3>
-                <div class="stats-job-type" style="display: flex; flex-direction: column; gap: 0.5rem;">
-                  <div class="stats-row">
-                    <span class="stats-row-label">Short:</span>
-                    <span class="stats-row-value" id="running-short-count">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Long:</span>
-                    <span class="stats-row-value" id="running-long-count">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Private:</span>
-                    <span class="stats-row-value" id="running-private-count">-</span>
-                  </div>
-                </div>
-              </div>
+              <svg id="nerd-chart-jobs-hourly" role="img" aria-labelledby="nerd-title-jobs-hourly"></svg>
+              <div class="nerd-legend" id="nerd-legend-jobs-hourly"></div>
             </div>
 
-            <div class="stats-section" style="margin-bottom: 2rem;">
-              <h3 style="color: var(--text-color); margin-bottom: 1rem;">Transcoding</h3>
-              <div class="stats-system-info" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
-                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-                  <div class="stats-row">
-                    <span class="stats-row-label">Jobs:</span>
-                    <span class="stats-row-value" id="transcoding-total-jobs">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Total GB:</span>
-                    <span class="stats-row-value" id="transcoding-total-gb">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Total Duration:</span>
-                    <span class="stats-row-value" id="transcoding-total-duration">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Queued / Capacity:</span>
-                    <span class="stats-row-value" id="transcoding-queued">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Running / Capacity:</span>
-                    <span class="stats-row-value" id="transcoding-running">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Oldest running:</span>
-                    <span class="stats-row-value" id="transcoding-oldest">-</span>
-                  </div>
-                </div>
+            <div class="nerd-panel nerd-chart">
+              <div class="nerd-chart-head">
+                <span class="label" id="nerd-title-audio-hourly"></span>
+                <span class="peak" id="nerd-peak-audio-hourly"></span>
               </div>
+              <svg id="nerd-chart-audio-hourly" role="img" aria-labelledby="nerd-title-audio-hourly"></svg>
+              <div class="nerd-legend" id="nerd-legend-audio-hourly"></div>
             </div>
 
-            <div class="stats-section" style="margin-bottom: 2rem;">
-              <h3 style="color: var(--text-color); margin-bottom: 1rem;">Transcribed Since Launch</h3>
-              <div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem;">
-                <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; text-align: center;">
-                  <h4 style="color: var(--text-color); margin-bottom: 0.5rem;">Short</h4>
-                  <div class="stats-value" id="transcribed-short-jobs" style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);">-</div>
-                  <div id="transcribed-short-minutes" style="font-size: 1rem; color: var(--text-color); opacity: 0.8;">-</div>
-                </div>
-                <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; text-align: center;">
-                  <h4 style="color: var(--text-color); margin-bottom: 0.5rem;">Long</h4>
-                  <div class="stats-value" id="transcribed-long-jobs" style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);">-</div>
-                  <div id="transcribed-long-minutes" style="font-size: 1rem; color: var(--text-color); opacity: 0.8;">-</div>
-                </div>
-                <div class="stats-card" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; text-align: center;">
-                  <h4 style="color: var(--text-color); margin-bottom: 0.5rem;">Private</h4>
-                  <div class="stats-value" id="transcribed-private-jobs" style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);">-</div>
-                  <div id="transcribed-private-minutes" style="font-size: 1rem; color: var(--text-color); opacity: 0.8;">-</div>
-                </div>
-                <div class="stats-card" style="background: var(--primary-color); border: 1px solid var(--primary-color); border-radius: 12px; padding: 1.5rem; text-align: center;">
-                  <h4 style="color: white; margin-bottom: 0.5rem;">Total</h4>
-                  <div class="stats-value" id="transcribed-total-jobs" style="font-size: 1.5rem; font-weight: bold; color: white;">-</div>
-                  <div id="transcribed-total-minutes" style="font-size: 1rem; color: white; opacity: 0.9;">-</div>
-                </div>
+            <div class="nerd-panel nerd-chart">
+              <div class="nerd-chart-head">
+                <span class="label" id="nerd-title-jobs-daily"></span>
+                <span class="peak" id="nerd-peak-jobs-daily"></span>
               </div>
+              <svg id="nerd-chart-jobs-daily" role="img" aria-labelledby="nerd-title-jobs-daily"></svg>
+              <div class="nerd-legend" id="nerd-legend-jobs-daily"></div>
             </div>
 
-            <div class="stats-section" style="margin-bottom: 2rem;">
-              <h3 style="color: var(--text-color); margin-bottom: 1rem;">System Info</h3>
-              <div class="stats-system-info" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
-                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-                  <div class="stats-row">
-                    <span class="stats-row-label">Max Parallel Short Jobs:</span>
-                    <span class="stats-row-value" id="max-parallel-short">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Max Parallel Long Jobs:</span>
-                    <span class="stats-row-value" id="max-parallel-long">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Max Parallel Private Jobs:</span>
-                    <span class="stats-row-value" id="max-parallel-private">-</span>
-                  </div>
-                </div>
+            <div class="nerd-panel nerd-chart">
+              <div class="nerd-chart-head">
+                <span class="label" id="nerd-title-audio-daily"></span>
+                <span class="peak" id="nerd-peak-audio-daily"></span>
               </div>
+              <svg id="nerd-chart-audio-daily" role="img" aria-labelledby="nerd-title-audio-daily"></svg>
+              <div class="nerd-legend" id="nerd-legend-audio-daily"></div>
             </div>
 
-            <div class="stats-section">
-              <h3 style="color: var(--text-color); margin-bottom: 1rem;">Errors</h3>
-              <div class="stats-system-info" style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem;">
-                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-                  <h4 style="margin: 0; color: var(--text-color); font-size: 0.95rem; text-align: left;">Google Drive</h4>
-                  <div class="stats-row">
-                    <span class="stats-row-label">TOC Upload Errors:</span>
-                    <span class="stats-row-value" id="gdrive-toc-upload-errors">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">TOC Download Errors:</span>
-                    <span class="stats-row-value" id="gdrive-toc-download-errors">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Audio Upload Errors:</span>
-                    <span class="stats-row-value" id="gdrive-audio-upload-errors">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Audio Download Errors:</span>
-                    <span class="stats-row-value" id="gdrive-audio-download-errors">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">File Rename Errors:</span>
-                    <span class="stats-row-value" id="gdrive-rename-errors">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">File Delete Errors:</span>
-                    <span class="stats-row-value" id="gdrive-delete-errors">-</span>
-                  </div>
-                  <h4 style="margin: 0; color: var(--text-color); font-size: 0.95rem; text-align: left; margin-top: 1rem;">Quota</h4>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Transcription Quota Exceeded:</span>
-                    <span class="stats-row-value" id="quota-denied-errors">-</span>
-                  </div>
-                  <h4 style="margin: 0; color: var(--text-color); font-size: 0.95rem; text-align: left; margin-top: 1rem;">Timeouts</h4>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Job Timeouts (Total):</span>
-                    <span class="stats-row-value" id="job-timeouts">-</span>
-                  </div>
-                  <div class="stats-row">
-                    <span class="stats-row-label">Job Timeouts (Private):</span>
-                    <span class="stats-row-value" id="job-timeouts-private">-</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+            <h2 id="nerd-title-languages"></h2>
+            <table>
+              <thead>
+                <tr><th>Language</th><th class="num">Jobs</th><th class="num">Audio</th></tr>
+              </thead>
+              <tbody id="nerd-languages"></tbody>
+            </table>
 
-          <div id="stats-error" class="stats-error" style="display: none; color: #f44336; margin-top: 2rem;">
-            <p>Error loading statistics</p>
+            <h2>Queues</h2>
+            <table>
+              <thead>
+                <tr><th>Queue</th><th class="num">Queued</th><th class="num">Running</th><th class="num">Max parallel</th></tr>
+              </thead>
+              <tbody id="nerd-queues"></tbody>
+            </table>
+
+            <h2>Transcoding</h2>
+            <table>
+              <tbody id="nerd-transcoding"></tbody>
+            </table>
+
+            <h2>Errors</h2>
+            <table>
+              <tbody id="nerd-errors"></tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -8480,91 +8537,246 @@
         switchTab('stats')
       }
 
-      function formatMinutesAsHM(minutes) {
-        if (minutes === null || minutes === undefined || isNaN(minutes)) {
-          return '-'
-        }
-        const totalSeconds = Math.round(minutes * 60)
-        const hours = Math.floor(totalSeconds / 3600)
-        const mins = Math.floor((totalSeconds % 3600) / 60)
-        return `${hours}:${String(mins).padStart(2, '0')}`
+      function nerdNum(n) {
+        if (n === null || n === undefined || isNaN(n)) return '–'
+        return Number(n).toLocaleString()
       }
 
-      // Load statistics when stats tab is activated
-      async function loadStatistics() {
-        const statsLoading = document.getElementById('stats-loading')
-        const statsContent = document.getElementById('stats-content')
-        const statsError = document.getElementById('stats-error')
+      function nerdHours(hours) {
+        if (hours === null || hours === undefined || isNaN(hours)) return '–'
+        const total = Math.round(hours * 3600)
+        const h = Math.floor(total / 3600)
+        const m = Math.floor((total % 3600) / 60)
+        if (h) return `${h}h ${m}m`
+        if (m) return `${m}m`
+        return total ? `${total}s` : '0'
+      }
 
-        // Show loading, hide content and error
-        statsLoading.style.display = 'block'
-        statsContent.style.display = 'none'
-        statsError.style.display = 'none'
+      function nerdCard(label, value, unit) {
+        return `<div class="nerd-panel nerd-card"><div class="label">${label}</div>` +
+          `<div class="value">${value}<span class="unit">${unit ? ' ' + unit : ''}</span></div></div>`
+      }
+
+      function nerdRow(label, value) {
+        return `<tr><td>${label}</td><td class="num">${value}</td></tr>`
+      }
+
+      const NERD_SVGNS = 'http://www.w3.org/2000/svg'
+      const NERD_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d']
+
+      function nerdSum(values) {
+        return values.reduce((a, b) => a + b, 0)
+      }
+
+      // How much time a bucket axis spans, so headings follow the data instead of
+      // repeating the window sizes the backend chose.
+      function nerdWindow(buckets) {
+        const width = buckets[1] - buckets[0]
+        const hours = (buckets[buckets.length - 1] - buckets[0] + width) / 3600
+        return hours > 48 ? `${Math.round(hours / 24)}d` : `${Math.round(hours)}h`
+      }
+
+      // Line chart in the style of status.eliezer.ivrit.ai: a bold aggregate line over
+      // an area fill, with thin coloured lines per component series.
+      function renderNerdChart(key, series, opts) {
+        const svg = document.getElementById(`nerd-chart-${key}`)
+        const legend = document.getElementById(`nerd-legend-${key}`)
+        // Keep <defs> (the shared gradient); drop everything drawn last time.
+        ;[...svg.querySelectorAll(':scope > *:not(defs)')].forEach(n => n.remove())
+        legend.innerHTML = ''
+        if (!series.length || !series[0].values.length) return
+
+        const fmt = opts.format || nerdNum
+        const span = nerdWindow(opts.buckets)
+        document.getElementById(`nerd-title-${key}`).textContent =
+          `${opts.title} — last ${span}${opts.note ? ', ' + opts.note : ''}`
+        // Draw in CSS pixels so axis labels are not stretched by viewBox scaling.
+        const W = svg.clientWidth || 600, H = 160, padL = 34, padR = 6, padT = 8, padB = 18
+        svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
+        const innerW = W - padL - padR, innerH = H - padT - padB
+        const dataMax = Math.max(0, ...series.map(s => Math.max(...s.values)))
+        const maxY = Math.max(dataMax, 1)   // keep a sane axis when everything is zero
+        const n = series[0].values.length
+        const x = i => padL + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW)
+        const y = v => padT + innerH - (v / maxY) * innerH
+        const ptsFor = values => values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+
+        for (const v of [0, maxY]) {
+          const line = document.createElementNS(NERD_SVGNS, 'line')
+          line.setAttribute('class', 'axis')
+          line.setAttribute('x1', padL); line.setAttribute('x2', W - padR)
+          line.setAttribute('y1', y(v)); line.setAttribute('y2', y(v))
+          svg.appendChild(line)
+          const label = document.createElementNS(NERD_SVGNS, 'text')
+          label.setAttribute('class', 'axis-label')
+          label.setAttribute('x', 2); label.setAttribute('y', y(v) + 3)
+          label.textContent = fmt(v)
+          svg.appendChild(label)
+        }
+
+        for (const [text, xx, anchor] of [[`-${span}`, padL, 'start'], ['now', W - padR, 'end']]) {
+          const label = document.createElementNS(NERD_SVGNS, 'text')
+          label.setAttribute('class', 'axis-label')
+          label.setAttribute('x', xx); label.setAttribute('y', H - 5)
+          label.setAttribute('text-anchor', anchor)
+          label.textContent = text
+          svg.appendChild(label)
+        }
+
+        const aggregate = series.find(s => s.bold)
+        if (aggregate) {
+          const area = document.createElementNS(NERD_SVGNS, 'polygon')
+          area.setAttribute('points', `${padL},${y(0).toFixed(1)} ${ptsFor(aggregate.values)} ${W - padR},${y(0).toFixed(1)}`)
+          area.setAttribute('fill', 'url(#nerd-area-fill)')
+          svg.appendChild(area)
+        }
+
+        // Thin component lines first so the bold aggregate stays readable on top.
+        for (const s of [...series.filter(s => !s.bold), ...series.filter(s => s.bold)]) {
+          const line = document.createElementNS(NERD_SVGNS, 'polyline')
+          line.setAttribute('points', ptsFor(s.values))
+          line.setAttribute('fill', 'none')
+          line.setAttribute('stroke-linejoin', 'round')
+          line.setAttribute('stroke-linecap', 'round')
+          line.style.stroke = s.color || 'var(--nerd-ink)'
+          line.style.strokeWidth = s.bold ? '2.25' : '1.5'
+          svg.appendChild(line)
+        }
+
+        legend.innerHTML = series.map(s =>
+          `<span class="item"><span class="swatch" style="background:${s.color || 'currentColor'}"></span>${s.name}</span>`
+        ).join('')
+
+        document.getElementById(`nerd-peak-${key}`).textContent =
+          dataMax > 0 ? `peak ${fmt(dataMax)}` : 'no data'
+      }
+
+      function nerdQueueSeries(history) {
+        const s = history.series
+        const fields = [
+          ['Queued short', s.queued_short],
+          ['Queued long', s.queued_long],
+          ['Queued private', s.queued_private],
+          ['Running short', s.running_short],
+          ['Running long', s.running_long],
+          ['Running private', s.running_private],
+          ['Transcoding queued', s.transcoding_queued],
+          ['Transcoding running', s.transcoding_running],
+        ]
+        const total = history.buckets.map((_, i) => nerdSum(fields.map(([, v]) => v[i])))
+        return [
+          { name: 'All jobs', values: total, color: null, bold: true },
+          ...fields.map(([name, values], idx) => ({ name, values, color: NERD_COLORS[idx % NERD_COLORS.length] })),
+        ]
+      }
+
+      async function loadStatistics() {
+        const body = document.getElementById('nerd-body')
+        const error = document.getElementById('nerd-error')
+        const updated = document.getElementById('nerd-updated')
 
         try {
-          const response = await fetch('/stats')
+          const response = await fetch('/stats', { cache: 'no-store' })
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`)
           }
-
           const data = await response.json()
 
-          // Update uptime
-          document.getElementById('stats-uptime').textContent = data.uptime
+          // Reveal before drawing: the charts size themselves off the rendered width.
+          error.style.display = 'none'
+          body.style.display = 'block'
 
-          // Update queued jobs
-          document.getElementById('queued-short-count').textContent = `${data.queued_jobs.short.count} (${formatMinutesAsHM(data.queued_jobs.short.total_duration_minutes)})`
-          document.getElementById('queued-long-count').textContent = `${data.queued_jobs.long.count} (${formatMinutesAsHM(data.queued_jobs.long.total_duration_minutes)})`
-          document.getElementById('queued-private-count').textContent = `${data.queued_jobs.private.count} (${formatMinutesAsHM(data.queued_jobs.private.total_duration_minutes)})`
+          const queued = data.queued_jobs, running = data.running_jobs
+          const launch = data.transcribed_since_launch
+          const transcoding = data.transcoding
+          const history = data.history
+          const hourly = history.jobs_hourly
 
-          // Update running jobs
-          document.getElementById('running-short-count').textContent = `${data.running_jobs.short.count} (${formatMinutesAsHM(data.running_jobs.short.total_duration_minutes)})`
-          document.getElementById('running-long-count').textContent = `${data.running_jobs.long.count} (${formatMinutesAsHM(data.running_jobs.long.total_duration_minutes)})`
-          document.getElementById('running-private-count').textContent = `${data.running_jobs.private.count} (${formatMinutesAsHM(data.running_jobs.private.total_duration_minutes)})`
+          // "Last 24h" figures come from the trailing 24 hourly buckets.
+          const day = arr => arr.slice(-24)
+          const completed24h = nerdSum(day(hourly.completed))
+          const failed24h = nerdSum(day(hourly.failed))
+          const audio24h = nerdSum(day(hourly.audio_hours))
+          const transcribe24h = nerdSum(day(hourly.transcribe_hours))
+          const attempted24h = completed24h + failed24h
 
-          // Update transcribed statistics
-          document.getElementById('transcribed-short-jobs').textContent = data.transcribed_since_launch.short.jobs_count
-          document.getElementById('transcribed-short-minutes').textContent = data.transcribed_since_launch.short.total_minutes_formatted
-          document.getElementById('transcribed-long-jobs').textContent = data.transcribed_since_launch.long.jobs_count
-          document.getElementById('transcribed-long-minutes').textContent = data.transcribed_since_launch.long.total_minutes_formatted
-          document.getElementById('transcribed-private-jobs').textContent = data.transcribed_since_launch.private.jobs_count
-          document.getElementById('transcribed-private-minutes').textContent = data.transcribed_since_launch.private.total_minutes_formatted
-          document.getElementById('transcribed-total-jobs').textContent = data.transcribed_since_launch.total.jobs_count
-          document.getElementById('transcribed-total-minutes').textContent = data.transcribed_since_launch.total.total_minutes_formatted
+          document.getElementById('nerd-cards').innerHTML = [
+            nerdCard('Uptime', data.uptime),
+            nerdCard('Jobs since launch', nerdNum(launch.total.jobs_count)),
+            nerdCard('Audio since launch', nerdHours(launch.total.total_minutes / 60)),
+            nerdCard('Jobs (24h)', nerdNum(completed24h)),
+            nerdCard('Audio (24h)', nerdHours(audio24h)),
+            nerdCard('Realtime factor (24h)', transcribe24h > 0 ? (audio24h / transcribe24h).toFixed(1) + '×' : '–'),
+            nerdCard('Failures (24h)', nerdNum(failed24h),
+              attempted24h > 0 ? `(${((failed24h / attempted24h) * 100).toFixed(1)}%)` : ''),
+            nerdCard('Queued now', nerdNum(queued.short.count + queued.long.count + queued.private.count)),
+            nerdCard('Running now', nerdNum(running.short.count + running.long.count + running.private.count)),
+            nerdCard('Transcoding now', nerdNum(transcoding.running_count), `/ ${nerdNum(transcoding.running_capacity)}`),
+          ].join('')
 
-          // Update system info
-          document.getElementById('max-parallel-short').textContent = data.system_info.max_parallel_jobs.short
-          document.getElementById('max-parallel-long').textContent = data.system_info.max_parallel_jobs.long
-          document.getElementById('max-parallel-private').textContent = data.system_info.max_parallel_jobs.private
-          // Update transcoding stats
-          document.getElementById('transcoding-total-jobs').textContent = data.transcoding.jobs
-          document.getElementById('transcoding-total-gb').textContent = data.transcoding.total_gb.toFixed(2)
-          document.getElementById('transcoding-total-duration').textContent = data.transcoding.total_duration_formatted
-          document.getElementById('transcoding-queued').textContent = `${data.transcoding.queued_count} / ${data.transcoding.queued_capacity}`
-          document.getElementById('transcoding-running').textContent = `${data.transcoding.running_count} / ${data.transcoding.running_capacity}`
-          const oldestSec = data.transcoding.running_max_elapsed_seconds || 0
-          document.getElementById('transcoding-oldest').textContent = oldestSec > 0 ? `${Math.round(oldestSec)}s` : '-'
+          renderNerdChart('queue', nerdQueueSeries(history.queue),
+            { title: 'Queue depth', note: '15-minute peaks', buckets: history.queue.buckets })
 
-          // Update errors
-          const driveErrors = data.errors?.google_drive || {}
-          document.getElementById('gdrive-toc-upload-errors').textContent = driveErrors.toc_upload ?? '-'
-          document.getElementById('gdrive-toc-download-errors').textContent = driveErrors.toc_download ?? '-'
-          document.getElementById('gdrive-audio-upload-errors').textContent = driveErrors.audio_upload ?? '-'
-          document.getElementById('gdrive-audio-download-errors').textContent = driveErrors.audio_download ?? '-'
-          document.getElementById('gdrive-rename-errors').textContent = driveErrors.rename ?? '-'
-          document.getElementById('gdrive-delete-errors').textContent = driveErrors.delete ?? '-'
-          document.getElementById('quota-denied-errors').textContent = data.errors?.quota_denied ?? '-'
-          document.getElementById('job-timeouts').textContent = data.errors?.job_timeouts ?? '-'
-          document.getElementById('job-timeouts-private').textContent = data.errors?.job_timeouts_private ?? '-'
+          for (const [source, prefix] of [['jobs_hourly', 'hourly'], ['jobs_daily', 'daily']]) {
+            const h = history[source]
+            const per = prefix === 'hourly' ? 'hour' : 'day'
+            renderNerdChart(`jobs-${prefix}`, [
+              { name: 'All jobs', values: h.completed.map((c, i) => c + h.failed[i]), color: null, bold: true },
+              { name: 'Completed', values: h.completed, color: NERD_COLORS[2] },
+              { name: 'Failed', values: h.failed, color: NERD_COLORS[1] },
+            ], { title: `Jobs per ${per}`, buckets: h.buckets })
 
-          // Show content, hide loading
-          statsLoading.style.display = 'none'
-          statsContent.style.display = 'block'
+            renderNerdChart(`audio-${prefix}`, [
+              { name: 'Audio transcribed', values: h.audio_hours, color: null, bold: true },
+              { name: 'Compute spent', values: h.transcribe_hours, color: NERD_COLORS[0] },
+            ], { title: `Audio hours per ${per}`, buckets: h.buckets, format: nerdHours })
+          }
 
-        } catch (error) {
-          console.error('Error loading statistics:', error)
-          statsLoading.style.display = 'none'
-          statsError.style.display = 'block'
+          const languageDays = history.language_days
+          document.getElementById('nerd-title-languages').textContent = `Languages — last ${languageDays} days`
+          document.getElementById('nerd-languages').innerHTML =
+            history.languages.map(l =>
+              `<tr><td>${l.language}</td><td class="num">${nerdNum(l.jobs)}</td>` +
+              `<td class="num">${nerdHours(l.audio_hours)}</td></tr>`
+            ).join('') || `<tr><td colspan="3" class="muted">No jobs in the last ${languageDays} days.</td></tr>`
+
+          document.getElementById('nerd-queues').innerHTML = ['short', 'long', 'private'].map(t =>
+            `<tr><td>${t}</td>` +
+            `<td class="num">${queued[t].count} <span class="muted">(${nerdHours(queued[t].total_duration_minutes / 60)})</span></td>` +
+            `<td class="num">${running[t].count} <span class="muted">(${nerdHours(running[t].total_duration_minutes / 60)})</span></td>` +
+            `<td class="num">${data.system_info.max_parallel_jobs[t]}</td></tr>`
+          ).join('')
+
+          const oldestTranscode = transcoding.running_max_elapsed_seconds || 0
+          document.getElementById('nerd-transcoding').innerHTML = [
+            nerdRow('Jobs', nerdNum(transcoding.jobs)),
+            nerdRow('Total data', `${transcoding.total_gb.toFixed(2)} GB`),
+            nerdRow('Total duration', transcoding.total_duration_formatted),
+            nerdRow('Queued', `${transcoding.queued_count} / ${transcoding.queued_capacity}`),
+            nerdRow('Running', `${transcoding.running_count} / ${transcoding.running_capacity}`),
+            nerdRow('Oldest running', oldestTranscode > 0 ? `${Math.round(oldestTranscode)}s` : '–'),
+          ].join('')
+
+          const drive = data.errors.google_drive
+          document.getElementById('nerd-errors').innerHTML = [
+            nerdRow('Drive: TOC upload', nerdNum(drive.toc_upload)),
+            nerdRow('Drive: TOC download', nerdNum(drive.toc_download)),
+            nerdRow('Drive: audio upload', nerdNum(drive.audio_upload)),
+            nerdRow('Drive: audio download', nerdNum(drive.audio_download)),
+            nerdRow('Drive: rename', nerdNum(drive.rename)),
+            nerdRow('Drive: delete', nerdNum(drive.delete)),
+            nerdRow('Quota exceeded', nerdNum(data.errors.quota_denied)),
+            nerdRow('Job timeouts', nerdNum(data.errors.job_timeouts)),
+            nerdRow('Job timeouts (private)', nerdNum(data.errors.job_timeouts_private)),
+          ].join('')
+
+          updated.textContent = 'Updated ' + new Date().toLocaleTimeString()
+        } catch (e) {
+          console.error('Error loading statistics:', e)
+          // Hide the panels too: stale charts under an error banner read as current.
+          updated.textContent = ''
+          body.style.display = 'none'
+          error.style.display = 'block'
         }
       }
 
