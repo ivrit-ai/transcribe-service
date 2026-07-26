@@ -1,0 +1,21 @@
+/* Colour tokens shared by every page. JS reads several of these by name
+   (getPropertyValue), so treat them as a public API: repoint, don't rename. */
+:root {
+  --bg-color: #f5f5f5;
+  --container-bg: #ffffff;
+  --text-color: #333333;
+  --border-color: #e0e0e0;
+  --primary-color: #4caf50;
+  --secondary-color: #f8f9fa;
+  --input-bg: #ffffff;
+}
+
+[data-theme="dark"] {
+  --bg-color: #1a1a1a;
+  --container-bg: #2d2d2d;
+  --text-color: #e0e0e0;
+  --border-color: #555555;
+  --primary-color: #66bb6a;
+  --secondary-color: #3a3a3a;
+  --input-bg: #1e1e1e;
+}

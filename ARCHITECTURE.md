@@ -18,6 +18,7 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 
 ### Frontend
 - Vanilla JavaScript single-page application, server-rendered with Jinja2
+- Responsive app shell (sticky header, bottom tab bar on phones) with a web app manifest
 - CSS variables for dark/light theming
 - Lucide icons (SVG)
 - Libraries: html-docx-js (DOCX export), Chart.js (statistics), diff (text diffing)
@@ -71,6 +72,8 @@ templates/
 
 static/
   i18n.js                 Internationalization string tables
+  theme.css               Colour tokens shared by index.html and login.html
+  manifest.webmanifest    Web app manifest (PWA)
   favicon.png             App icon
 
 installers/osx/
@@ -200,6 +203,48 @@ These are compile-time constants in `app.py` that require a code change to tune:
 
 ## Frontend Internals
 
+### App Shell
+The page is `header.app-header` → `main.app-main` → `footer.app-footer`, all direct
+children of a flex-column `body`. `.app-header` is sticky and holds the app bar
+(title, quota pill, language/settings/theme buttons) plus the `nav.tabs` tab strip;
+`.app-main` holds the four `.tab-content` panels.
+
+- **Never** apply `transform`, `filter`, `backdrop-filter` or `contain` to `body`,
+  `.app-header`, `.app-main` or `.app-footer`. Any of them turns the shell into a
+  containing block for the `position: fixed` modals, toasts and overlays nested
+  inside it, and they all mis-position.
+- z-index: `.app-header` is 120 and forms a stacking context, so the mobile tab bar's
+  100 and the language dropdown's 200 only order those two against each other — at
+  page level both rank as 120. `#viewer-sticky-header` is 90 (below the app header);
+  modals and overlays are 1000+ and are siblings of the shell, so they cover it.
+- `--app-header-h` is written from a `ResizeObserver` on `.app-header` and is what
+  `#viewer-sticky-header` offsets against; the header's height changes when the
+  quota pill wraps and when the tab strip moves to the bottom on phones.
+- Colour tokens live in `static/theme.css` (`:root` / `[data-theme="dark"]`), linked
+  by both `index.html` and `login.html`: `--bg-color`, `--container-bg`,
+  `--text-color`, `--border-color`, `--primary-color`, `--secondary-color`,
+  `--input-bg`. JS reads several of these by name, so they are a public API —
+  repoint them rather than renaming them. `index.html` adds the layout-only
+  `--shell-max` (1100px) and `--app-header-h` inline.
+- `login.html` is the PWA launch screen for anonymous visitors (`/` 303s to
+  `/login`), so it links the same tokens and manifest and restores `data-theme`
+  from localStorage before first paint. `server-down.html` is a standalone
+  maintenance interstitial and deliberately keeps its own styling.
+- Component primitives: `.panel` (card surface) on the transcribe/files/viewer tabs
+  and `.icon-btn` (36px round icon button) in the app bar. The stats tab supplies its
+  own dark `.nerd` surface and is `dir="ltr"`.
+- Inline `style="display: ..."` is load-bearing (JS toggles it); every other
+  declaration belongs in a class.
+- One breakpoint, 640px: the tab strip becomes a fixed bottom bar, the quota pill
+  wraps to its own row, and paddings tighten.
+
+### PWA
+`static/manifest.webmanifest` (standalone display, RTL/Hebrew, 512px icon) is linked
+from `<head>` alongside `theme-color`, `apple-touch-icon` and `viewport-fit=cover`.
+`updateThemeChrome()` rewrites the `theme-color` meta from `--container-bg` on every
+theme change. No service worker yet — that is what installability will additionally
+require.
+
 ### Key DOM Elements
 - `drop-area`, `file-input` — file drag/drop and picker
 - `youtube-url-input`, `youtube-paste-btn` — YouTube URL input and paste button
@@ -223,7 +268,9 @@ These are compile-time constants in `app.py` that require a code change to tune:
 - `setProgressStatusText(key, vars)` — update progress status with i18n
 - `resetUploadState()` — clear all upload-related UI state
 - `showError()`, `showToast()` — user notifications
-- `switchTab(tabName)` — navigate between tabs
+- `switchTab(tabName)` — navigate between tabs (wrapped later in the file to lazy-load
+  the stats tab, so always call it by name rather than capturing a reference)
+- `updateThemeChrome(theme)` — swaps the sun/moon icon and the `theme-color` meta
 - `translateServerError(err)` — convert server error objects to i18n strings
 - `checkBalance()` — refresh quota display
 

@@ -2,92 +2,120 @@
 <html lang="he" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <link rel="icon" href="{{ url_for('static', path='favicon.png') }}" />
+    <link rel="apple-touch-icon" href="{{ url_for('static', path='favicon.png') }}" />
+    <link rel="manifest" href="{{ url_for('static', path='manifest.webmanifest') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', path='theme.css') }}" />
     <title>תמלול בעזרת ivrit.ai</title>
+    <script>
+      // Before first paint, so an installed dark-mode app doesn't flash white.
+      document.documentElement.setAttribute(
+        "data-theme", localStorage.getItem("theme") || "light")
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/html-docx-js/dist/html-docx.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/diff@5.1.0/dist/diff.min.js"></script>
     <style>
+      /* Colour tokens come from static/theme.css; these are layout-only. */
       :root {
-        --bg-color: #f5f5f5;
-        --container-bg: #ffffff;
-        --text-color: #333333;
-        --border-color: #e0e0e0;
-        --primary-color: #4caf50;
-        --secondary-color: #f8f9fa;
-        --input-bg: #ffffff;
-      }
-
-      [data-theme="dark"] {
-        --bg-color: #1a1a1a;
-        --container-bg: #2d2d2d;
-        --text-color: #e0e0e0;
-        --border-color: #555555;
-        --primary-color: #66bb6a;
-        --secondary-color: #3a3a3a;
-        --input-bg: #1e1e1e;
+        --shell-max: 1100px;
+        /* Kept in sync with the real header height by JS; the viewer's own
+           sticky bar parks underneath it. */
+        --app-header-h: 96px;
       }
 
       body {
         font-family: Arial, sans-serif;
         display: flex;
-        justify-content: center;
-        align-items: center;
-        min-height: 100vh;
+        flex-direction: column;
+        min-height: 100dvh;
         margin: 0;
         background-color: var(--bg-color);
         color: var(--text-color);
       }
-      .container {
+
+      /* App shell. Never give these elements transform/filter/backdrop-filter/
+         contain: any of them would make the shell a containing block for the
+         position:fixed modals, toasts and overlays nested inside it. */
+      .app-header {
+        position: sticky;
+        top: 0;
+        z-index: 120;
         background-color: var(--container-bg);
-        padding: 2rem;
-        border-radius: 16px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-        text-align: center;
-        width: 80%;
-        max-width: 600px;
-        position: relative;
+        border-bottom: 1px solid var(--border-color);
       }
-      .settings-btn {
-        position: absolute;
-        top: 1rem;
-        left: 1rem;
-        background: none;
-        border: none;
-        cursor: pointer;
-        padding: 0.5rem;
-        border-radius: 50%;
-        transition: background-color 0.2s;
-      }
-      .settings-btn:hover {
-        background-color: #f0f0f0;
-      }
-      .settings-btn svg {
-        width: 24px;
-        height: 24px;
-        color: #666;
-      }
-      .lang-menu {
-        position: absolute;
-        top: 1rem;
-        left: 3.5rem;
-        display: inline-flex;
+      .app-bar {
+        display: flex;
         align-items: center;
-        gap: 0.25rem;
+        gap: 0.5rem;
+        max-width: var(--shell-max);
+        margin-inline: auto;
+        padding: 0.6rem 1rem;
       }
-      .lang-menu button {
-        background: none;
+      .app-bar h1 {
+        flex: 1;
+        min-width: 0;
+        font-size: 1.15rem;
+        margin: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .app-main {
+        flex: 1;
+        width: 100%;
+        max-width: var(--shell-max);
+        margin-inline: auto;
+        padding: 1.5rem 1rem 2rem;
+        box-sizing: border-box;
+      }
+      .app-footer {
+        width: 100%;
+        max-width: var(--shell-max);
+        margin-inline: auto;
+        padding: 0 1rem 2rem;
+        box-sizing: border-box;
+      }
+      /* The upload form reads better narrow; the file table, the transcript and
+         the stats dashboard need the full shell width. */
+      #tab-transcribe {
+        max-width: 640px;
+        margin-inline: auto;
+        text-align: center;
+      }
+      .panel {
+        background-color: var(--container-bg);
         border: 1px solid var(--border-color);
-        cursor: pointer;
-        padding: 0.45rem;
-        border-radius: 50%;
+        border-radius: 16px;
+        padding: 1.5rem;
+      }
+      .icon-btn {
+        flex: none;
         width: 36px;
         height: 36px;
         display: flex;
         align-items: center;
         justify-content: center;
+        background: none;
+        border: none;
+        border-radius: 50%;
+        cursor: pointer;
+        color: var(--text-color);
+        opacity: 0.7;
+        transition: background-color 0.2s, opacity 0.2s;
+      }
+      .icon-btn:hover {
+        background-color: var(--secondary-color);
+        opacity: 1;
+      }
+      .icon-btn svg,
+      .icon-btn i[data-lucide] {
+        width: 22px;
+        height: 22px;
       }
       .lang-menu .dropdown {
         position: relative;
@@ -97,7 +125,7 @@
         display: none;
         position: absolute;
         top: 100%;
-        left: 0;
+        inset-inline-start: 0;
         background: var(--container-bg);
         border: 1px solid var(--border-color);
         border-radius: 8px;
@@ -114,7 +142,7 @@
         width: 100%;
         background: none;
         border: none;
-        text-align: right;
+        text-align: start;
         padding: 0.4rem 0.75rem;
         cursor: pointer;
         color: var(--text-color);
@@ -123,26 +151,6 @@
         background: var(--secondary-color);
         color: var(--primary-color);
       }
-      .theme-toggle {
-        position: absolute;
-        top: 1rem;
-        right: 1rem;
-        background: none;
-        border: none;
-        cursor: pointer;
-        padding: 0.5rem;
-        border-radius: 50%;
-        transition: background-color 0.2s;
-      }
-      .theme-toggle:hover {
-        background-color: #f0f0f0;
-      }
-      .theme-toggle svg,
-      .theme-toggle i[data-lucide] {
-        width: 24px;
-        height: 24px;
-        color: #666;
-      }
       .balance-container {
         display: none;
       }
@@ -150,20 +158,14 @@
         display: flex;
       }
       .balance-container.compact-balance {
-        position: absolute;
-        top: 3.5rem;
-        left: 1rem;
         background: var(--secondary-color);
         border: 1px solid var(--border-color);
-        border-radius: 8px;
-        padding: 0.5rem 0.7rem;
+        border-radius: 999px;
+        padding: 0.3rem 0.7rem;
         font-size: 0.85rem;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.25rem;
-        z-index: 10;
-        min-width: fit-content;
+        align-items: center;
+        gap: 0.4rem;
+        white-space: nowrap;
       }
       .balance-container.compact-balance .balance-icon {
         display: none;
@@ -171,18 +173,6 @@
       .balance-container.compact-balance a {
         font-size: 0.8rem;
         text-decoration: underline;
-      }
-      .balance-label {
-        font-weight: bold;
-        margin-bottom: 0.25rem;
-      }
-      .balance-amount {
-        color: #28a745;
-        font-weight: bold;
-      }
-      .balance-loading {
-        color: #6c757d;
-        font-style: italic;
       }
       .balance-icon svg {
         width: 18px;
@@ -192,9 +182,8 @@
       }
       .balance-text {
         display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.25rem;
+        align-items: baseline;
+        gap: 0.4rem;
         white-space: nowrap;
       }
       .balance-label {
@@ -207,18 +196,10 @@
         font-weight: 700;
         font-size: 0.95rem;
       }
-      .balance-text {
-        display: flex;
-        align-items: baseline;
-        gap: 0.4rem;
-      }
-      .modal .balance-label {
-        margin: 0;
-        font-weight: 600;
-        color: var(--text-color);
-      }
-      .modal .balance-amount {
-        font-size: 0.95rem;
+      /* After .balance-amount: JS appends this class to it while the figure loads. */
+      .balance-loading {
+        color: #6c757d;
+        font-style: italic;
       }
       .modal {
         display: none;
@@ -241,6 +222,7 @@
         transform: translate(-50%, -50%);
         padding: 1.5rem;
         border-radius: 12px;
+        box-sizing: border-box;
         width: 90%;
         max-width: 480px;
         max-height: 90vh;
@@ -435,9 +417,6 @@
       .radio-option input[type="radio"]:checked ~ .radio-content .radio-text {
         color: var(--primary-color);
         font-weight: 600;
-      }
-      h1 {
-        margin-bottom: 2rem;
       }
       #drop-area p {
         margin: 0;
@@ -972,8 +951,8 @@
       /* Sticky header for viewer tab (audio player + controls) */
       #viewer-sticky-header {
         position: sticky;
-        top: 0;
-        z-index: 100;
+        top: var(--app-header-h);
+        z-index: 90;
         background-color: var(--container-bg);
         padding: 1rem 0;
         margin-bottom: 1rem;
@@ -1301,11 +1280,17 @@
       .tabs {
         display: flex;
         gap: 0.5rem;
-        margin-bottom: 1.5rem;
-        border-bottom: 2px solid var(--border-color);
+        max-width: var(--shell-max);
+        margin-inline: auto;
+        padding-inline: 1rem;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .tabs::-webkit-scrollbar {
+        display: none;
       }
       .tab-button {
-        padding: 0.75rem 1.5rem;
+        padding: 0.6rem 1.1rem;
         background: none;
         border: none;
         cursor: pointer;
@@ -1315,7 +1300,7 @@
         opacity: 0.6;
         transition: all 0.2s ease;
         border-bottom: 3px solid transparent;
-        margin-bottom: -2px;
+        white-space: nowrap;
       }
       .tab-button:hover {
         opacity: 0.8;
@@ -1861,13 +1846,6 @@
         --nerd-faint: #6b7280;
       }
       .nerd {
-        /* Break out of the app's narrow centred container — the charts need width. */
-        position: relative;
-        left: 50%;
-        transform: translateX(-50%);
-        width: min(1100px, 92vw);
-        direction: ltr;
-        text-align: left;
         background: var(--nerd-bg);
         color: var(--nerd-ink);
         padding: 1.5rem;
@@ -2008,6 +1986,52 @@
       .nerd .muted {
         color: var(--nerd-faint);
       }
+
+      /* Phone layout: the tab strip becomes a bottom bar and the quota pill
+         drops to its own row so the title still fits. */
+      @media (max-width: 640px) {
+        .app-bar {
+          flex-wrap: wrap;
+          padding: 0.5rem 0.75rem;
+        }
+        .app-bar h1 {
+          font-size: 1rem;
+        }
+        .balance-container.compact-balance {
+          order: 1;
+          flex-basis: 100%;
+          justify-content: center;
+        }
+        .tabs {
+          position: fixed;
+          inset-inline: 0;
+          bottom: 0;
+          z-index: 100;
+          justify-content: space-around;
+          background-color: var(--container-bg);
+          border-top: 1px solid var(--border-color);
+          padding: 0.25rem 0.5rem calc(0.25rem + env(safe-area-inset-bottom, 0px));
+        }
+        .tab-button,
+        .tab-button.active {
+          border-bottom: none;
+          padding: 0.55rem 0.5rem;
+          font-size: 0.85rem;
+        }
+        .app-main {
+          padding: 1rem 0.75rem;
+        }
+        .app-footer {
+          padding: 0 0.75rem calc(4.5rem + env(safe-area-inset-bottom, 0px));
+        }
+        .panel {
+          padding: 1rem;
+          border-radius: 12px;
+        }
+        .nerd {
+          padding: 1rem;
+        }
+      }
     </style>
   </head>
   <body>
@@ -2026,66 +2050,70 @@
       </div>
     </div>
 
-    <div class="container">
-      <button
-        class="theme-toggle"
-        id="theme-toggle"
-        onclick="toggleTheme()"
-        data-i18n-title="themeToggle"
-      >
-        <i data-lucide="sun" id="sun-icon"></i>
-        <i data-lucide="moon" id="moon-icon" style="display: none"></i>
-      </button>
-      <button
-        class="settings-btn"
-        id="settings-btn"
-        data-i18n-title="settings"
-      >
-        <i data-lucide="settings"></i>
-      </button>
-      <div class="lang-menu" id="lang-menu">
-        <div class="dropdown">
-          <button id="lang-btn" title="שפה" aria-label="שפה">
-            <i data-lucide="globe"></i>
-          </button>
-          <div class="dropdown-content">
-            <button type="button" data-lang="he">עברית</button>
-            <button type="button" data-lang="yi">ייִדיש</button>
-            <button type="button" data-lang="en">English</button>
+    <header class="app-header">
+      <div class="app-bar">
+        <h1 data-i18n="title">תמלול בעזרת ivrit.ai</h1>
+
+        <!-- Balance/Quota Display (Compact) -->
+        {% if not in_local_mode %}
+        <div
+          class="balance-container compact-balance"
+          id="main-balance-container"
+          aria-live="polite"
+        >
+          <div class="balance-icon" aria-hidden="true">
+            <i data-lucide="credit-card"></i>
+          </div>
+          <div class="balance-text">
+            <span class="balance-label" id="main-balance-label">—</span>
+            <span class="balance-amount" id="main-balance-amount">—</span>
+          </div>
+          <a href="{{ quota_increase_url }}" target="_blank" rel="noopener" id="quota-info-link" style="display: none;" data-i18n="howToGetMoreQuota">הגדלת מכסה</a>
+        </div>
+        {% endif %}
+
+        <div class="lang-menu" id="lang-menu">
+          <div class="dropdown">
+            <button class="icon-btn" id="lang-btn" title="שפה" aria-label="שפה">
+              <i data-lucide="globe"></i>
+            </button>
+            <div class="dropdown-content">
+              <button type="button" data-lang="he">עברית</button>
+              <button type="button" data-lang="yi">ייִדיש</button>
+              <button type="button" data-lang="en">English</button>
+            </div>
           </div>
         </div>
+        <button
+          class="icon-btn"
+          id="settings-btn"
+          data-i18n-title="settings"
+        >
+          <i data-lucide="settings"></i>
+        </button>
+        <button
+          class="icon-btn"
+          id="theme-toggle"
+          onclick="toggleTheme()"
+          data-i18n-title="themeToggle"
+        >
+          <i data-lucide="sun" id="sun-icon"></i>
+          <i data-lucide="moon" id="moon-icon" style="display: none"></i>
+        </button>
       </div>
-      
-      <!-- Balance/Quota Display (Compact) -->
-      {% if not in_local_mode %}
-      <div
-        class="balance-container compact-balance"
-        id="main-balance-container"
-        aria-live="polite"
-      >
-        <div class="balance-icon" aria-hidden="true">
-          <i data-lucide="credit-card"></i>
-        </div>
-        <div class="balance-text">
-          <span class="balance-label" id="main-balance-label">—</span>
-          <span class="balance-amount" id="main-balance-amount">—</span>
-        </div>
-        <a href="{{ quota_increase_url }}" target="_blank" rel="noopener" id="quota-info-link" style="display: none;" data-i18n="howToGetMoreQuota">הגדלת מכסה</a>
-      </div>
-      {% endif %}
-      
-      <h1 data-i18n="title">תמלול בעזרת ivrit.ai</h1>
-      
+
       <!-- Tab Navigation -->
-      <div class="tabs">
+      <nav class="tabs">
         <button class="tab-button active" data-tab="transcribe" data-i18n="tabTranscribe">תמלול חדש</button>
         <button class="tab-button" data-tab="files" data-i18n="tabMyFiles">הקבצים שלי</button>
         <button class="tab-button" data-tab="viewer" id="viewer-tab-btn" style="display: none;" data-i18n="tabViewer">צפייה</button>
         <button class="tab-button" data-tab="stats" id="stats-tab-btn" style="display: none;">Stats for Nerds</button>
-      </div>
+      </nav>
+    </header>
 
+    <main class="app-main">
       <!-- Transcribe Tab Content -->
-      <div id="tab-transcribe" class="tab-content active">
+      <div id="tab-transcribe" class="tab-content panel active">
       
       <!-- Recording Interface -->
       <div id="recording-interface" style="display: none;">
@@ -2214,7 +2242,7 @@
       <!-- End Transcribe Tab -->
 
       <!-- My Files Tab Content -->
-      <div id="tab-files" class="tab-content">
+      <div id="tab-files" class="tab-content panel">
         {% if in_local_mode %}
         <div style="margin-bottom: 0.75rem; text-align: start;">
           <button type="button" id="open-data-dir-btn" class="btn btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.4rem;">
@@ -2241,7 +2269,7 @@
       <!-- End My Files Tab -->
 
       <!-- Viewer Tab Content -->
-      <div id="tab-viewer" class="tab-content">
+      <div id="tab-viewer" class="tab-content panel">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
           <button id="back-to-files-btn" class="btn btn-secondary" style="padding: 0.5rem 1rem;">
             <i data-lucide="arrow-right" style="width: 16px; height: 16px; margin-left: 0.25rem;"></i>
@@ -2374,7 +2402,7 @@
       <!-- End Viewer Tab -->
 
       <!-- Statistics Tab Content -->
-      <div id="tab-stats" class="tab-content">
+      <div id="tab-stats" class="tab-content" dir="ltr">
         <div class="nerd">
           <h1>Stats for Nerds</h1>
           <div class="sub" id="nerd-updated">Loading…</div>
@@ -2466,7 +2494,9 @@
         </div>
       </div>
       <!-- End Statistics Tab -->
+    </main>
 
+    <footer class="app-footer">
       <div class="links-container">
         <a href="mailto:info@ivrit.ai" class="contact-link">
           <i data-lucide="mail"></i>
@@ -2495,7 +2525,7 @@
           ><span data-i18n="privacyTos">מדיניות פרטיות ותנאי שימוש</span></a
         >
       </div>
-    </div>
+    </footer>
 
     <div id="settings-modal" class="modal">
       <div class="modal-content">
@@ -3072,21 +3102,34 @@
         const newTheme = currentTheme === "dark" ? "light" : "dark"
         document.documentElement.setAttribute("data-theme", newTheme)
         localStorage.setItem("theme", newTheme)
-        updateThemeIcon(newTheme)
+        updateThemeChrome(newTheme)
       }
 
-      function updateThemeIcon(theme) {
+      function updateThemeChrome(theme) {
         const sunIcon = document.getElementById("sun-icon")
         const moonIcon = document.getElementById("moon-icon")
         const isDark = theme === "dark"
         sunIcon.style.display = isDark ? "none" : "inline-block"
         moonIcon.style.display = isDark ? "inline-block" : "none"
+        // Match the OS/browser chrome to the app bar, including when installed as a PWA.
+        document.querySelector('meta[name="theme-color"]').content = getComputedStyle(
+          document.documentElement
+        ).getPropertyValue("--container-bg").trim()
       }
 
-      // Load saved theme
-      const savedTheme = localStorage.getItem("theme") || "light"
-      document.documentElement.setAttribute("data-theme", savedTheme)
-      updateThemeIcon(savedTheme)
+      // data-theme was already applied by the head script; the icons and the
+      // theme-color meta need the DOM, so they're synced here.
+      updateThemeChrome(document.documentElement.getAttribute("data-theme"))
+
+      // The header grows and shrinks (quota pill wraps, tab strip moves to the
+      // bottom on phones); the viewer's sticky bar offsets by whatever it is.
+      const appHeaderEl = document.querySelector(".app-header")
+      new ResizeObserver(() => {
+        document.documentElement.style.setProperty(
+          "--app-header-h",
+          `${appHeaderEl.offsetHeight}px`
+        )
+      }).observe(appHeaderEl)
 
       // Load saved display settings
       const savedDisplaySettings = localStorage.getItem("displaySettings")

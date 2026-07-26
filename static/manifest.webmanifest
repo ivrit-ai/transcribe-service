@@ -1,0 +1,20 @@
+{
+  "name": "תמלול בעזרת ivrit.ai",
+  "short_name": "ivrit.ai",
+  "lang": "he",
+  "dir": "rtl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f5f5f5",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/static/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
