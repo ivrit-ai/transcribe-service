@@ -17,3 +17,4 @@ asyncpg
 sqlalchemy
 alembic
 psycopg2-binary
+pywebpush==2.3.0

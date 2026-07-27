@@ -11,6 +11,7 @@ from fastapi import (
 )
 
 import aiohttp
+from pywebpush import webpush_async, WebPushException
 from fastapi.responses import (
     JSONResponse,
     FileResponse,
@@ -121,6 +122,16 @@ if in_xhost_mode:
     ]
     if _missing:
         raise RuntimeError(f"xhost mode requires env vars: {', '.join(_missing)}")
+
+# Web Push. Optional everywhere: without all three keys the browser is never
+# asked for notification permission and nothing is ever sent. Rotating the key
+# pair invalidates every stored subscription.
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY")
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT")
+PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and VAPID_SUBJECT)
+PUSH_TTL_SECONDS = 86400
+PUSH_TIMEOUT_SECONDS = 10
 
 # Rate limiting configuration. CLI arg by default; overridable via env under
 # xhost, where there are no CLI args.
@@ -2250,6 +2261,48 @@ async def get_quota(request: Request):
     })
 
 
+@app.get("/sw.js")
+async def service_worker():
+    """Serve the service worker from the root so its scope covers the whole app.
+
+    Deliberately unauthenticated: require_google_login redirects to /login, and a
+    redirected script response fails worker registration. The file has no secrets.
+    """
+    return FileResponse(
+        str(BASE_PATH / "static" / "sw.js"),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/push/config", dependencies=[Depends(require_google_login)])
+async def get_push_config():
+    """Tell the browser whether push is configured, and with which application server key."""
+    return JSONResponse({"enabled": PUSH_ENABLED, "publicKey": VAPID_PUBLIC_KEY})
+
+
+@app.post("/push/subscribe", dependencies=[Depends(require_google_login)])
+async def push_subscribe(request: Request):
+    """Store (or refresh) this browser's push subscription for the signed-in user."""
+    user_email = get_user_email(request)
+    if not user_email:
+        return JSONResponse({"error": "errorUserNotFound", "i18n_key": "errorUserNotFound"}, status_code=400)
+
+    body = await request.json()
+    subscription = body.get("subscription") or {}
+    keys = subscription.get("keys") or {}
+    endpoint = subscription.get("endpoint")
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
+    lang = body.get("lang") or "he"
+
+    if not endpoint or not p256dh or not auth:
+        return JSONResponse({"error": "malformed push subscription"}, status_code=400)
+
+    await db.save_push_subscription(endpoint, user_email, p256dh, auth, lang, int(time.time()))
+    return JSONResponse({"success": True})
+
+
 @app.post("/client_heartbeat")
 async def client_heartbeat():
     """Receive heartbeat from client to prevent auto-shutdown in local mode."""
@@ -3539,6 +3592,72 @@ async def record_unfinished_job(job_desc, status):
     )
 
 
+async def notify_job_finished(job_desc, status, results_id):
+    """Push a completion notification to the user's registered browsers.
+
+    Never raises: the job's outcome must not depend on a notification getting
+    through. The service worker renders the text, so the payload carries only
+    data plus the language the subscription was registered with.
+    """
+    if not PUSH_ENABLED:
+        return
+
+    try:
+        subscriptions = await db.get_push_subscriptions(job_desc.user_email)
+    except Exception as e:
+        logger.error(f"Failed to load push subscriptions for {job_desc.user_email}: {e}")
+        return
+
+    async def push_one(sub):
+        expired = False
+        try:
+            await webpush_async(
+                subscription_info={
+                    "endpoint": sub["endpoint"],
+                    "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
+                },
+                data=json.dumps(
+                    {
+                        "status": status,
+                        "filename": job_desc.filename,
+                        "resultsId": results_id,
+                        "lang": sub["lang"],
+                    }
+                ),
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                # pywebpush fills in "aud" and "exp" on the dict it is handed, so
+                # each call needs its own or the second push carries the first
+                # push service's audience.
+                vapid_claims={"sub": VAPID_SUBJECT},
+                ttl=PUSH_TTL_SECONDS,
+                # This is awaited on the job's completion path, and pywebpush
+                # otherwise defaults to a 10000 second timeout.
+                timeout=aiohttp.ClientTimeout(total=PUSH_TIMEOUT_SECONDS),
+            )
+        except WebPushException as e:
+            # webpush_async attaches an aiohttp response, which reports .status.
+            # 404 and 410 mean the push service considers this one gone for good.
+            # 403 means it was created with a VAPID key pair we no longer hold;
+            # the browser rebuilds it on the user's next visit either way.
+            expired = e.response is not None and e.response.status in (403, 404, 410)
+            if not expired:
+                logger.error(f"Push notification failed for {job_desc.user_email}: {e}")
+        except Exception as e:
+            logger.error(f"Push notification failed for {job_desc.user_email}: {e}")
+
+        if not expired:
+            return
+        try:
+            await db.delete_push_subscription(sub["endpoint"], job_desc.user_email)
+            log_message(f"{job_desc.user_email}: dropped expired push subscription")
+        except Exception as e:
+            logger.error(f"Failed to drop expired push subscription for {job_desc.user_email}: {e}")
+
+    # Sent in parallel because transcribe_job only releases the job's queue slot
+    # once this returns, and the queues allow very little concurrency.
+    await asyncio.gather(*(push_one(sub) for sub in subscriptions))
+
+
 async def transcribe_job(job_desc):
     job_id = job_desc.id
     segs = None
@@ -3737,6 +3856,7 @@ async def transcribe_job(job_desc):
             if not upload_success:
                 await db.incr_stat("gdrive_error_audio_upload", 1)
                 logger.error(f"Failed to upload results file for {job_id}, skipping TOC update")
+                await notify_job_finished(job_desc, "failed", None)
                 return
             
             # Upload opus file if save_audio is True
@@ -3800,11 +3920,14 @@ async def transcribe_job(job_desc):
                     raise Exception("Failed to upload TOC")
 
             log_message(f"{job_desc.user_email}: Uploaded transcription to TOC (results_id: {results_id})")
+            await notify_job_finished(job_desc, "completed", results_id)
         except Exception as e:
             await db.incr_stat(
                 "gdrive_error_toc_download" if "download" in str(e).lower() else "gdrive_error_toc_upload", 1
             )
             logger.error(f"Failed to upload transcription for {job_id}: {e}")
+            # The transcript never reached the user's library, so it failed for them.
+            await notify_job_finished(job_desc, "failed", None)
     except TimeoutError as e:
         await db.incr_stat("job_timeouts", 1)
         if job_desc.job_type == PRIVATE:
@@ -3812,10 +3935,12 @@ async def transcribe_job(job_desc):
         log_message(f"Error in transcription job {job_id}: {str(e)}")
         await emit_upload_error(job_id, "errorInternalServer", details=str(e))
         await record_unfinished_job(job_desc, "timeout")
+        await notify_job_finished(job_desc, "failed", None)
     except Exception as e:
         log_message(f"Error in transcription job {job_id}: {str(e)}")
         await emit_upload_error(job_id, "errorInternalServer", details=str(e))
         await record_unfinished_job(job_desc, "failed")
+        await notify_job_finished(job_desc, "failed", None)
     finally:
         # Close segs if it exists
         #if segs:

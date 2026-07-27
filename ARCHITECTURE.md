@@ -40,6 +40,14 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 - Per-transcript statistics with Chart.js visualizations
 - Export formats: plain text, timestamped text, VTT, SRT, DOCX, JSON, speaker-separated text
 
+### Completion Notifications (Web Push)
+- Jobs outlive the tab that started them, so completion is pushed rather than polled
+- Opt-in is offered when a job is submitted, never on page load
+- Notification text is rendered by the service worker, in the language the subscription
+  was registered with, and names the file
+- Entirely optional: with the VAPID keys unset the feature is invisible and inert
+- See [Web Push](#web-push) for the mechanics
+
 ### User Quota System
 - Token-bucket rate limiting with configurable weekly minute credits (default 420 min/week)
 - Daily credit replenishment
@@ -59,6 +67,9 @@ app.py                    Main FastAPI application (routes, job queue, quota log
 run.py                    Uvicorn launcher with CLI argument parsing
 config.json               Language and model configuration
 
+db.py                     SQLite/Postgres access layer (quota, stats, push subscriptions)
+alembic/                  Database migrations
+
 gdrive_auth.py            Google OAuth token management
 gdrive_file_utils.py      Google Drive storage backend
 local_file_utils.py       Local filesystem storage backend
@@ -72,6 +83,7 @@ templates/
 
 static/
   i18n.js                 Internationalization string tables
+  sw.js                   Service worker (push notifications only; served from /sw.js)
   theme.css               Colour tokens shared by index.html and login.html
   manifest.webmanifest    Web app manifest (PWA)
   favicon.png             App icon
@@ -92,6 +104,7 @@ build_bundle.py           PyInstaller bundling script
 | Data | `GET /appdata/toc`, `GET /appdata/results/{id}`, `POST /appdata/edits/{id}` |
 | Management | `POST /appdata/rename`, `POST /appdata/delete`, `POST /appdata/donate_data` |
 | Auth & Account | `GET /login`, `GET /authorize`, `GET /login/authorized`, `GET /quota`, `GET /balance` |
+| Push | `GET /sw.js` (unauthenticated), `GET /push/config`, `POST /push/subscribe` |
 | System | `GET /languages`, `POST /client_heartbeat`, `GET /stats` |
 
 ## Job Queue
@@ -141,6 +154,9 @@ Jobs go through: upload -> pre-transcoding (ffmpeg to OPUS) -> queue -> RunPod/l
 | `POSTHOG_API_KEY` | (none) | PostHog analytics key (optional, analytics disabled if unset) |
 | `TS_HIATUS_MODE` | `0` | Set to `1` to enable hiatus mode via env |
 | `TS_USER_EMAIL` | `local@example.com` | User email override (dev/local mode) |
+| `VAPID_PUBLIC_KEY` | (none) | Web Push application server key, base64url. Push is off unless all three VAPID vars are set |
+| `VAPID_PRIVATE_KEY` | (none) | Web Push signing key, base64url |
+| `VAPID_SUBJECT` | (none) | Contact for push services: `mailto:...` or an https URL |
 | `TOC_CACHE_MAX_SIZE` | `100` | Max entries in the TOC LRU cache |
 | `TOC_VER` | `1.0` | TOC format version |
 
@@ -242,8 +258,77 @@ children of a flex-column `body`. `.app-header` is sticky and holds the app bar
 `static/manifest.webmanifest` (standalone display, RTL/Hebrew, 512px icon) is linked
 from `<head>` alongside `theme-color`, `apple-touch-icon` and `viewport-fit=cover`.
 `updateThemeChrome()` rewrites the `theme-color` meta from `--container-bg` on every
-theme change. No service worker yet — that is what installability will additionally
-require.
+theme change. There is a service worker, but it exists only for push (see below) and
+handles no `fetch` events, so the app is still not offline-installable.
+
+### Web Push
+
+Transcription jobs keep running after the tab closes, so completion is delivered by push
+rather than polling.
+
+**Service worker.** `static/sw.js` is served from the root route `GET /sw.js` so its scope
+covers the whole app; the `/static` mount would scope it to `/static/` and it could never
+receive the app's pushes. That route is deliberately **unauthenticated** —
+`require_google_login` answers with a 303 to `/login`, and a redirected script response
+fails worker registration. The file contains no secrets, and nothing user-specific may ever
+be templated into it.
+
+The worker has **no `fetch` handler and caches nothing**, on purpose: the app already busts
+caches with a backend version identifier, and a caching worker would fight it. It handles
+`install` (`skipWaiting`), `activate` (`clients.claim`), `push` and `notificationclick`.
+
+**Where the text lives.** All notification copy is a table inside `sw.js`, not in `app.py`
+and not in `static/i18n.js` — the latter assigns to `window`, which does not exist in a
+worker. The payload therefore carries a `lang`, which is why the subscription row stores
+one: the server builds the payload at job completion, when no browser is around to ask.
+
+**`push_subscriptions` table** (Alembic revision `0003`):
+
+| Column | Notes |
+|--------|-------|
+| `endpoint` | Primary key, so a device re-subscribing upserts instead of duplicating |
+| `user_email` | Indexed; scopes both sending and pruning |
+| `p256dh`, `auth` | Encryption keys from `PushSubscription.toJSON()` |
+| `lang` | UI language at subscribe time; refreshed on load, on language change, and on submit |
+| `created_at` | Unix seconds |
+
+**Flow.** `initPushNotifications()` registers the worker when `/push/config` reports
+`enabled`. `maybeAskForPushPermission()` runs when a job is submitted — never on page load —
+and shows the opt-in modal unless the user already answered. Accepting subscribes and
+`POST`s to `/push/subscribe`; declining with "don't ask again" writes `never` to the
+`push_prompt` localStorage key. Once opted in, `refreshPushSubscription()` re-`POST`s the
+current subscription on load, on language change and on submit, which is what actually
+keeps rows healthy: it keeps `lang` current,
+and if the browser dropped the subscription while the app was closed it re-subscribes
+silently (permission is already granted) so the user does not go quietly un-notified. It
+also compares the subscription's `applicationServerKey` against the current public key and
+tears the subscription down when they differ, which is the only way to recover from a key
+rotation — the browser otherwise hands back the same, permanently rejected subscription
+forever. The orphaned row is pruned when its endpoint next answers 403 or 410.
+
+There is deliberately no `pushsubscriptionchange` handler: a worker cannot read
+localStorage, so it could only guess at `lang`, and support for the event is uneven. The
+load-time refresh is the guarantee instead.
+
+`notify_job_finished()` fires from every terminal path of `transcribe_job` — including the
+results-upload and TOC-upload failures, where the job is dead from the user's point of view
+— and never raises, because a failed notification must not change a job's outcome. Sends
+are gathered rather than serialised: the job's queue slot is not released until this
+returns, and the queues allow very little concurrency. A 403, 404 or 410 from the push
+service deletes the row; anything else is logged and the row kept.
+
+Clicking a notification reuses an open window via `postMessage({type: 'open-results'})`, or
+opens `/?results=<id>`; both land in `openResultsById()`.
+
+**Caveats.**
+- Rotating the VAPID key pair invalidates every stored subscription: the push service
+  answers 403, not 410. Recovery is automatic but not instant — each user is re-subscribed
+  by the load-time refresh on their next visit, so jobs finishing before that visit go
+  un-notified.
+- iOS delivers Web Push only to home-screen-installed PWAs. Feature detection handles this:
+  `Notification`/`PushManager` are undefined in a plain Safari tab, so nothing is offered.
+- Payloads are encrypted end to end, but the endpoint and the timing of each push are
+  visible to Google/Apple, and the filename appears on the device's lock screen.
 
 ### Key DOM Elements
 - `drop-area`, `file-input` — file drag/drop and picker
@@ -255,6 +340,7 @@ require.
   new controls in that tab belong **inside** it, or they stay clickable mid-recording
 - `recording-interface`, `recorded-audio-preview`, `recovered-recording` — recorder UI, the
   finished take, and the banner offering a recording restored from IndexedDB
+- `push-optin-modal`, `push-dont-ask-checkbox` — notification opt-in prompt
 
 ### Key JS State Variables
 - `selectedFiles` — array of File objects pending upload
@@ -276,6 +362,10 @@ require.
   batch is one click away from a retry
 - `beginRecording()` / `finishRecording()` — shared recorder entry/exit for all capture modes
 - `restoreUnsentRecording()` — startup recovery + retention sweep of the IndexedDB store
+- `maybeAskForPushPermission()` — called on job submit; runs alongside the upload, never gates it
+- `refreshPushSubscription()` — idempotent re-`POST` of the current subscription on load and
+  on language change
+- `openResultsById(id)` — opens a transcript from a clicked notification, either route
 - `showError()`, `showToast()` — user notifications
 - `switchTab(tabName)` — navigate between tabs (wrapped later in the file to lazy-load
   the stats tab, so always call it by name rather than capturing a reference)

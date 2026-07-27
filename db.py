@@ -148,6 +148,34 @@ class Database:
             max_seconds,
         )
 
+    # ---- web push subscriptions ----
+
+    async def save_push_subscription(
+        self, endpoint: str, user_email: str, p256dh: str, auth: str, lang: str, created_at: int
+    ):
+        await self.execute(
+            "INSERT INTO push_subscriptions (endpoint, user_email, p256dh, auth, lang, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (endpoint) DO UPDATE SET "
+            "user_email = excluded.user_email, p256dh = excluded.p256dh, "
+            "auth = excluded.auth, lang = excluded.lang",
+            endpoint,
+            user_email,
+            p256dh,
+            auth,
+            lang,
+            created_at,
+        )
+
+    async def get_push_subscriptions(self, user_email: str) -> list:
+        return await self.fetch(
+            "SELECT endpoint, p256dh, auth, lang FROM push_subscriptions WHERE user_email = ?",
+            user_email,
+        )
+
+    async def delete_push_subscription(self, endpoint: str, user_email: str):
+        await self.execute("DELETE FROM push_subscriptions WHERE endpoint = ? AND user_email = ?", endpoint, user_email)
+
     # ---- stats counters ----
 
     async def incr_stat(self, key: str, amount: float):

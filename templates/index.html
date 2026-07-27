@@ -2677,6 +2677,27 @@
       </div>
     </div>
 
+    <!-- Notification Opt-In Modal -->
+    <div id="push-optin-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 data-i18n="pushPromptTitle">לקבל התראה כשהתמלול מוכן?</h2>
+          <button class="close" id="close-push-optin">&times;</button>
+        </div>
+        <div class="form-group">
+          <p style="margin-bottom: 1rem;" data-i18n="pushPromptBody">התמלול ממשיך גם אם תסגרו את הדפדפן. נוכל לשלוח לכם התראה ברגע שהוא מוכן.</p>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+            <input type="checkbox" id="push-dont-ask-checkbox" style="width: auto; margin: 0;" />
+            <span data-i18n="pushPromptDontAsk">אל תשאלו אותי שוב</span>
+          </label>
+        </div>
+        <div class="modal-buttons">
+          <button type="button" class="btn btn-primary" id="push-optin-accept" data-i18n="pushPromptYes">כן, עדכנו אותי</button>
+          <button type="button" class="btn btn-secondary" id="push-optin-decline" data-i18n="pushPromptNo">לא עכשיו</button>
+        </div>
+      </div>
+    </div>
+
     {% if in_local_mode %}
     <!-- YouTube Rights Confirmation Modal -->
     <div id="youtube-rights-modal" class="modal">
@@ -2909,6 +2930,8 @@
             }
           }
           updateTranscriptionDirectionUI()
+          // Notification text is rendered from the language stored server-side.
+          refreshPushSubscription()
         })
       }
       const settingsModal = document.getElementById("settings-modal")
@@ -3881,6 +3904,9 @@
       })()
 
       async function uploadYoutubeUrl(url) {
+        // Runs alongside the upload rather than gating it.
+        maybeAskForPushPermission()
+
         transcribeBtn.disabled = true
         showProgressUI()
         setProgressStatusText("youtubeDownloading")
@@ -4306,6 +4332,9 @@
 
       async function uploadBatch() {
         if (!selectedFiles || selectedFiles.length === 0) return
+
+        // Runs alongside the upload rather than gating it.
+        maybeAskForPushPermission()
 
         transcribeBtn.disabled = true
         showProgressUI()
@@ -9046,6 +9075,190 @@
       }
 
       restoreUnsentRecording().catch((err) => console.warn('Failed to restore stored recording', err))
+
+      // ---- Web Push: tell the user when a transcription finishes ----
+
+      let pushConfig = { enabled: false, publicKey: null }
+      let pushRegistration = null
+
+      // 'on' means subscribed; 'never' means the user ticked "don't ask again".
+      // Anything else means ask on the next submit.
+      function getPushPromptState() {
+        try {
+          return localStorage.getItem('push_prompt')
+        } catch {
+          return 'never'
+        }
+      }
+
+      function setPushPromptState(state) {
+        try {
+          localStorage.setItem('push_prompt', state)
+        } catch {}
+      }
+
+      function pushSupported() {
+        // Safari on iOS only exposes these inside an installed PWA, which is
+        // exactly where push works there.
+        return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
+      }
+
+      function urlBase64ToUint8Array(base64String) {
+        const padded = (base64String + '='.repeat((4 - (base64String.length % 4)) % 4))
+          .replace(/-/g, '+')
+          .replace(/_/g, '/')
+        const raw = atob(padded)
+        return Uint8Array.from(raw, (c) => c.charCodeAt(0))
+      }
+
+      // Throws on rejection so the caller does not tell the user notifications are
+      // on while the server holds no subscription for them.
+      async function sendPushSubscription(subscription) {
+        const response = await fetch('/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscription: subscription.toJSON(),
+            lang: window.I18N ? window.I18N.current : 'he',
+          }),
+        })
+        if (!response.ok) throw new Error(`/push/subscribe returned ${response.status}`)
+      }
+
+      // A subscription is bound to the VAPID key pair it was created with. Once
+      // the server's keys are rotated the push service rejects every send to it
+      // with a 403, and the browser keeps handing back the same dead
+      // subscription forever, so it has to be torn down explicitly.
+      function subscriptionMatchesServerKey(subscription) {
+        const bound = subscription.options && subscription.options.applicationServerKey
+        if (!bound) return true
+        const current = urlBase64ToUint8Array(pushConfig.publicKey)
+        const stored = new Uint8Array(bound)
+        return stored.length === current.length && stored.every((byte, i) => byte === current[i])
+      }
+
+      // Re-sending an unchanged subscription is a cheap upsert, and it is what
+      // actually keeps the server's rows healthy: it repairs subscriptions the
+      // browser dropped while the app was closed, replaces ones invalidated by a
+      // key rotation, and keeps the stored language in step with the UI. The
+      // stale server row is pruned when its endpoint next answers 403 or 410.
+      async function refreshPushSubscription() {
+        if (!pushRegistration || getPushPromptState() !== 'on' || Notification.permission !== 'granted') return
+        try {
+          let subscription = await pushRegistration.pushManager.getSubscription()
+          if (subscription && !subscriptionMatchesServerKey(subscription)) {
+            await subscription.unsubscribe()
+            subscription = null
+          }
+          await sendPushSubscription(subscription || (await subscribeToPush()))
+        } catch (err) {
+          console.warn('Failed to refresh push subscription', err)
+        }
+      }
+
+      function subscribeToPush() {
+        return pushRegistration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(pushConfig.publicKey),
+        })
+      }
+
+      async function enablePushNotifications() {
+        try {
+          const permission = await Notification.requestPermission()
+          if (permission !== 'granted') {
+            showToast(window.I18N.t('pushDenied'), 'error')
+            return
+          }
+          await sendPushSubscription(await subscribeToPush())
+          setPushPromptState('on')
+          showToast(window.I18N.t('pushEnabled'), 'success')
+        } catch (err) {
+          console.warn('Failed to enable push notifications', err)
+          showToast(window.I18N.t('pushDenied'), 'error')
+        }
+      }
+
+      function closePushOptinModal(honourDontAsk) {
+        const modal = document.getElementById('push-optin-modal')
+        const dontAsk = document.getElementById('push-dont-ask-checkbox')
+        if (honourDontAsk && dontAsk && dontAsk.checked) setPushPromptState('never')
+        if (modal) modal.classList.remove('show')
+      }
+
+      // Called when a job is submitted, not on page load: the offer only makes
+      // sense once there is something to wait for.
+      function maybeAskForPushPermission() {
+        if (!pushConfig.enabled || !pushRegistration) return
+        if (Notification.permission === 'denied') return
+        const state = getPushPromptState()
+        if (state === 'never') return
+        if (state === 'on') {
+          refreshPushSubscription()
+          return
+        }
+        if (Notification.permission === 'granted') {
+          // Permission survives a cleared flag; subscribe without nagging.
+          enablePushNotifications()
+          return
+        }
+        const modal = document.getElementById('push-optin-modal')
+        const dontAsk = document.getElementById('push-dont-ask-checkbox')
+        if (dontAsk) dontAsk.checked = false
+        if (modal) modal.classList.add('show')
+      }
+
+      // Entry point for a clicked notification, whether it woke a fresh window
+      // (?results=) or was handed to an already-open one (postMessage).
+      async function openResultsById(resultsId) {
+        if (!resultsId) return
+        try {
+          const response = await fetch('/appdata/toc')
+          if (!response.ok) return
+          const data = await response.json()
+          const entry = (data.entries || []).find((e) => e.results_id === resultsId)
+          if (entry) await viewSavedFileFromTOC(entry)
+        } catch (err) {
+          console.warn('Failed to open transcription from notification', err)
+        }
+      }
+
+      async function initPushNotifications() {
+        if (!pushSupported()) return
+        try {
+          const response = await fetch('/push/config')
+          if (!response.ok) return
+          pushConfig = await response.json()
+          if (!pushConfig.enabled || !pushConfig.publicKey) return
+
+          pushRegistration = await navigator.serviceWorker.register('/sw.js')
+          navigator.serviceWorker.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'open-results') {
+              openResultsById(event.data.resultsId)
+            }
+          })
+          await refreshPushSubscription()
+        } catch (err) {
+          console.warn('Failed to initialise push notifications', err)
+        }
+      }
+
+      document.getElementById('push-optin-accept').addEventListener('click', () => {
+        closePushOptinModal(false)
+        enablePushNotifications()
+      })
+      document.getElementById('push-optin-decline').addEventListener('click', () => closePushOptinModal(true))
+      document.getElementById('close-push-optin').addEventListener('click', () => closePushOptinModal(true))
+
+      initPushNotifications()
+
+      // A notification click with no window open lands here. Strip the param so
+      // a later reload does not re-open the transcript.
+      const requestedResultsId = new URLSearchParams(window.location.search).get('results')
+      if (requestedResultsId) {
+        history.replaceState(null, '', window.location.pathname)
+        openResultsById(requestedResultsId)
+      }
     </script>
   </body>
 </html>
