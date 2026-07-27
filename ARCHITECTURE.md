@@ -259,7 +259,22 @@ children of a flex-column `body`. `.app-header` is sticky and holds the app bar
 from `<head>` alongside `theme-color`, `apple-touch-icon` and `viewport-fit=cover`.
 `updateThemeChrome()` rewrites the `theme-color` meta from `--container-bg` on every
 theme change. There is a service worker, but it exists only for push (see below) and
-handles no `fetch` events, so the app is still not offline-installable.
+handles no `fetch` events, so the app cannot be used offline. Chrome installs it anyway.
+
+`#install-btn` is a labelled pill in the header, hidden until the browser proves the app
+can be installed: it is revealed when `beforeinstallprompt` fires (whose default banner is
+suppressed in its favour), and clicking it calls that saved event. The event cannot be
+prompted with twice, so the button hides the moment it is spent — the browser fires a fresh
+one on a later visit if the user declined. That keeps the invariant the click handler
+depends on: a visible button with no saved event means iOS and nothing else.
+
+Safari fires no event and exposes no install API, so on iOS the button is revealed by
+`'standalone' in navigator` — a WebKit-on-iOS-only property, and therefore a capability
+probe rather than a user-agent parse — and opens `#install-modal` describing the
+Share → "Add to Home Screen" gesture. The line saying installation is the only route to
+notifications on iPhone is hidden unless `/push/config` reported push enabled, so a
+keyless deployment does not promise what it cannot send. Nothing is offered at all once
+`display-mode: standalone` or `navigator.standalone` says the app is already installed.
 
 ### Web Push
 
@@ -293,7 +308,10 @@ one: the server builds the payload at job completion, when no browser is around 
 | `created_at` | Unix seconds |
 
 **Flow.** `initPushNotifications()` registers the worker when `/push/config` reports
-`enabled`. `maybeAskForPushPermission()` runs when a job is submitted — never on page load —
+`enabled` and the browser exposes the API. It reads `/push/config` *before* testing
+`pushSupported()`, deliberately: a Safari tab on iOS has no `Notification`, yet that is
+exactly where the install modal needs to know whether this deployment sends notifications
+at all. `maybeAskForPushPermission()` runs when a job is submitted — never on page load —
 and shows the opt-in modal unless the user already answered. Accepting subscribes and
 `POST`s to `/push/subscribe`; declining with "don't ask again" writes `never` to the
 `push_prompt` localStorage key. Once opted in, `refreshPushSubscription()` re-`POST`s the
@@ -341,6 +359,7 @@ opens `/?results=<id>`; both land in `openResultsById()`.
 - `recording-interface`, `recorded-audio-preview`, `recovered-recording` — recorder UI, the
   finished take, and the banner offering a recording restored from IndexedDB
 - `push-optin-modal`, `push-dont-ask-checkbox` — notification opt-in prompt
+- `install-btn`, `install-modal` — the install offer and its iOS-only instructions
 
 ### Key JS State Variables
 - `selectedFiles` — array of File objects pending upload

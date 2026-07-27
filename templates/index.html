@@ -93,6 +93,31 @@
         border-radius: 16px;
         padding: 1.5rem;
       }
+      /* Only revealed when the browser can actually install the app, so it has to
+         read as an offer rather than as one more header icon. */
+      .install-btn {
+        display: none;
+        flex: none;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.3rem 0.7rem;
+        font-family: inherit;
+        font-size: 0.85rem;
+        color: var(--primary-color);
+        background: none;
+        border: 1px solid var(--primary-color);
+        border-radius: 999px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .install-btn:hover {
+        background-color: var(--secondary-color);
+      }
+      .install-btn svg,
+      .install-btn i[data-lucide] {
+        width: 16px;
+        height: 16px;
+      }
       .icon-btn {
         flex: none;
         width: 36px;
@@ -2077,6 +2102,11 @@
         </div>
         {% endif %}
 
+        <button type="button" class="install-btn" id="install-btn">
+          <i data-lucide="download"></i>
+          <span data-i18n="installApp">התקנה</span>
+        </button>
+
         <div class="lang-menu" id="lang-menu">
           <div class="dropdown">
             <button class="icon-btn" id="lang-btn" title="שפה" aria-label="שפה">
@@ -2694,6 +2724,27 @@
         <div class="modal-buttons">
           <button type="button" class="btn btn-primary" id="push-optin-accept" data-i18n="pushPromptYes">כן, עדכנו אותי</button>
           <button type="button" class="btn btn-secondary" id="push-optin-decline" data-i18n="pushPromptNo">לא עכשיו</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Safari offers no install API, so on iPhone and iPad the app can only
+         describe the gesture the user has to make themselves. -->
+    <div id="install-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 data-i18n="installTitle">התקנת האפליקציה</h2>
+          <button class="close" id="close-install">&times;</button>
+        </div>
+        <div class="form-group">
+          <p style="margin-bottom: 1rem;" data-i18n="installWhy">האפליקציה תיפתח ממסך הבית כמו כל אפליקציה אחרת.</p>
+          <!-- Hidden when this deployment has no push keys, so the modal never
+               promises a notification the server cannot send. -->
+          <p style="margin-bottom: 1rem;" id="install-why-notifications" data-i18n="installWhyNotifications">באייפון זו גם הדרך היחידה לקבל התראה כשהתמלול מוכן.</p>
+          <p style="margin: 0;" data-i18n="installStepsIos">פתחו את תפריט השיתוף בסרגל הכלים של Safari ובחרו ״הוספה למסך הבית״.</p>
+        </div>
+        <div class="modal-buttons">
+          <button type="button" class="btn btn-primary" id="install-done" data-i18n="installDone">הבנתי</button>
         </div>
       </div>
     </div>
@@ -9076,6 +9127,66 @@
 
       restoreUnsentRecording().catch((err) => console.warn('Failed to restore stored recording', err))
 
+      // ---- Install as an app ----
+
+      let deferredInstallPrompt = null
+
+      function appIsInstalled() {
+        return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true
+      }
+
+      // Safari fires no beforeinstallprompt and exposes no install API, so iOS is
+      // the one case where the button has to explain instead of doing. navigator
+      // .standalone is defined only by WebKit on iOS, which covers every browser
+      // there, including the ones wearing a Chrome or Firefox badge.
+      function needsManualInstall() {
+        return 'standalone' in navigator
+      }
+
+      function setInstallButtonVisible(visible) {
+        document.getElementById('install-btn').style.display = visible ? 'inline-flex' : 'none'
+      }
+
+      window.addEventListener('beforeinstallprompt', (event) => {
+        // Suppress Chrome's own mini-infobar in favour of the header button.
+        event.preventDefault()
+        deferredInstallPrompt = event
+        setInstallButtonVisible(true)
+      })
+
+      window.addEventListener('appinstalled', () => {
+        deferredInstallPrompt = null
+        setInstallButtonVisible(false)
+        showToast(window.I18N.t('installed'), 'success')
+      })
+
+      document.getElementById('install-btn').addEventListener('click', () => {
+        if (!deferredInstallPrompt) {
+          // Only reachable on iOS: everywhere else the button is hidden the
+          // moment its prompt is spent, so a live button always has one.
+          const notifyLine = document.getElementById('install-why-notifications')
+          notifyLine.style.display = pushConfig.enabled ? '' : 'none'
+          document.getElementById('install-modal').classList.add('show')
+          return
+        }
+        const installPrompt = deferredInstallPrompt
+        // The event can only be prompted with once, so the button has nothing
+        // left to offer either way; the browser fires a fresh one on a later
+        // visit if the user declined.
+        deferredInstallPrompt = null
+        setInstallButtonVisible(false)
+        installPrompt.prompt()
+      })
+
+      document
+        .getElementById('close-install')
+        .addEventListener('click', () => document.getElementById('install-modal').classList.remove('show'))
+      document
+        .getElementById('install-done')
+        .addEventListener('click', () => document.getElementById('install-modal').classList.remove('show'))
+
+      if (!appIsInstalled() && needsManualInstall()) setInstallButtonVisible(true)
+
       // ---- Web Push: tell the user when a transcription finishes ----
 
       let pushConfig = { enabled: false, publicKey: null }
@@ -9224,12 +9335,14 @@
       }
 
       async function initPushNotifications() {
-        if (!pushSupported()) return
         try {
           const response = await fetch('/push/config')
           if (!response.ok) return
+          // Read even where push cannot work: a Safari tab on iOS is exactly
+          // where the install modal has to know whether this deployment sends
+          // notifications at all, and it is also where pushSupported() is false.
           pushConfig = await response.json()
-          if (!pushConfig.enabled || !pushConfig.publicKey) return
+          if (!pushSupported() || !pushConfig.enabled || !pushConfig.publicKey) return
 
           pushRegistration = await navigator.serviceWorker.register('/sw.js')
           navigator.serviceWorker.addEventListener('message', (event) => {
