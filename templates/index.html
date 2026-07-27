@@ -1253,6 +1253,11 @@
         background-color: #f6463a;
         transform: translateY(-1px);
       }
+      .recovered-recording-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
       .site-footer {
         margin-top: 2rem;
         font-size: 0.75rem;
@@ -2114,7 +2119,7 @@
     <main class="app-main">
       <!-- Transcribe Tab Content -->
       <div id="tab-transcribe" class="tab-content panel active">
-      
+
       <!-- Recording Interface -->
       <div id="recording-interface" style="display: none;">
         <div style="text-align: center; padding: 2rem;">
@@ -2127,6 +2132,24 @@
         </div>
       </div>
 
+      <!-- Everything that a capture in progress replaces. Hidden as one unit so a
+           live recording can never be disturbed by a stale control left behind. -->
+      <div id="transcribe-setup">
+
+      <!-- Recording recovered from a session that never completed -->
+      <div id="recovered-recording" style="display: none;">
+        <div style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem;">
+          <strong id="recovered-recording-title"></strong>
+          <div id="recovered-recording-meta" style="margin: 0.5rem 0;" dir="ltr"></div>
+          <p style="margin: 0.5rem 0 1rem;" data-i18n="recoveredRecordingHint">ההקלטה שמורה בדפדפן שלך. אפשר לתמלל אותה עכשיו, להוריד אותה למחשב, או למחוק אותה.</p>
+          <div class="recovered-recording-actions">
+            <button id="recovered-transcribe-btn" class="btn btn-primary" type="button" data-i18n="transcribeRecording">תמלל הקלטה</button>
+            <button id="recovered-download-btn" class="btn btn-secondary" type="button" data-i18n="downloadRecording">הורד הקלטה</button>
+            <button id="recovered-discard-btn" class="btn btn-secondary" type="button" data-i18n="discardRecording">מחק הקלטה</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Recorded Audio Preview -->
       <div id="recorded-audio-preview" style="display: none;">
         <div style="background: var(--secondary-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem;">
@@ -2134,6 +2157,12 @@
             <i data-lucide="mic" style="width: 48px; height: 48px; color: var(--primary-color);"></i>
           </div>
           <audio id="recorded-audio-player" controls style="width: 100%;"></audio>
+          <div style="text-align: center; margin-top: 1rem;">
+            <button id="download-recording-btn" class="btn btn-secondary" type="button">
+              <i data-lucide="download" style="width: 16px; height: 16px; margin-left: 0.5rem;"></i>
+              <span data-i18n="downloadRecording">הורד הקלטה</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2238,6 +2267,8 @@
         <div id="progress-bar"></div>
       </div>
       <div id="progress-status" aria-live="polite"></div>
+      </div>
+      <!-- End transcribe-setup -->
       </div>
       <!-- End Transcribe Tab -->
 
@@ -3058,30 +3089,30 @@
         document.getElementById("file-name").style.display = "block"
         document.getElementById("file-name").textContent = ""
         fileInput.value = ""
-        
-        // Hide recorded audio preview if it's showing
-        const recordedAudioPreview = document.getElementById('recorded-audio-preview')
-        const recordedAudioPlayer = document.getElementById('recorded-audio-player')
-        if (recordedAudioPreview && recordedAudioPreview.style.display !== 'none') {
-          recordedAudioPreview.style.display = 'none'
-          if (recordedAudioPlayer && recordedAudioPlayer.src) {
-            URL.revokeObjectURL(recordedAudioPlayer.src)
-            recordedAudioPlayer.src = ''
-          }
-          // Clear recording data
-          if (typeof recordedBlob !== 'undefined') {
-            recordedBlob = null
-          }
-          if (typeof audioChunks !== 'undefined') {
-            audioChunks = []
-          }
-          const recordingTimer = document.getElementById('recording-timer')
-          if (recordingTimer) {
-            recordingTimer.textContent = '00:00'
-          }
-        }
-        
+
+        clearRecordingState()
+
         showToast(window.I18N.t('fileRemovedSuccess'), "success")
+      }
+
+      // Drops the recording and its browser-side backup. Only call this once the
+      // recording has been accepted for transcription or the user discarded it —
+      // until then the backup is the only copy the user has.
+      function clearRecordingState() {
+        recordedAudioPreview.style.display = 'none'
+        if (recordedAudioPlayer.src) {
+          URL.revokeObjectURL(recordedAudioPlayer.src)
+          recordedAudioPlayer.src = ''
+        }
+        recordedBlob = null
+        recordedFileName = null
+        if (recordedRecordingId) {
+          deleteRecording(recordedRecordingId).catch((err) => {
+            console.warn('Failed to delete stored recording', err)
+          })
+          recordedRecordingId = null
+        }
+        recordingTimer.textContent = '00:00'
       }
 
       function formatFileSize(bytes) {
@@ -4239,14 +4270,11 @@
         selectedFiles = merged
         transcribeBtn.disabled = false
 
+        renderSelectionSummary()
         if (merged.length === 1) {
-          showFilePreview(merged[0])
-          showToast((window.I18N ? window.I18N.t('fileSelectedSuccess') : "קובץ נבחר בהצלחה"), "success")
+          showToast(window.I18N.t('fileSelectedSuccess'), "success")
         } else {
-          document.getElementById("file-preview").classList.remove("show")
-          document.getElementById("file-name").style.display = "block"
-          document.getElementById("file-name").textContent = (window.I18N ? window.I18N.t('filesSelectedCount', { count: selectedFiles.length }) : `${selectedFiles.length} קבצים נבחרו`)
-          showToast((window.I18N ? window.I18N.t('filesSelectedSuccess', { count: selectedFiles.length }) : `${selectedFiles.length} קבצים נבחרו בהצלחה`), "success")
+          showToast(window.I18N.t('filesSelectedSuccess', { count: selectedFiles.length }), "success")
         }
       }
 
@@ -4324,7 +4352,7 @@
           })
 
           try {
-            await sendStreamingUpload({
+            const uploadResult = await sendStreamingUpload({
               formData,
               onUploadProgress: (event) => {
                 if (!progressBar || !event.lengthComputable) return
@@ -4344,6 +4372,12 @@
               },
             })
             successCount++
+            // Only transcoding_complete proves the server owns the audio; a
+            // truncated stream also resolves, and must not cost us the backup.
+            if (uploadResult.type === 'transcoding_complete' &&
+                recordedFileName && file.name === recordedFileName) {
+              clearRecordingState()
+            }
             // Remove uploaded file from selectedFiles
             const idx = selectedFiles.indexOf(file)
             if (idx !== -1) selectedFiles.splice(idx, 1)
@@ -4355,7 +4389,12 @@
           }
         }
 
-        resetUploadState()
+        // Anything still selected was never accepted, so keep it for a retry.
+        if (selectedFiles.length === 0) {
+          resetUploadState()
+        } else {
+          resetUploadProgressOnly()
+        }
         activeTranscription = false
         checkBalance()
         if (successCount > 0) {
@@ -4787,6 +4826,26 @@
         hideProgressUI()
       }
 
+      // Used when a batch failed. The selection is deliberately kept so that a
+      // transient rejection is one click to retry, instead of making the user pick
+      // the file again — or, for a recording, lose it outright.
+      function resetUploadProgressOnly() {
+        transcribeBtn.disabled = false
+        renderSelectionSummary()
+        hideProgressUI()
+      }
+
+      function renderSelectionSummary() {
+        if (selectedFiles.length === 1) {
+          showFilePreview(selectedFiles[0])
+          return
+        }
+        document.getElementById("file-preview").classList.remove("show")
+        const fileNameElement = document.getElementById("file-name")
+        fileNameElement.style.display = "block"
+        fileNameElement.textContent = window.I18N.t('filesSelectedCount', { count: selectedFiles.length })
+      }
+
       function resetAllState() {
         transcribeBtn.disabled = false
         selectedFiles = []
@@ -4818,7 +4877,7 @@
       }
 
       window.addEventListener("beforeunload", function (e) {
-        if (activeTranscription) {
+        if (activeTranscription || recordingSession) {
           // Show confirmation dialog
           e.preventDefault()
           e.returnValue = window.I18N.t('exitWarning')
@@ -8035,6 +8094,12 @@
       let recordingStartTime = null
       let recordingTimerInterval = null
       let recordedBlob = null
+      let recordedFileName = null
+      let recordedRecordingId = null
+      let recordingSession = null
+      let recordingSeq = 0
+      let recordingFlushTimer = null
+      let recordingPersistenceFailed = false
 
       const recordMenuBtn = document.getElementById('record-menu-btn')
       const recordDropdown = document.querySelector('.record-dropdown')
@@ -8044,11 +8109,292 @@
       const recordScreenOnlyBtn = document.getElementById('record-screen-only-btn')
       const stopRecordingBtn = document.getElementById('stop-recording-btn')
       const recordingInterface = document.getElementById('recording-interface')
+      const transcribeSetup = document.getElementById('transcribe-setup')
       const recordedAudioPreview = document.getElementById('recorded-audio-preview')
       const recordedAudioPlayer = document.getElementById('recorded-audio-player')
       const waveformCanvas = document.getElementById('waveform-canvas')
       const recordingTimer = document.getElementById('recording-timer')
       
+      // ---------- Recording persistence ----------
+      // A recording is written to IndexedDB while it is still being captured, so it
+      // outlives a rejected job, a reload, or a browser crash. Chunks are appended
+      // and never rewritten, so a torn write costs at most one flush interval
+      // rather than the whole recording.
+
+      const RECORDING_DB_NAME = 'ivrit-recordings'
+      const RECORDING_FLUSH_MS = 5000
+      const RECORDING_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+      // A live recorder flushes every RECORDING_FLUSH_MS, so anything quiet for
+      // longer than this is not being written to by a recorder in another tab.
+      const RECORDING_STALE_MS = 15000
+
+      let recordingDbPromise = null
+      let recordingFlushChain = Promise.resolve()
+
+      function openRecordingDb() {
+        if (!recordingDbPromise) {
+          recordingDbPromise = new Promise((resolve, reject) => {
+            const request = indexedDB.open(RECORDING_DB_NAME, 1)
+            request.onupgradeneeded = () => {
+              const db = request.result
+              if (!db.objectStoreNames.contains('recordings')) {
+                db.createObjectStore('recordings', { keyPath: 'id' })
+              }
+              if (!db.objectStoreNames.contains('chunks')) {
+                db.createObjectStore('chunks', { keyPath: ['recordingId', 'seq'] })
+              }
+            }
+            request.onsuccess = () => resolve(request.result)
+            request.onerror = () => reject(request.error)
+            request.onblocked = () => reject(new Error('IndexedDB upgrade blocked'))
+          })
+        }
+        return recordingDbPromise
+      }
+
+      function idbRequest(request) {
+        return new Promise((resolve, reject) => {
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        })
+      }
+
+      function idbDone(tx) {
+        return new Promise((resolve, reject) => {
+          tx.oncomplete = () => resolve()
+          tx.onerror = () => reject(tx.error)
+          tx.onabort = () => reject(tx.error)
+        })
+      }
+
+      function chunkRange(recordingId) {
+        return IDBKeyRange.bound([recordingId, 0], [recordingId, Infinity])
+      }
+
+      async function saveRecordingMeta(meta) {
+        const db = await openRecordingDb()
+        const tx = db.transaction('recordings', 'readwrite')
+        tx.objectStore('recordings').put(meta)
+        await idbDone(tx)
+      }
+
+      // The chunk and the lastFlushAt bump share one transaction, so metadata can
+      // never claim data that did not land.
+      async function appendRecordingChunk(meta, seq, blob) {
+        const db = await openRecordingDb()
+        const tx = db.transaction(['chunks', 'recordings'], 'readwrite')
+        tx.objectStore('chunks').put({ recordingId: meta.id, seq, blob })
+        tx.objectStore('recordings').put(meta)
+        await idbDone(tx)
+      }
+
+      async function assembleRecordingParts(recordingId) {
+        const db = await openRecordingDb()
+        const tx = db.transaction('chunks', 'readonly')
+        const rows = await idbRequest(tx.objectStore('chunks').getAll(chunkRange(recordingId)))
+        return rows.map((row) => row.blob)
+      }
+
+      async function assembleRecording(recordingId, mimeType) {
+        return new Blob(await assembleRecordingParts(recordingId), { type: mimeType })
+      }
+
+      async function deleteRecording(recordingId) {
+        const db = await openRecordingDb()
+        const tx = db.transaction(['chunks', 'recordings'], 'readwrite')
+        tx.objectStore('chunks').delete(chunkRange(recordingId))
+        tx.objectStore('recordings').delete(recordingId)
+        await idbDone(tx)
+      }
+
+      async function listRecordings() {
+        const db = await openRecordingDb()
+        const tx = db.transaction('recordings', 'readonly')
+        return idbRequest(tx.objectStore('recordings').getAll())
+      }
+
+      // Losing durability must never abort a capture in progress: fall back to
+      // accumulating in memory, which is what the recorder did before.
+      function handleRecordingPersistenceFailure(err) {
+        if (recordingPersistenceFailed) return
+        recordingPersistenceFailed = true
+        console.warn('Recording persistence unavailable; keeping recording in memory only', err)
+        showToast(window.I18N.t('recordingNotBackedUp'), 'error')
+      }
+
+      // Serialized, so the interval firing during a slow write cannot reorder seq
+      // or interleave with the final flush that onstop awaits.
+      function flushRecordingChunks() {
+        recordingFlushChain = recordingFlushChain.then(writePendingChunk)
+        return recordingFlushChain
+      }
+
+      async function writePendingChunk() {
+        if (recordingPersistenceFailed || !recordingSession || audioChunks.length === 0) return
+        const batch = audioChunks
+        audioChunks = []
+        const seq = recordingSeq++
+        recordingSession.lastFlushAt = Date.now()
+        try {
+          await appendRecordingChunk(recordingSession, seq, new Blob(batch, { type: recordingSession.mimeType }))
+        } catch (err) {
+          audioChunks = batch.concat(audioChunks)
+          recordingSeq = seq
+          handleRecordingPersistenceFailure(err)
+        }
+      }
+
+      function stopRecordingStreams() {
+        if (recordingStream) {
+          if (recordingStream._originalStreams) {
+            recordingStream._originalStreams.forEach((stream) => {
+              stream.getTracks().forEach((track) => track.stop())
+            })
+          }
+          recordingStream.getTracks().forEach((track) => track.stop())
+          recordingStream = null
+        }
+        if (audioContext) {
+          audioContext.close()
+          audioContext = null
+        }
+      }
+
+      // Shared by all three capture modes; the caller only has to assign
+      // recordingStream (and _originalStreams when it mixed several sources).
+      async function beginRecording() {
+        const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? { mimeType: 'audio/webm;codecs=opus' }
+          : { mimeType: 'audio/webm' }
+
+        mediaRecorder = new MediaRecorder(recordingStream, options)
+        audioChunks = []
+        recordingSeq = 0
+        recordingPersistenceFailed = false
+        // recordedFileName stays owned by finishRecording: until this take is the
+        // selected one, it must keep naming whichever take actually is.
+        recordingSession = {
+          id: (window.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : `rec-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          filename: `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`,
+          mimeType: 'audio/webm',
+          startedAt: Date.now(),
+          lastFlushAt: Date.now(),
+          status: 'recording',
+        }
+
+        if (navigator.storage && navigator.storage.persist) {
+          navigator.storage.persist().catch(() => {})
+        }
+
+        try {
+          await saveRecordingMeta(recordingSession)
+        } catch (err) {
+          handleRecordingPersistenceFailure(err)
+        }
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) audioChunks.push(event.data)
+        }
+
+        mediaRecorder.onstop = async () => {
+          clearInterval(recordingFlushTimer)
+          recordingFlushTimer = null
+          stopRecordingStreams()
+          await flushRecordingChunks()
+
+          const session = recordingSession
+          recordingSession = null
+
+          if (!recordingPersistenceFailed) {
+            session.status = 'complete'
+            await saveRecordingMeta(session).catch(handleRecordingPersistenceFailure)
+          }
+
+          // Chunks 0..recordingSeq-1 are in IndexedDB and audioChunks holds only
+          // what a persistence failure left behind, so the two concatenated are
+          // the whole recording. Reassembling from IndexedDB is therefore the
+          // normal path, and the recovery path gets exercised on every recording
+          // rather than only after a crash.
+          let stored = []
+          if (recordingSeq > 0) {
+            try {
+              stored = await assembleRecordingParts(session.id)
+            } catch (err) {
+              // The audio is safe in IndexedDB but unreadable right now. Handing
+              // back an empty take would let a "successful" upload delete the only
+              // good copy, so bail and let the recovery banner offer it instead.
+              console.warn('Failed to read back stored recording', err)
+              audioChunks = []
+              recordingInterface.style.display = 'none'
+              transcribeSetup.style.display = ''
+              showToast(window.I18N.t('recordingReadFailed'), 'error')
+              return
+            }
+          }
+
+          const blob = new Blob(stored.concat(audioChunks), { type: session.mimeType })
+          audioChunks = []
+          finishRecording(blob, session.filename, session.id)
+        }
+
+        recordingFlushTimer = setInterval(flushRecordingChunks, RECORDING_FLUSH_MS)
+        mediaRecorder.start(100)
+        recordingStartTime = Date.now()
+
+        transcribeSetup.style.display = 'none'
+        recordingInterface.style.display = 'block'
+        drawWaveform()
+        startRecordingTimer()
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons()
+        }
+      }
+
+      function finishRecording(blob, fileName, recordingId) {
+        // This take supersedes whatever was selected, so its backup goes too —
+        // otherwise every abandoned retake sits in storage until the 7-day sweep,
+        // unreachable but still counting against the next recording's quota.
+        if (recordedRecordingId && recordedRecordingId !== recordingId) {
+          deleteRecording(recordedRecordingId).catch((err) => {
+            console.warn('Failed to delete superseded recording', err)
+          })
+        }
+        recordedBlob = blob
+        recordedFileName = fileName
+        recordedRecordingId = recordingId
+
+        if (recordedAudioPlayer.src) URL.revokeObjectURL(recordedAudioPlayer.src)
+        recordedAudioPlayer.src = URL.createObjectURL(recordedBlob)
+
+        const file = new File([recordedBlob], fileName, { type: blob.type || 'audio/webm' })
+        selectedFiles = [file]
+        transcribeBtn.disabled = false
+        showFilePreview(file)
+        // Transcribe gives a filled YouTube box precedence over the selection.
+        // The input only exists in local mode.
+        const ytInput = document.getElementById('youtube-url-input')
+        if (ytInput) ytInput.value = ''
+
+        recordingInterface.style.display = 'none'
+        transcribeSetup.style.display = ''
+        recordedAudioPreview.style.display = 'block'
+        document.getElementById('recovered-recording').style.display = 'none'
+        switchInputMethod('upload')
+
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons()
+        }
+        showToast(window.I18N.t('recordingReadyToTranscribe'), 'success')
+      }
+
+      document.getElementById('download-recording-btn').addEventListener('click', () => {
+        if (!recordedBlob) return
+        triggerDownload(recordedBlob, recordedFileName)
+        showToast(window.I18N.t('recordingDownloaded'), 'success')
+      })
+
       // Toggle dropdown menu
       recordMenuBtn.addEventListener('click', (e) => {
         e.stopPropagation()
@@ -8089,77 +8435,7 @@
           analyser.smoothingTimeConstant = 0.8
           source.connect(analyser)
 
-          // Create MediaRecorder with opus codec if available
-          const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-            ? { mimeType: 'audio/webm;codecs=opus' }
-            : { mimeType: 'audio/webm' }
-          
-          mediaRecorder = new MediaRecorder(recordingStream, options)
-          audioChunks = []
-
-          mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-              audioChunks.push(event.data)
-            }
-          }
-
-          mediaRecorder.onstop = () => {
-            recordedBlob = new Blob(audioChunks, { type: 'audio/webm' })
-            const audioUrl = URL.createObjectURL(recordedBlob)
-            recordedAudioPlayer.src = audioUrl
-            
-            // Stop all tracks
-            if (recordingStream) {
-              recordingStream.getTracks().forEach(track => track.stop())
-              recordingStream = null
-            }
-
-            // Stop audio context
-            if (audioContext) {
-              audioContext.close()
-              audioContext = null
-            }
-
-            // Convert blob to file and add to file list
-            const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
-            const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
-            
-            selectedFiles = [file]
-            transcribeBtn.disabled = false
-
-            // Show file preview
-            showFilePreview(file)
-
-            // Show both player and normal UI
-            recordingInterface.style.display = 'none'
-            recordedAudioPreview.style.display = 'block'
-            document.getElementById('input-method-container').style.display = ''
-            switchInputMethod('upload')
-
-            // Refresh icons
-            if (window.lucide && typeof window.lucide.createIcons === 'function') {
-              window.lucide.createIcons()
-            }
-
-            showToast((window.I18N ? window.I18N.t('recordingReadyToTranscribe') : 'ההקלטה מוכנה לתמלול. לחץ על "תמלל" להמשך.'), 'success')
-          }
-
-          // Start recording
-          mediaRecorder.start(100) // Collect data every 100ms
-          recordingStartTime = Date.now()
-
-          // Show recording interface
-          document.getElementById('input-method-container').style.display = 'none'
-          recordingInterface.style.display = 'block'
-
-          // Start visualization and timer
-          drawWaveform()
-          startRecordingTimer()
-
-          // Refresh icons
-          if (window.lucide && typeof window.lucide.createIcons === 'function') {
-            window.lucide.createIcons()
-          }
+          await beginRecording()
 
         } catch (error) {
           console.error('Error accessing microphone:', error)
@@ -8210,77 +8486,7 @@
           // Use the system stream for recording
           recordingStream = systemStream
 
-          // Create MediaRecorder with opus codec if available
-          const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-            ? { mimeType: 'audio/webm;codecs=opus' }
-            : { mimeType: 'audio/webm' }
-          
-          mediaRecorder = new MediaRecorder(recordingStream, options)
-          audioChunks = []
-
-          mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-              audioChunks.push(event.data)
-            }
-          }
-
-          mediaRecorder.onstop = () => {
-            recordedBlob = new Blob(audioChunks, { type: 'audio/webm' })
-            const audioUrl = URL.createObjectURL(recordedBlob)
-            recordedAudioPlayer.src = audioUrl
-            
-            // Stop all tracks
-            if (recordingStream) {
-              recordingStream.getTracks().forEach(track => track.stop())
-              recordingStream = null
-            }
-
-            // Stop audio context
-            if (audioContext) {
-              audioContext.close()
-              audioContext = null
-            }
-
-            // Convert blob to file and add to file list
-            const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
-            const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
-            
-            selectedFiles = [file]
-            transcribeBtn.disabled = false
-
-            // Show file preview
-            showFilePreview(file)
-
-            // Show both player and normal UI
-            recordingInterface.style.display = 'none'
-            recordedAudioPreview.style.display = 'block'
-            document.getElementById('input-method-container').style.display = ''
-            switchInputMethod('upload')
-
-            // Refresh icons
-            if (window.lucide && typeof window.lucide.createIcons === 'function') {
-              window.lucide.createIcons()
-            }
-
-            showToast((window.I18N ? window.I18N.t('recordingReadyToTranscribe') : 'ההקלטה מוכנה לתמלול. לחץ על "תמלל" להמשך.'), 'success')
-          }
-
-          // Start recording
-          mediaRecorder.start(100)
-          recordingStartTime = Date.now()
-
-          // Show recording interface
-          document.getElementById('input-method-container').style.display = 'none'
-          recordingInterface.style.display = 'block'
-
-          // Start visualization and timer
-          drawWaveform()
-          startRecordingTimer()
-
-          // Refresh icons
-          if (window.lucide && typeof window.lucide.createIcons === 'function') {
-            window.lucide.createIcons()
-          }
+          await beginRecording()
 
         } catch (error) {
           console.error('Error accessing screen audio:', error)
@@ -8364,84 +8570,7 @@
             recordingStream._originalStreams.push(systemStream)
           }
 
-          // Create MediaRecorder with opus codec if available
-          const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-            ? { mimeType: 'audio/webm;codecs=opus' }
-            : { mimeType: 'audio/webm' }
-          
-          mediaRecorder = new MediaRecorder(recordingStream, options)
-          audioChunks = []
-
-          mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-              audioChunks.push(event.data)
-            }
-          }
-
-          mediaRecorder.onstop = () => {
-            recordedBlob = new Blob(audioChunks, { type: 'audio/webm' })
-            const audioUrl = URL.createObjectURL(recordedBlob)
-            recordedAudioPlayer.src = audioUrl
-            
-            // Stop all tracks from original streams
-            if (recordingStream && recordingStream._originalStreams) {
-              recordingStream._originalStreams.forEach(stream => {
-                stream.getTracks().forEach(track => track.stop())
-              })
-            }
-            
-            // Stop destination stream tracks
-            if (recordingStream) {
-              recordingStream.getTracks().forEach(track => track.stop())
-              recordingStream = null
-            }
-
-            // Stop audio context
-            if (audioContext) {
-              audioContext.close()
-              audioContext = null
-            }
-
-            // Convert blob to file and add to file list
-            const fileName = `recording_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`
-            const file = new File([recordedBlob], fileName, { type: 'audio/webm' })
-            
-            selectedFiles = [file]
-            transcribeBtn.disabled = false
-
-            // Show file preview
-            showFilePreview(file)
-
-            // Show both player and normal UI
-            recordingInterface.style.display = 'none'
-            recordedAudioPreview.style.display = 'block'
-            document.getElementById('input-method-container').style.display = ''
-            switchInputMethod('upload')
-
-            // Refresh icons
-            if (window.lucide && typeof window.lucide.createIcons === 'function') {
-              window.lucide.createIcons()
-            }
-
-            showToast((window.I18N ? window.I18N.t('recordingReadyToTranscribe') : 'ההקלטה מוכנה לתמלול. לחץ על "תמלל" להמשך.'), 'success')
-          }
-
-          // Start recording
-          mediaRecorder.start(100) // Collect data every 100ms
-          recordingStartTime = Date.now()
-
-          // Show recording interface
-          document.getElementById('input-method-container').style.display = 'none'
-          recordingInterface.style.display = 'block'
-
-          // Start visualization and timer
-          drawWaveform()
-          startRecordingTimer()
-
-          // Refresh icons
-          if (window.lucide && typeof window.lucide.createIcons === 'function') {
-            window.lucide.createIcons()
-          }
+          await beginRecording()
 
         } catch (error) {
           console.error('Error accessing audio:', error)
@@ -8859,6 +8988,64 @@
           stopStatsAutoRefresh()
         }
       }
+
+      function showRecoveredRecording(entry, blob) {
+        const banner = document.getElementById('recovered-recording')
+        const title = document.getElementById('recovered-recording-title')
+        const titleKey = entry.status === 'complete' ? 'recoveredRecordingFound' : 'recoveredRecordingInterrupted'
+        title.setAttribute('data-i18n', titleKey)
+        title.textContent = window.I18N.t(titleKey)
+        document.getElementById('recovered-recording-meta').textContent =
+          `${new Date(entry.startedAt).toLocaleString()} · ${formatFileSize(blob.size)}`
+
+        document.getElementById('recovered-transcribe-btn').onclick = () => {
+          banner.style.display = 'none'
+          finishRecording(blob, entry.filename, entry.id)
+        }
+        document.getElementById('recovered-download-btn').onclick = () => {
+          triggerDownload(blob, entry.filename)
+          showToast(window.I18N.t('recordingDownloaded'), 'success')
+        }
+        document.getElementById('recovered-discard-btn').onclick = () => {
+          banner.style.display = 'none'
+          deleteRecording(entry.id).catch((err) => console.warn('Failed to discard stored recording', err))
+          showToast(window.I18N.t('recordingDiscarded'), 'success')
+        }
+
+        banner.style.display = 'block'
+      }
+
+      async function restoreUnsentRecording() {
+        let entries
+        try {
+          entries = await listRecordings()
+        } catch (err) {
+          console.warn('Recording store unavailable', err)
+          return
+        }
+
+        const now = Date.now()
+        let candidate = null
+        for (const entry of entries) {
+          if (now - entry.startedAt > RECORDING_RETENTION_MS) {
+            await deleteRecording(entry.id).catch((err) => console.warn('Failed to sweep stored recording', err))
+          } else if (entry.status === 'complete' || now - entry.lastFlushAt > RECORDING_STALE_MS) {
+            // A recorder live in another tab flushes every 5s, so a stale entry is
+            // nobody's. A completed one provably has no recorder behind it at all.
+            if (!candidate || entry.startedAt > candidate.startedAt) candidate = entry
+          }
+        }
+        if (!candidate) return
+
+        const blob = await assembleRecording(candidate.id, candidate.mimeType)
+        if (blob.size === 0) {
+          await deleteRecording(candidate.id)
+          return
+        }
+        showRecoveredRecording(candidate, blob)
+      }
+
+      restoreUnsentRecording().catch((err) => console.warn('Failed to restore stored recording', err))
     </script>
   </body>
 </html>

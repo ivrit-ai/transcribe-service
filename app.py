@@ -3330,6 +3330,9 @@ async def validate_upload_request_metadata(
     # Count active transcoding jobs (queued + running)
     transcoding_count = 0
     async with transcoding_lock:
+        queued_depth = transcoding_queue.qsize()
+        running_depth = len(transcoding_running_jobs)
+        queue_is_full = transcoding_queue.full()
         for queued_job in list(transcoding_queue.queue):
             if queued_job.user_email == user_email:
                 transcoding_count += 1
@@ -3340,6 +3343,17 @@ async def validate_upload_request_metadata(
     total_active = active_job_count + transcoding_count
     if total_active >= user_batch_limit:
         return None, JSONResponse({"error": "errorBatchLimitReached", "i18n_key": "errorBatchLimitReached"}, status_code=400)
+
+    # Reached from /upload/precheck too, so the client learns the server is busy
+    # before streaming the file body. The check at enqueue time remains
+    # authoritative for whoever loses the race.
+    if queue_is_full:
+        log_message(
+            f"{user_email}: ERROR - Transcoding queue full at validation "
+            f"(queued={queued_depth}/{MAX_TRANSCODING_QUEUED_JOBS}, "
+            f"running={running_depth}/{MAX_PARALLEL_TRANSCODES})"
+        )
+        return None, JSONResponse({"error": "errorServerBusy", "i18n_key": "errorServerBusy"}, status_code=503)
 
     if save_audio is None:
         return None, JSONResponse({"error": "errorMissingSaveAudio", "i18n_key": "errorMissingSaveAudio"}, status_code=400)

@@ -251,6 +251,10 @@ require.
 - `transcribe-btn`, `language-select` — transcription controls
 - `progress-bar`, `progress-status`, `progress-container` — upload/transcoding progress
 - `file-preview`, `file-name` — selected file display
+- `transcribe-setup` — wraps everything in the transcribe tab that a live capture replaces;
+  new controls in that tab belong **inside** it, or they stay clickable mid-recording
+- `recording-interface`, `recorded-audio-preview`, `recovered-recording` — recorder UI, the
+  finished take, and the banner offering a recording restored from IndexedDB
 
 ### Key JS State Variables
 - `selectedFiles` — array of File objects pending upload
@@ -266,13 +270,54 @@ require.
 - `uploadYoutubeUrl(url)` — fetch POST to `/upload/youtube` with NDJSON streaming
 - `showProgressUI()` / `hideProgressUI()` — toggle progress bar visibility
 - `setProgressStatusText(key, vars)` — update progress status with i18n
-- `resetUploadState()` — clear all upload-related UI state
+- `resetUploadState()` — clear all upload-related UI state; the batch-upload path calls it
+  only when nothing is left selected
+- `resetUploadProgressOnly()` — hide progress UI but keep `selectedFiles`, so a rejected
+  batch is one click away from a retry
+- `beginRecording()` / `finishRecording()` — shared recorder entry/exit for all capture modes
+- `restoreUnsentRecording()` — startup recovery + retention sweep of the IndexedDB store
 - `showError()`, `showToast()` — user notifications
 - `switchTab(tabName)` — navigate between tabs (wrapped later in the file to lazy-load
   the stats tab, so always call it by name rather than capturing a reference)
 - `updateThemeChrome(theme)` — swaps the sun/moon icon and the `theme-color` meta
 - `translateServerError(err)` — convert server error objects to i18n strings
 - `checkBalance()` — refresh quota display
+
+### Browser Recording Store (IndexedDB)
+
+In-browser recordings survive tab crashes and rejected jobs; their lifetime is deliberately
+independent of the transcription job's fate.
+
+- Database `ivrit-recordings`, two stores: `recordings` (keyPath `id`, holds
+  `{filename, mimeType, startedAt, lastFlushAt, status}`) and `chunks`
+  (compound keyPath `[recordingId, seq]`).
+- `chunks` is append-only (`recordings` holds one mutable row per session). Flushes are
+  serialized on a promise chain; every `RECORDING_FLUSH_MS` (5s) the pending `MediaRecorder`
+  blobs are concatenated into one `chunks` record and `audioChunks` is **cleared**, so the
+  heap stays flat and the normal stop path reassembles via `assembleRecordingParts()` — the
+  same read the crash-recovery path makes through `assembleRecording()`. `audioChunks`
+  therefore holds only the tail a failed flush left behind, and stored parts + that tail
+  are the whole recording.
+- All three capture modes (mic, screen, mic+screen) share `beginRecording()` /
+  `finishRecording()`; they differ only in how they acquire the `MediaStream`.
+  Everything a capture replaces lives in `#transcribe-setup`, hidden as one unit, so no
+  stale control can act on a live recording.
+- **Retention:** an entry is deleted when the upload yields a `transcoding_complete` event,
+  when a retake supersedes it, when the user removes the file or discards the banner, or
+  when it is swept after `RECORDING_RETENTION_MS` (7 days) on page load. Note
+  `sendStreamingUpload()` also resolves
+  on a *truncated* stream, which deliberately does **not** delete. Every rejection path —
+  including a late transcription-queue rejection, which arrives as a stream `error` — leaves
+  the recording intact.
+- **Recovery:** `restoreUnsentRecording()` runs at startup and offers the newest entry in the
+  `#recovered-recording` banner, skipping `status: 'recording'` entries whose `lastFlushAt` is
+  newer than `RECORDING_STALE_MS` (15s). That threshold is what keeps one tab from hijacking
+  another tab's live recording; a `'complete'` entry has no recorder behind it and is always
+  eligible.
+- **Degradation:** if IndexedDB is unavailable (private browsing) or a flush hits
+  `QuotaExceededError`, `recordingPersistenceFailed` is set, the recorder falls back to
+  accumulating in memory, and the user is toasted once. A recording is never aborted because
+  persistence failed.
 
 ### Upload Pipeline
 - **Client:** precheck → XHR POST `/upload` → NDJSON streaming events
