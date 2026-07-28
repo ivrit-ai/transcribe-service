@@ -97,7 +97,10 @@ self.addEventListener('push', (event) => {
     self.registration.showNotification(interpolate(strings[ready ? 'readyTitle' : 'failedTitle'], vars), {
       body: interpolate(strings[ready ? 'readyBody' : 'failedBody'], vars),
       icon: '/static/favicon.png',
-      badge: '/static/favicon.png',
+      // Android masks the badge down to its alpha channel, and favicon.png is an
+      // opaque white square behind the glyph, so it came out a solid blob. badge.png
+      // is the same glyph as an alpha-only silhouette.
+      badge: '/static/badge.png',
       lang: lang,
       dir: RTL_LANGS.includes(lang) ? 'rtl' : 'ltr',
       // Re-notifying about the same job replaces the old notification rather

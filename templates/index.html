@@ -8,7 +8,8 @@
     <link rel="icon" href="{{ url_for('static', path='favicon.png') }}" />
     <link rel="apple-touch-icon" href="{{ url_for('static', path='favicon.png') }}" />
     <link rel="manifest" href="{{ url_for('static', path='manifest.webmanifest') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', path='theme.css') }}" />
+    <!-- ?v= — see ARCHITECTURE.md, Static Asset Versioning -->
+    <link rel="stylesheet" href="{{ url_for('static', path='theme.css') }}?v={{ backend_version }}" />
     <title>תמלול בעזרת ivrit.ai</title>
     <script>
       // Before first paint, so an installed dark-mode app doesn't flash white.
@@ -2776,7 +2777,8 @@
     </div>
     {% endif %}
 
-    <script src="{{ url_for('static', path='i18n.js') }}"></script>
+    <!-- ?v= — see ARCHITECTURE.md, Static Asset Versioning -->
+    <script src="{{ url_for('static', path='i18n.js') }}?v={{ backend_version }}"></script>
 
     <!-- TipTap Editor Module -->
     <script type="module">

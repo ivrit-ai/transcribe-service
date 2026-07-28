@@ -327,6 +327,10 @@ async def lifespan(app: FastAPI):
 
     # Generate backend version identifier for cache busting
     backend_version = str(random.randint(100000000, 999999999))
+    # A global rather than a per-response context entry: every template that links
+    # theme.css or i18n.js needs it, and one that silently omits it serves a stale
+    # asset (see ARCHITECTURE.md, Static Asset Versioning).
+    templates.env.globals["backend_version"] = backend_version
     log_message(f"Backend version: {backend_version}")
 
     # Start background event loop

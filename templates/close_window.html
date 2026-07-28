@@ -2,7 +2,8 @@
 <html>
 <head>
     <title>Login Result</title>
-    <script src="/static/i18n.js"></script>
+    <!-- ?v= — see ARCHITECTURE.md, Static Asset Versioning -->
+    <script src="/static/i18n.js?v={{ backend_version }}"></script>
     <script>
     window.onload = function() {
         if ({{ success|tojson }}) {

@@ -93,6 +93,9 @@ static/
   theme.css               Colour tokens shared by index.html and login.html
   manifest.webmanifest    Web app manifest (PWA)
   favicon.png             App icon
+  badge.png               Notification badge: the app glyph as an alpha-only
+                          silhouette, because Android masks the badge to its
+                          alpha channel
 
 installers/osx/
   install-osx.sh          macOS installer script
@@ -225,6 +228,29 @@ These are compile-time constants in `app.py` that require a code change to tune:
 - **PostHog** - Analytics and event tracking
 
 ## Frontend Internals
+
+### Static Asset Versioning
+`theme.css` and `i18n.js` are linked with `?v={{ backend_version }}` — the random id
+regenerated at each startup and published as a Jinja **global**
+(`templates.env.globals["backend_version"]`, set in `lifespan`). It is a global rather
+than a per-response context entry because every template linking either asset needs it,
+and one that quietly omits it serves a stale copy — which is exactly how
+`close_window.html` was missed once already.
+
+This is not cosmetic. The templates are rendered per request and are always current,
+but `/static` is a Starlette `StaticFiles` mount, which sends `ETag` and
+`Last-Modified` and **no `Cache-Control`**. With no explicit freshness directive a
+browser caches heuristically and reuses the stored copy *without revalidating*, so the
+`ETag` never gets consulted. A fresh page then asks a stale `i18n.js` for keys it does
+not have, and `I18N.t()` falls back to `|| key` — the user sees key names like
+`fileSelected` until a hard refresh. Versioning the URL changes the cache key, so a
+restart makes a stale copy unreachable.
+
+Only these two are versioned: they are the assets the page reads as code. Images and
+`manifest.webmanifest` are deliberately left alone — a stale copy of those is harmless,
+and churning the manifest URL disturbs PWA installs. `server-down.html` links neither
+and needs nothing; `close_window.html` links `i18n.js` and translates a live key
+(`errorDrivePermissionsRequired`), so it is versioned too.
 
 ### App Shell
 The page is `header.app-header` → `main.app-main` → `footer.app-footer`, all direct
