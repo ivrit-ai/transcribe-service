@@ -48,6 +48,12 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 - Entirely optional: with the VAPID keys unset the feature is invisible and inert
 - See [Web Push](#web-push) for the mechanics
 
+### Sharing Files In
+- Installed, the app is a share target for audio and video: a file shared from any other app
+  arrives in the picker as if it had been chosen there
+- Not available on iOS, which does not implement Web Share Target
+- See [Web Share Target](#web-share-target) for the mechanics
+
 ### User Quota System
 - Token-bucket rate limiting with configurable weekly minute credits (default 420 min/week)
 - Daily credit replenishment
@@ -83,7 +89,7 @@ templates/
 
 static/
   i18n.js                 Internationalization string tables
-  sw.js                   Service worker (push notifications only; served from /sw.js)
+  sw.js                   Service worker (push notifications, share target; served from /sw.js)
   theme.css               Colour tokens shared by index.html and login.html
   manifest.webmanifest    Web app manifest (PWA)
   favicon.png             App icon
@@ -105,6 +111,7 @@ build_bundle.py           PyInstaller bundling script
 | Management | `POST /appdata/rename`, `POST /appdata/delete`, `POST /appdata/donate_data` |
 | Auth & Account | `GET /login`, `GET /authorize`, `GET /login/authorized`, `GET /quota`, `GET /balance` |
 | Push | `GET /sw.js` (unauthenticated), `GET /push/config`, `POST /push/subscribe` |
+| Share target | `POST /share-target` (unauthenticated fallback; the worker normally answers it) |
 | System | `GET /languages`, `POST /client_heartbeat`, `GET /stats` |
 
 ## Job Queue
@@ -258,8 +265,9 @@ children of a flex-column `body`. `.app-header` is sticky and holds the app bar
 `static/manifest.webmanifest` (standalone display, RTL/Hebrew, 512px icon) is linked
 from `<head>` alongside `theme-color`, `apple-touch-icon` and `viewport-fit=cover`.
 `updateThemeChrome()` rewrites the `theme-color` meta from `--container-bg` on every
-theme change. There is a service worker, but it exists only for push (see below) and
-handles no `fetch` events, so the app cannot be used offline. Chrome installs it anyway.
+theme change. There is a service worker (see [Web Push](#web-push) and
+[Web Share Target](#web-share-target)); it caches no page or asset, so the app cannot be
+used offline. Chrome installs it anyway.
 
 `#install-btn` is a labelled pill in the header, hidden until the browser proves the app
 can be installed: it is revealed when `beforeinstallprompt` fires (whose default banner is
@@ -288,9 +296,18 @@ receive the app's pushes. That route is deliberately **unauthenticated** —
 fails worker registration. The file contains no secrets, and nothing user-specific may ever
 be templated into it.
 
-The worker has **no `fetch` handler and caches nothing**, on purpose: the app already busts
-caches with a backend version identifier, and a caching worker would fight it. It handles
-`install` (`skipWaiting`), `activate` (`clients.claim`), `push` and `notificationclick`.
+It handles `install` (`skipWaiting`), `activate` (`clients.claim`), `push`,
+`notificationclick` and — solely for the share target — `fetch`.
+
+The worker **must never cache a page or an asset**. The app busts its own caches with a
+backend version identifier and a caching worker would fight it, so the `fetch` handler is
+held to a narrow rule, stated at the top of `sw.js`: respond only to `POST /share-target`,
+return without calling `respondWith()` for anything else, and touch no cache other than the
+share inbox. Never intercept a `GET`, never call `caches.match`, `cache.add` or
+`cache.addAll`.
+
+Registration lives in `serviceWorkerReady`, outside the push module, because the share
+target needs the worker in deployments that have no VAPID keys.
 
 **Where the text lives.** All notification copy is a table inside `sw.js`, not in `app.py`
 and not in `static/i18n.js` — the latter assigns to `window`, which does not exist in a
@@ -307,11 +324,13 @@ one: the server builds the payload at job completion, when no browser is around 
 | `lang` | UI language at subscribe time; refreshed on load, on language change, and on submit |
 | `created_at` | Unix seconds |
 
-**Flow.** `initPushNotifications()` registers the worker when `/push/config` reports
-`enabled` and the browser exposes the API. It reads `/push/config` *before* testing
-`pushSupported()`, deliberately: a Safari tab on iOS has no `Notification`, yet that is
-exactly where the install modal needs to know whether this deployment sends notifications
-at all. `maybeAskForPushPermission()` runs when a job is submitted — never on page load —
+**Flow.** `initPushNotifications()` awaits `serviceWorkerReady` and sets `pushReady` only
+once `/push/config` reports `enabled`, the browser exposes the API, and a registration
+exists. Everything downstream gates on that one flag: a worker now exists wherever service
+workers do, so a registration no longer implies push works — an iOS Safari tab has one and
+no `Notification` at all. It reads `/push/config` *before* testing `pushSupported()`,
+deliberately: that same iOS tab is exactly where the install modal needs to know whether
+this deployment sends notifications. `maybeAskForPushPermission()` runs when a job is submitted — never on page load —
 and shows the opt-in modal unless the user already answered. Accepting subscribes and
 `POST`s to `/push/subscribe`; declining with "don't ask again" writes `never` to the
 `push_prompt` localStorage key. Once opted in, `refreshPushSubscription()` re-`POST`s the
@@ -347,6 +366,43 @@ opens `/?results=<id>`; both land in `openResultsById()`.
   `Notification`/`PushManager` are undefined in a plain Safari tab, so nothing is offered.
 - Payloads are encrypted end to end, but the endpoint and the timing of each push are
   visible to Google/Apple, and the filename appears on the device's lock screen.
+
+### Web Share Target
+
+Installed, the app appears in the OS share sheet for audio and video, and a file shared
+into it lands exactly where the file picker lands.
+
+`share_target` in the manifest declares `POST` / `multipart/form-data` with a `media` field
+accepting `audio/*` and `video/*`. Its `action` is the absolute `/share-target`: the
+manifest is served from `/static/`, so a relative action would resolve to
+`/static/share-target` — in scope, but swallowed by the static mount rather than routed.
+
+The OS POSTs the files to that URL and the worker's `fetch` handler answers. It cannot hand
+them to the page directly — the page may not be running — so it writes each file into the
+`ivrit-share-inbox` cache under `/__shared__/<timestamp>-<index>`, keyed by arrival so a
+batch keeps its order and a second share does not overwrite the first. A `Response` carries
+no filename, so it travels in an `X-Share-Filename` header, percent-encoded because header
+values are latin-1 and these filenames are usually Hebrew. The worker then redirects to a
+bare `/`.
+
+The page calls `drainSharedFiles()` on every load, not off a redirect parameter: an expired
+session sends that redirect through `/login` and back, and a parameter would not survive the
+round trip. It empties the cache and passes the files to `handleFiles()`, which owns the
+size limits, the batch cap and the toasts — a shared file is treated exactly like a picked
+one.
+
+`POST /share-target` also exists as a FastAPI route. It is only reached when no worker
+intercepted the POST, in which case the file cannot be recovered and the best available
+outcome is landing the user in the app rather than on a 405. It is unauthenticated for the
+same reason `/sw.js` is.
+
+The Cache API is used rather than the `ivrit-recordings` IndexedDB store: it has the same
+API in worker and window, no version or upgrade path to coordinate, and no `onblocked`
+state — `openRecordingDb()` *rejects* on `onblocked`, so sharing a file into a second tab
+would break recording persistence.
+
+**Caveat.** WebKit does not implement Web Share Target, so this does nothing on iOS. Push
+and installation still work there.
 
 ### Key DOM Elements
 - `drop-area`, `file-input` — file drag/drop and picker
@@ -385,6 +441,9 @@ opens `/?results=<id>`; both land in `openResultsById()`.
 - `refreshPushSubscription()` — idempotent re-`POST` of the current subscription on load and
   on language change
 - `openResultsById(id)` — opens a transcript from a clicked notification, either route
+- `serviceWorkerReady` — the single registration of `/sw.js`, awaited by push; the share
+  target needs a worker even where push is unconfigured
+- `drainSharedFiles()` — empties the share inbox into `handleFiles()` on every load
 - `showError()`, `showToast()` — user notifications
 - `switchTab(tabName)` — navigate between tabs (wrapped later in the file to lazy-load
   the stats tab, so always call it by name rather than capturing a reference)

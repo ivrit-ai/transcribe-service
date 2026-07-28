@@ -2269,7 +2269,9 @@
       <div class="file-preview" id="file-preview">
         <div class="file-info">
           <div class="file-details">
-            <strong id="preview-file-name" data-i18n="fileSelected">קובץ נבחר</strong>
+            <!-- No data-i18n: the preview only exists once a file is chosen, and a
+                 translated placeholder would let apply() overwrite the filename. -->
+            <strong id="preview-file-name"></strong>
           <div class="file-size" id="preview-file-size" dir="ltr">
               <span data-i18n="fileSize">גודל קובץ</span>
             </div>
@@ -2842,7 +2844,7 @@
             langBtn.setAttribute('aria-label', window.I18N.t('language'))
           }
         }
-        initTranscriptionLanguages()
+        transcriptionLanguagesReady = initTranscriptionLanguages()
         // Toggle UI initialization removed - toggles only in Viewer tab
         // Initialize default diarization setting
         if (!displaySettings.diarizationDisplay) {
@@ -3068,6 +3070,9 @@
       const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024 // 3GB in bytes
       const IN_LOCAL_MODE = {{ 'true' if in_local_mode else 'false' }}
       let serverBatchConfig = null  // populated from /languages endpoint
+      // Anything that feeds files in before the picker can be clicked has to wait
+      // for this, or getBatchLimit() still answers 1.
+      let transcriptionLanguagesReady = null
       function getBatchLimit() {
         if (!serverBatchConfig) return 1
         if (IN_LOCAL_MODE) return serverBatchConfig.max_batch_local || 1
@@ -9187,10 +9192,70 @@
 
       if (!appIsInstalled() && needsManualInstall()) setInstallButtonVisible(true)
 
+      // ---- Service worker: shared by push and by the share target ----
+
+      let swRegistration = null
+
+      // Kept as a promise so push can wait for the registration it needs without
+      // owning it. Push used to register the worker itself, which meant a
+      // deployment with no VAPID keys had no worker and so no share target.
+      const serviceWorkerReady = (async () => {
+        if (!('serviceWorker' in navigator)) return
+        try {
+          swRegistration = await navigator.serviceWorker.register('/sw.js')
+          navigator.serviceWorker.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'open-results') {
+              openResultsById(event.data.resultsId)
+            }
+          })
+        } catch (err) {
+          console.warn('Failed to register the service worker', err)
+        }
+      })()
+
+      // ---- Files shared into the installed app ----
+
+      const SHARE_CACHE = 'ivrit-share-inbox'
+      const SHARE_FILENAME_HEADER = 'X-Share-Filename'
+
+      // Drained on every load rather than off a redirect parameter: an expired
+      // session sends the worker's redirect through /login and back, and the
+      // parameter would not survive the round trip.
+      async function drainSharedFiles() {
+        if (!('caches' in window)) return
+        const cache = await caches.open(SHARE_CACHE)
+        const keys = await cache.keys()
+        if (!keys.length) return
+
+        const files = []
+        for (const key of keys) {
+          const response = await cache.match(key)
+          if (response) {
+            const blob = await response.blob()
+            const name = decodeURIComponent(response.headers.get(SHARE_FILENAME_HEADER) || 'shared')
+            files.push(new File([blob], name, { type: blob.type }))
+          }
+          await cache.delete(key)
+        }
+        // Size limits, the batch cap and the toasts are handleFiles' business.
+        if (files.length) handleFiles(files)
+      }
+
+      // Held until /languages has answered: handleFiles() caps the batch at one file
+      // until then, so a share arriving first would silently lose all but the first.
+      document.addEventListener('DOMContentLoaded', () => {
+        transcriptionLanguagesReady
+          .then(drainSharedFiles)
+          .catch((err) => console.warn('Failed to read shared files', err))
+      })
+
       // ---- Web Push: tell the user when a transcription finishes ----
 
       let pushConfig = { enabled: false, publicKey: null }
-      let pushRegistration = null
+      // A worker now exists wherever service workers do, so it can no longer
+      // stand in for "push works here". On an iOS Safari tab there is a
+      // registration and there is no Notification at all.
+      let pushReady = false
 
       // 'on' means subscribed; 'never' means the user ticked "don't ask again".
       // Anything else means ask on the next submit.
@@ -9254,9 +9319,9 @@
       // key rotation, and keeps the stored language in step with the UI. The
       // stale server row is pruned when its endpoint next answers 403 or 410.
       async function refreshPushSubscription() {
-        if (!pushRegistration || getPushPromptState() !== 'on' || Notification.permission !== 'granted') return
+        if (!pushReady || getPushPromptState() !== 'on' || Notification.permission !== 'granted') return
         try {
-          let subscription = await pushRegistration.pushManager.getSubscription()
+          let subscription = await swRegistration.pushManager.getSubscription()
           if (subscription && !subscriptionMatchesServerKey(subscription)) {
             await subscription.unsubscribe()
             subscription = null
@@ -9268,7 +9333,7 @@
       }
 
       function subscribeToPush() {
-        return pushRegistration.pushManager.subscribe({
+        return swRegistration.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(pushConfig.publicKey),
         })
@@ -9300,7 +9365,7 @@
       // Called when a job is submitted, not on page load: the offer only makes
       // sense once there is something to wait for.
       function maybeAskForPushPermission() {
-        if (!pushConfig.enabled || !pushRegistration) return
+        if (!pushReady) return
         if (Notification.permission === 'denied') return
         const state = getPushPromptState()
         if (state === 'never') return
@@ -9344,12 +9409,9 @@
           pushConfig = await response.json()
           if (!pushSupported() || !pushConfig.enabled || !pushConfig.publicKey) return
 
-          pushRegistration = await navigator.serviceWorker.register('/sw.js')
-          navigator.serviceWorker.addEventListener('message', (event) => {
-            if (event.data && event.data.type === 'open-results') {
-              openResultsById(event.data.resultsId)
-            }
-          })
+          await serviceWorkerReady
+          if (!swRegistration) return
+          pushReady = true
           await refreshPushSubscription()
         } catch (err) {
           console.warn('Failed to initialise push notifications', err)

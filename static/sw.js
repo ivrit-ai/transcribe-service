@@ -1,7 +1,18 @@
-// Service worker for transcription-complete notifications.
+// Service worker for transcription-complete notifications and for receiving
+// files shared into the installed app.
 //
-// It has no fetch handler and caches nothing on purpose: the app already busts
-// caches with a backend version identifier, and a caching worker would fight it.
+// The fetch handler exists solely to catch the share target's POST, and must
+// stay that way: respond only to POST /share-target and return without calling
+// respondWith() for everything else. The only cache it may touch is
+// SHARE_CACHE, and only under SHARE_PREFIX. Never intercept a GET, never call
+// caches.match, cache.add or cache.addAll. The app busts its own caches with a
+// backend version identifier and a caching worker would fight it.
+
+const SHARE_CACHE = 'ivrit-share-inbox'
+const SHARE_PREFIX = '/__shared__/'
+// A Response carries no filename, and header values are latin-1 while these
+// filenames are usually Hebrew, so it travels percent-encoded.
+const SHARE_FILENAME_HEADER = 'X-Share-Filename'
 
 // Notification text lives here rather than in static/i18n.js, which assigns to
 // `window` and cannot be imported into a worker. The language comes from the
@@ -38,6 +49,36 @@ function interpolate(template, vars) {
 self.addEventListener('install', () => self.skipWaiting())
 
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
+
+async function stashSharedFiles(request) {
+  const formData = await request.formData()
+  const files = formData.getAll('media').filter((file) => file instanceof File)
+  const cache = await caches.open(SHARE_CACHE)
+  const stamp = Date.now()
+  // The stamp keeps a second share from overwriting the first, but the app reads
+  // the cache back in insertion order, so these are written one at a time to keep
+  // a batch in the order it was shared.
+  for (const [index, file] of files.entries()) {
+    await cache.put(
+      `${SHARE_PREFIX}${stamp}-${index}`,
+      new Response(file, {
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          [SHARE_FILENAME_HEADER]: encodeURIComponent(file.name),
+        },
+      })
+    )
+  }
+  // Bare '/', with nothing to clean out of the URL afterwards: the app drains
+  // the cache on every load, so it survives a detour through the login page.
+  return Response.redirect('/', 303)
+}
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'POST') return
+  if (new URL(event.request.url).pathname !== '/share-target') return
+  event.respondWith(stashSharedFiles(event.request))
+})
 
 self.addEventListener('push', (event) => {
   let payload = {}

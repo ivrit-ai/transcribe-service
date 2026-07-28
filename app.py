@@ -2275,6 +2275,18 @@ async def service_worker():
     )
 
 
+@app.post("/share-target")
+async def share_target():
+    """Catch a share the service worker did not intercept.
+
+    The worker normally answers this and keeps the file; it only reaches the
+    server if the worker is missing, in which case the file cannot be recovered
+    and the best available outcome is landing the user in the app rather than on
+    a 405 page.
+    """
+    return RedirectResponse(url="/", status_code=303)
+
+
 @app.get("/push/config", dependencies=[Depends(require_google_login)])
 async def get_push_config():
     """Tell the browser whether push is configured, and with which application server key."""
