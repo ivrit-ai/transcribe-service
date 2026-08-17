@@ -1,6 +1,9 @@
 uploads
 .env
 .env.*
+*_key.txt
+*.key
+*.pem
 *.log
 *.log.*
 secrets/
