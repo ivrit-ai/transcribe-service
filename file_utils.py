@@ -17,6 +17,11 @@ class FileStorageBackend(ABC):
         pass
     
     @abstractmethod
+    async def get_available_storage_bytes(self, user_identifier: Optional[str]) -> Optional[int]:
+        """Return the free space left in the user's storage, or None if unknown."""
+        pass
+
+    @abstractmethod
     async def upload_file(
         self,
         filename: str,

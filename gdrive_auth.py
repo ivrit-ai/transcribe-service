@@ -36,6 +36,10 @@ class GoogleDriveError(GoogleAPIError):
     """Raised when Google Drive operations fail."""
 
 
+class DriveStorageFullError(GoogleDriveError):
+    """Raised when a Drive write fails because the user is out of storage."""
+
+
 def _get_token_cache_key(refresh_token: str) -> str:
     """Generate a cache key from a refresh token."""
     return hashlib.sha256(refresh_token.encode()).hexdigest()

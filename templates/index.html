@@ -1433,6 +1433,9 @@
       .status-ready {
         background-color: #4caf50;
       }
+      .status-failed {
+        background-color: #e53935;
+      }
       @keyframes pulse {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.5; }
@@ -5231,13 +5234,15 @@
             'Queued': 'ממתין בתור',
             'Being processed': 'בתהליך תמלול',
             'Transcoding...': 'בתהליך המרה',
-            'Ready': 'מוכן'
+            'Ready': 'מוכן',
+            'Failed': 'התמלול נכשל'
           },
           'en': {
             'Queued': 'Queued',
             'Being processed': 'Being processed',
             'Transcoding...': 'Transcoding...',
-            'Ready': 'Ready'
+            'Ready': 'Ready',
+            'Failed': 'Transcription failed'
           }
         }
         const lang = (window.I18N && window.I18N.current) ? window.I18N.current : 'he'
@@ -5906,6 +5911,7 @@
         
         // Only allow clicking for ready items
         const isReady = status === 'Ready' && entry.results_id
+        const isFailed = status === 'Failed'
         if (isReady) {
           info.onclick = () => viewSavedFileFromTOC(entry)
         } else {
@@ -5945,10 +5951,18 @@
         // Add status text and ETA for non-ready items
         if (status !== 'Ready') {
           let statusText = entry.progress_description || getStatusText(status)
+          // A named cause tells the user what to do about it; "failed" does not.
+          if (entry.failure_reason && window.I18N) {
+            statusText = window.I18N.t(entry.failure_reason)
+          }
           if (entry.progress_percent !== undefined && entry.progress_percent !== null) {
             statusText += ` (${entry.progress_percent}%)`
           }
           let metaText = `${dateStr} (${statusText})`
+
+          if (entry.quota_refunded) {
+            metaText += ` • ${window.I18N ? window.I18N.t('quotaRefunded') : ''}`
+          }
 
           // Add ETA if available
           if (entry.eta_seconds !== undefined && entry.eta_seconds !== null) {
@@ -5982,7 +5996,10 @@
             enableRenameMode(name, entry.results_id)
           }
           actions.appendChild(editBtn)
-          
+        }
+
+        // Failed entries carry a results_id purely so they can be dismissed here.
+        if (isReady || isFailed) {
           const deleteBtn = document.createElement('button')
           deleteBtn.className = 'file-item-delete-btn'
           deleteBtn.title = (window.I18N ? window.I18N.t('deleteFile') : 'מחק קובץ')
@@ -9024,6 +9041,8 @@
             nerdRow('Drive: audio download', nerdNum(drive.audio_download)),
             nerdRow('Drive: rename', nerdNum(drive.rename)),
             nerdRow('Drive: delete', nerdNum(drive.delete)),
+            nerdRow('Drive: storage full', nerdNum(drive.storage_full)),
+            nerdRow('Drive: storage full (pre-flight)', nerdNum(drive.storage_full_precheck)),
             nerdRow('Quota exceeded', nerdNum(data.errors.quota_denied)),
             nerdRow('Job timeouts', nerdNum(data.errors.job_timeouts)),
             nerdRow('Job timeouts (private)', nerdNum(data.errors.job_timeouts_private)),

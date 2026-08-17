@@ -401,6 +401,7 @@ if not in_local_mode:
         refresh_google_access_token,
         get_access_token_from_refresh,
         GoogleDriveError,
+        DriveStorageFullError,
         GOOGLE_CLIENT_ID,
         GOOGLE_CLIENT_SECRET,
         GOOGLE_REDIRECT_URI,
@@ -411,6 +412,11 @@ else:
     GOOGLE_CLIENT_SECRET = None
     GOOGLE_REDIRECT_URI = None
     GoogleDriveError = Exception
+
+    # A distinct class rather than Exception: it is caught ahead of the generic
+    # handler in transcribe_job, which would otherwise swallow every failure here.
+    class DriveStorageFullError(Exception):
+        """Never raised in local mode — local storage has no allowance to exhaust."""
 
 # Required OAuth2 scopes for Google authentication
 REQUIRED_OAUTH_SCOPES = [
@@ -682,6 +688,9 @@ last_history_prune_time = 0.0
 # Google Drive error kinds; each maps to a stats key "gdrive_error_<kind>".
 GDRIVE_ERROR_KINDS = (
     "toc_upload", "toc_download", "audio_upload", "audio_download", "rename", "delete",
+    # storage_full is caught mid-job; storage_full_precheck is refused before dispatch.
+    # Both are counted so a pre-flight that stops firing is visible rather than silent.
+    "storage_full", "storage_full_precheck",
 )
 
 # Heartbeat tracking for local mode auto-shutdown
@@ -795,6 +804,13 @@ class LeakyBucket:
         self.update()
         self.seconds_remaining -= duration_seconds
         return self.seconds_remaining > 0
+
+    def refund(self, duration_seconds):
+        """Return quota taken for work that never produced a transcript."""
+        self.update()
+        # Capped, so a refund that lands after the bucket has refilled cannot
+        # push a user above their allowance.
+        self.seconds_remaining = min(self.max_seconds, self.seconds_remaining + duration_seconds)
 
     def get_remaining_minutes(self):
         """Get remaining minutes in the bucket."""
@@ -3444,6 +3460,16 @@ async def validate_upload_request_metadata(
         logger.warning("Drive folder not available during upload validation for %s", user_email)
         return None, JSONResponse({"error": "errorDriveUnavailable", "i18n_key": "errorDriveUnavailable"}, status_code=401)
 
+    # Refuse before the GPU runs rather than after: a transcript we cannot store is
+    # one the user paid for and never receives. None means "could not determine".
+    available_bytes = await file_storage_backend.get_available_storage_bytes(user_identifier)
+    if available_bytes is not None and available_bytes <= 0:
+        await db.incr_stat("gdrive_error_storage_full_precheck", 1)
+        log_message(f"{user_email}: ERROR - storage full, rejecting upload")
+        return None, JSONResponse(
+            {"error": "errorDriveStorageFull", "i18n_key": "errorDriveStorageFull"}, status_code=507
+        )
+
     normalized_runpod_token = runpod_token.strip() if runpod_token else ""
     has_private_credentials = bool(normalized_runpod_token)
 
@@ -3608,6 +3634,72 @@ async def record_unfinished_job(job_desc, status):
     )
 
 
+async def handle_failed_job(job_desc, consumed_seconds, failure_reason):
+    """Make good on a job that never delivered a transcript.
+
+    Refunds the quota it consumed and records it in the user's own library, so a
+    failure is visible after a reload instead of vanishing with the in-memory
+    queue entry that was standing in for it. failure_reason is an i18n key naming
+    a cause the user can act on, or None when there is nothing specific to say.
+
+    Never raises: this runs from transcribe_job's cleanup path, where the job has
+    already failed and there is nothing left to salvage by propagating.
+    """
+    # Zero for jobs on the user's own RunPod credentials, which never touch the
+    # quota in the first place — there is nothing to give back to them.
+    if consumed_seconds:
+        try:
+            # Re-read rather than reusing the bucket consume() was called on: it is
+            # minutes stale by now and may have been replaced by a concurrent job.
+            user_bucket = await get_user_quota(job_desc.user_email)
+            user_bucket.refund(consumed_seconds)
+            await db.save_quota(
+                job_desc.user_email,
+                user_bucket.seconds_remaining,
+                user_bucket.last_update,
+                user_bucket.max_seconds,
+            )
+            refunded = True
+            log_message(
+                f"{job_desc.user_email}: refunded {consumed_seconds/60:.1f} minutes for failed job {job_desc.id}. "
+                f"Remaining: {user_bucket.get_remaining_minutes():.1f} minutes"
+            )
+        except Exception as e:
+            refunded = False
+            logger.error(f"Failed to refund quota for job {job_desc.id}: {e}")
+    else:
+        refunded = False
+
+    toc_entry = {
+        # A real id, so the entry can be dismissed through /appdata/delete like any
+        # other. No results file will ever exist under it, which that path tolerates.
+        "results_id": str(uuid.uuid4()),
+        "job_id": job_desc.id,
+        "source_filename": job_desc.filename,
+        "language": job_desc.language,
+        "duration_seconds": job_desc.duration,
+        "completed_at": datetime.now().isoformat(),
+        "status": "Failed",
+        "quota_refunded": refunded,
+        "failure_reason": failure_reason,
+        "toc_version": os.environ.get("TOC_VER", "1.0"),
+    }
+
+    try:
+        toc_lock = get_toc_lock(job_desc.user_email)
+        async with toc_lock:
+            toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email, session_id=None)
+            if "entries" not in toc_data:
+                toc_data["entries"] = []
+            toc_data["entries"].append(toc_entry)
+            success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email, session_id=None)
+            if not success:
+                await db.incr_stat("gdrive_error_toc_upload", 1)
+                logger.error(f"Failed to record failed job {job_desc.id} in TOC")
+    except Exception as e:
+        logger.error(f"Failed to record failed job {job_desc.id} in TOC: {e}")
+
+
 async def notify_job_finished(job_desc, status, results_id):
     """Push a completion notification to the user's registered browsers.
 
@@ -3676,7 +3768,9 @@ async def notify_job_finished(job_desc, status, results_id):
 
 async def transcribe_job(job_desc):
     job_id = job_desc.id
-    segs = None
+    consumed_seconds = 0
+    transcript_delivered = False
+    failure_reason = None
 
     try:
         log_message(f"{job_desc.user_email}: beginning transcription of {job_desc}, file name={job_desc.filename}")
@@ -3694,6 +3788,9 @@ async def transcribe_job(job_desc):
                 user_bucket.last_update,
                 user_bucket.max_seconds,
             )
+            # Only once the debit is durable: get_user_quota reads from the DB, so a
+            # save_quota that raised would leave a refund with no debit behind it.
+            consumed_seconds = duration
             remaining_minutes = user_bucket.get_remaining_minutes()
             log_message(f"{job_desc.user_email}: consumed {duration/60:.1f} minutes from quota. Remaining: {remaining_minutes:.1f} minutes")
         else:
@@ -3936,7 +4033,13 @@ async def transcribe_job(job_desc):
                     raise Exception("Failed to upload TOC")
 
             log_message(f"{job_desc.user_email}: Uploaded transcription to TOC (results_id: {results_id})")
+            transcript_delivered = True
             await notify_job_finished(job_desc, "completed", results_id)
+        except DriveStorageFullError as e:
+            await db.incr_stat("gdrive_error_storage_full", 1)
+            logger.error(f"Drive full, cannot store transcription for {job_id}: {e}")
+            failure_reason = "errorDriveStorageFull"
+            await notify_job_finished(job_desc, "failed", None)
         except Exception as e:
             await db.incr_stat(
                 "gdrive_error_toc_download" if "download" in str(e).lower() else "gdrive_error_toc_upload", 1
@@ -3958,25 +4061,27 @@ async def transcribe_job(job_desc):
         await record_unfinished_job(job_desc, "failed")
         await notify_job_finished(job_desc, "failed", None)
     finally:
-        # Close segs if it exists
-        #if segs:
-            #try:
-            #    segs.close()
-            #except Exception as e:
-            #    log_message(f"Failed to close runpod job: {e}")
-        
-        # Clean up transcription progress tracking
-        transcription_progress.pop(job_id, None)
+        try:
+            # Clean up transcription progress tracking
+            transcription_progress.pop(job_id, None)
 
-        # Remove job from the appropriate running jobs dictionary
-        del running_jobs[job_desc.job_type][job_id]
-        # Remove job from user's active jobs
-        user_email = job_desc.user_email
-        if user_email in user_jobs:
-            user_jobs[user_email].discard(job_id)
-            if not user_jobs[user_email]:
-                del user_jobs[user_email]
-        cleanup_temp_file(job_id)
+            # Remove job from the appropriate running jobs dictionary
+            del running_jobs[job_desc.job_type][job_id]
+            # Remove job from user's active jobs
+            user_email = job_desc.user_email
+            if user_email in user_jobs:
+                user_jobs[user_email].discard(job_id)
+                if not user_jobs[user_email]:
+                    del user_jobs[user_email]
+            cleanup_temp_file(job_id)
+        finally:
+            # Centralised because failure arrives here by four routes: the two
+            # handlers above, the early return when the results upload fails, and
+            # the handler around the TOC update. Runs after cleanup so the synthetic
+            # "Being processed" entry /appdata/toc derives from running_jobs is gone
+            # before the durable failure entry replaces it.
+            if not transcript_delivered:
+                await handle_failed_job(job_desc, consumed_seconds, failure_reason)
         # The job thread will terminate itself in the next iteration of the transcribe_job function
 
 

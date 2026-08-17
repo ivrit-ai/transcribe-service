@@ -59,6 +59,8 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 - Daily credit replenishment
 - Three job queues: short (<=20 min), long (>20 min), private (custom RunPod credentials)
 - Users can bring their own RunPod API key to bypass shared quotas
+- Quota is debited before transcription and refunded if the job never delivers a transcript
+- See [Failed Jobs](#failed-jobs) for what a user sees when a job dies
 
 ### Deployment Modes
 - **Cloud:** Google OAuth + Google Drive storage + RunPod GPU compute
@@ -382,6 +384,75 @@ service deletes the row; anything else is logged and the row kept.
 
 Clicking a notification reuses an open window via `postMessage({type: 'open-results'})`, or
 opens `/?results=<id>`; both land in `openResultsById()`.
+
+### Failed Jobs
+
+A job in flight has no durable record: `/appdata/toc` synthesises its "Queued" / "Being
+processed" entry from the in-memory queues, and only success ever writes to the user's TOC.
+So a failure used to erase the job — the synthetic entry disappeared with the queue entry
+and nothing replaced it — while the quota debited up front stayed spent.
+
+`handle_failed_job()` closes both gaps. It runs from `transcribe_job`'s cleanup path rather
+than from the exception handlers, because failure arrives by four routes: the `TimeoutError`
+and `Exception` handlers, the early `return` when the results upload fails, and the handler
+around the TOC update. A `transcript_delivered` flag set at the single success point is what
+distinguishes them. Like `notify_job_finished()`, it never raises.
+
+It refunds `consumed_seconds` — zero for jobs on the user's own RunPod credentials, which
+never touch the quota — re-reading the bucket via `get_user_quota()` rather than reusing the
+one `consume()` was called on, which is minutes stale by then and may have been superseded
+by a concurrent job. The refund is capped at `max_seconds`, so one that lands after the
+bucket has refilled cannot lift a user above their allowance.
+
+It then appends a durable TOC entry with `status: "Failed"`, `quota_refunded: bool` and
+`failure_reason` — an i18n key when the cause is something the user can act on, otherwise
+`None`. The entry carries a real `results_id` purely so it can be dismissed through
+`/appdata/delete` like any other; no results file will ever exist under it, which that path
+already tolerates. It is written *after* the queue cleanup, so the synthetic entry is gone
+before the durable one replaces it. The frontend renders it with a red `.status-failed` dot,
+no click-through, a delete button, the translated `failure_reason` in place of the generic
+"failed" text, and — only when `quota_refunded` — the `quotaRefunded` reassurance.
+
+Jobs whose completion the server never records at all (the process is killed mid-job; job
+state is in-memory only) still produce nothing. That is unchanged.
+
+### Full Google Drive
+
+Transcripts are stored in the user's own Drive, so a full Drive meant the GPU ran, the quota
+was spent, and the result was discarded with no user-facing signal at all — users retried and
+paid again. Drive reports this as a `403` whose `reason` is `storageQuotaExceeded`, which is
+indistinguishable from a permission `403` by status alone; `_raise_write_error()` in
+`gdrive_file_utils.py` inspects the body and raises `DriveStorageFullError` (a
+`GoogleDriveError` subclass) from both `upload_file` and `update_file`.
+
+Two things act on it:
+
+- **Pre-flight.** `validate_upload_request_metadata()` calls
+  `file_storage_backend.get_available_storage_bytes()` and rejects with
+  `errorDriveStorageFull` / `507` when free space is `<= 0`, before any GPU work is
+  dispatched. The probe returns `None` — meaning "unknown", never "full" — when the account
+  has no `limit` (unlimited Workspace plans), when the token is missing, or when
+  `drive/v3/about` fails; the local backend returns `None` too, so the check is inert outside
+  cloud mode. Because a probe that silently stops working would make the pre-flight silent
+  dead code, rejections are counted as `gdrive_error_storage_full_precheck` and shown on the
+  stats panel next to the write-time `gdrive_error_storage_full` — if the first stays at zero
+  while the second climbs, the probe is broken.
+- **Detection.** A Drive that fills up between the check and the write is caught by an
+  `except DriveStorageFullError` ahead of the generic handler in `transcribe_job`, which sets
+  `failure_reason` and counts `gdrive_error_storage_full`. In local mode
+  `DriveStorageFullError` is bound to a stand-in class that nothing raises — deliberately not
+  to `Exception`, unlike the neighbouring `GoogleDriveError` alias, or it would shadow the
+  generic handler and swallow every failure.
+
+  Reaching the user at this point is genuinely hard, and worth being precise about. The
+  upload stream is already gone — `upload_event_generator` terminates on
+  `transcoding_complete`, which is emitted the moment the job joins the transcription queue,
+  minutes before any Drive write — so `emit_upload_error()` from `transcribe_job` is a no-op
+  by construction, for this handler and the generic ones alike. And the durable record is
+  written to the very Drive that is out of space, so `handle_failed_job()`'s TOC append will
+  usually fail the same way. That leaves the push notification as the channel that actually
+  survives, with the TOC entry as best-effort: it lands once the user frees space, or on the
+  next write that fits.
 
 **Caveats.**
 - Rotating the VAPID key pair invalidates every stored subscription: the push service

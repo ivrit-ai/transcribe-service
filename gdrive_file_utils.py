@@ -6,11 +6,12 @@ import hashlib
 import logging
 import aiohttp
 import dotenv
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, NoReturn
 from file_utils import FileStorageBackend
 from gdrive_auth import (
     get_access_token_from_refresh,
     GoogleDriveError,
+    DriveStorageFullError,
 )
 
 # Load environment variables
@@ -30,12 +31,55 @@ def _get_folder_cache_key(refresh_token: str) -> str:
     return hashlib.sha256(refresh_token.encode()).hexdigest()
 
 
+def _raise_write_error(context: str, status: int, body: str) -> NoReturn:
+    """Raise the most specific error the Drive write failure warrants."""
+    message = f"{context}: {status} {body}"
+    # Drive reports "out of space" as a 403 alongside permission failures, so the
+    # reason field is the only thing that tells them apart.
+    if status == 403:
+        try:
+            reasons = {e.get("reason") for e in json.loads(body)["error"]["errors"]}
+        except Exception:
+            reasons = set()
+        if "storageQuotaExceeded" in reasons:
+            raise DriveStorageFullError(message)
+    raise GoogleDriveError(message)
+
+
 class GoogleDriveStorageBackend(FileStorageBackend):
     """Google Drive implementation of file storage backend."""
     
     def __init__(self):
         pass
     
+    async def get_available_storage_bytes(self, user_identifier: Optional[str]) -> Optional[int]:
+        """Return the user's free Drive space, or None if it cannot be determined."""
+        token = await get_access_token_from_refresh(user_identifier)
+        if not token:
+            return None
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://www.googleapis.com/drive/v3/about",
+                    params={"fields": "storageQuota"},
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as resp:
+                    if not 200 <= resp.status < 300:
+                        logger.warning(
+                            "Could not read Drive storage quota: %s %s", resp.status, await resp.text()
+                        )
+                        return None
+                    quota = (await resp.json()).get("storageQuota", {})
+        except Exception as exc:
+            logger.warning("Exception reading Drive storage quota: %s", exc)
+            return None
+
+        # Absent limit means unlimited storage (some Workspace plans).
+        if "limit" not in quota:
+            return None
+        return int(quota["limit"]) - int(quota.get("usage", 0))
+
     async def ensure_folder(self, user_identifier: Optional[str] = None) -> Optional[str]:
         """Ensure the application Drive folder exists and return its ID."""
         if not user_identifier:
@@ -183,9 +227,7 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                         resp.status,
                         err,
                     )
-                    raise GoogleDriveError(
-                        f"Failed to upload to Drive: {resp.status} {err}"
-                    )
+                    _raise_write_error("Failed to upload to Drive", resp.status, err)
         except GoogleDriveError:
             raise
         except Exception as exc:
@@ -232,9 +274,7 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                         resp.status,
                         err,
                     )
-                    raise GoogleDriveError(
-                        f"Failed to update Drive file {file_id}: {resp.status} {err}"
-                    )
+                    _raise_write_error(f"Failed to update Drive file {file_id}", resp.status, err)
         except GoogleDriveError:
             raise
         except Exception as exc:

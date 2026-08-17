@@ -32,7 +32,11 @@ class LocalFileStorageBackend(FileStorageBackend):
         """Ensure the storage folder exists and return its identifier."""
         user_dir = self._get_user_dir(user_identifier)
         return str(user_dir)
-    
+
+    async def get_available_storage_bytes(self, user_identifier: Optional[str]) -> Optional[int]:
+        """Local storage has no per-user allowance to check."""
+        return None
+
     async def upload_file(
         self,
         filename: str,
