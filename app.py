@@ -2200,18 +2200,23 @@ async def create_runpod_endpoint(api_key: str, template_id: str) -> Optional[dic
     endpoint_data = {
         "name": endpoint_name,
         "templateId": template_id,
+        # Ordered by RunPod stock level, not speed: waiting for a free worker costs the
+        # user far more than a slower GPU does. Every part here fits the model with room
+        # to spare, so VRAM is not a selection criterion.
+        # The Blackwell parts need the CUDA 12.8 worker image (PyTorch >= 2.7); they will
+        # fail to load on anything older.
         "gpuTypeIds": [
-            # 24GB VRAM options (best for performance)
             "NVIDIA GeForce RTX 4090",
+            "NVIDIA RTX PRO 4500 Blackwell",
+            "NVIDIA A40",
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb",
+            "NVIDIA GeForce RTX 5090",
             "NVIDIA GeForce RTX 3090",
             "NVIDIA RTX A5000",
-            "NVIDIA L4",
-            # 48GB VRAM options (highest performance)
             "NVIDIA RTX A6000",
-            "NVIDIA A40",
-            # 16GB VRAM options (cost-effective)
+            "NVIDIA RTX A4500",
             "NVIDIA RTX A4000",
-            "NVIDIA RTX 2000 Ada Generation"
+            "NVIDIA RTX 4000 Ada Generation"
         ],
         "scalerType": "QUEUE_DELAY",
         "scalerValue": 4,
