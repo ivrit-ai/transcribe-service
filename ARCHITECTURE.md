@@ -225,7 +225,14 @@ These are compile-time constants in `app.py` that require a code change to tune:
 
 - **Google OAuth 2.0** - User authentication (scopes: openid, userinfo, drive.file)
 - **Google Drive** - Transcript and TOC storage in an app-specific folder
-- **RunPod** - Serverless GPU compute via REST + GraphQL APIs
+- **RunPod** - Serverless GPU compute. Endpoint management (list/find/create/delete,
+  template lookup) uses REST API v2 (`api.runpod.io/v2`), which selects GPUs by *pool*
+  (`RUNPOD_GPU_POOLS` in `app.py`) rather than by card name, and judges endpoint
+  up-to-dateness by comparing the endpoint's resolved image/pools/flashboot against the
+  desired config (v2 does not echo template IDs). Account balance and max serverless
+  concurrency have no v2 equivalent yet and remain on the GraphQL API. Job
+  submission goes through the separate `api.runpod.ai/v2/<endpoint>` queue API via the
+  `ivrit` package.
 - **Hugging Face** - Model hosting and downloading
 - **PostHog** - Analytics and event tracking
 
