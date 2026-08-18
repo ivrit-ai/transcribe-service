@@ -568,7 +568,7 @@ EXECUTION_TIMEOUT_MS = int(MAX_AUDIO_DURATION_IN_HOURS * 3600 * 1000 / SPEEDUP_F
 # the user far more than a slower GPU does, and every member card fits the model
 # with room to spare. AMPERE_24 includes the RTX PRO 6000 MIG 1g.24gb slices,
 # where RunPod is directing new 24GB supply.
-RUNPOD_GPU_POOLS = ["ADA_24", "AMPERE_24", "AMPERE_48", "AMPERE_16", "ADA_32_PRO"]
+RUNPOD_GPU_POOLS = ["ADA_24", "AMPERE_24", "AMPERE_48", "AMPERE_16"]
 RUNPOD_V2_URL = "https://api.runpod.io/v2"
 
 MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024  # 300MB
