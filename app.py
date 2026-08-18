@@ -2209,7 +2209,6 @@ async def create_runpod_endpoint(api_key: str, template_id: str) -> Optional[dic
             "NVIDIA GeForce RTX 4090",
             "NVIDIA RTX PRO 4500 Blackwell",
             "NVIDIA A40",
-            "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb",
             "NVIDIA GeForce RTX 5090",
             "NVIDIA GeForce RTX 3090",
             "NVIDIA RTX A5000",
