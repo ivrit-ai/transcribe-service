@@ -381,7 +381,13 @@ def set_user_email(request: Request, email: str) -> str:
 
 
 async def require_google_login(request: Request):
-    """Ensure the current request belongs to a signed-in Google user."""
+    """Ensure the current request belongs to a signed-in Google user.
+
+    Guards JSON and streaming endpoints only, so it answers 401 rather than
+    redirecting: fetch() follows a redirect transparently and reads the login
+    page as a 200, leaving the client unable to tell a lost session from a
+    successful call. The page route at "/" does its own redirect instead.
+    """
     if in_dev or in_local_mode:
         return
 
@@ -389,10 +395,7 @@ async def require_google_login(request: Request):
     session = sessions.get(session_id) if session_id else None
 
     if not session or not session.get("user_email"):
-        raise HTTPException(
-            status_code=status.HTTP_303_SEE_OTHER,
-            headers={"Location": "/login"},
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
 # Import Google OAuth constants only if not in local mode
 # (gdrive_auth will be imported conditionally to avoid requiring env vars in local mode)
@@ -1121,7 +1124,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
         return build_error("errorServerBusy", status_code=503)
 
 
-@app.get("/", dependencies=[Depends(require_google_login)])
+@app.get("/")
 async def index(request: Request):
     if in_dev or in_local_mode:
         user_email = args.dev_user_email or os.environ.get("TS_USER_EMAIL", "local@example.com")
@@ -1138,7 +1141,7 @@ async def index(request: Request):
 
     user_email = get_user_email(request)
     if not user_email:
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
     if in_hiatus_mode:
         response = templates.TemplateResponse("server-down.html", {"request": request})
@@ -2229,8 +2232,9 @@ async def get_quota(request: Request):
 async def service_worker():
     """Serve the service worker from the root so its scope covers the whole app.
 
-    Deliberately unauthenticated: require_google_login redirects to /login, and a
-    redirected script response fails worker registration. The file has no secrets.
+    Deliberately unauthenticated: require_google_login answers 401 once a session
+    is gone, and a script response that is not the script fails worker
+    registration. The file has no secrets.
     """
     return FileResponse(
         str(BASE_PATH / "static" / "sw.js"),
