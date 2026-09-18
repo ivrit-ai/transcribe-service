@@ -2813,6 +2813,21 @@
     </script>
     
     <script>
+      // A lost session must not look like a working one. The server answers 401
+      // on every API route once the session is gone; without this the page keeps
+      // polling, swallows the failures and shows a job list frozen at whatever it
+      // last saw. Wrapping fetch once covers every call site, present and future.
+      const rawFetch = window.fetch.bind(window)
+      let redirectingToLogin = false
+      window.fetch = async (...args) => {
+        const response = await rawFetch(...args)
+        if (response.status === 401 && !redirectingToLogin) {
+          redirectingToLogin = true
+          window.location.href = "/login"
+        }
+        return response
+      }
+
       // Heartbeat interval for local mode auto-shutdown
       const HEARTBEAT_INTERVAL_MS = 60 * 1000  // 60 seconds
       let heartbeatInterval = null
