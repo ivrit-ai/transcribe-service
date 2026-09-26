@@ -233,6 +233,14 @@ class Database:
             since_ts,
         )
 
+    async def get_job_types(self, since_ts: int) -> list:
+        return await self.fetch(
+            "SELECT job_type, COUNT(*) AS jobs, SUM(audio_seconds) AS audio_seconds "
+            "FROM job_events WHERE ts >= ? AND status = 'completed' "
+            "GROUP BY job_type",
+            since_ts,
+        )
+
     async def get_queue_sample(self, bucket_ts: int):
         return await self.fetchrow("SELECT * FROM queue_samples WHERE bucket_ts = ?", bucket_ts)
 
