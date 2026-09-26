@@ -2540,6 +2540,18 @@
               <tbody id="nerd-languages"></tbody>
             </table>
 
+            <h2>Private vs free audio</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th class="num" id="nerd-private-free-launch-head"></th>
+                  <th class="num" id="nerd-private-free-recent-head"></th>
+                </tr>
+              </thead>
+              <tbody id="nerd-private-free"></tbody>
+            </table>
+
             <h2>Queues</h2>
             <table>
               <thead>
@@ -8969,6 +8981,10 @@
 
           const queued = data.queued_jobs, running = data.running_jobs
           const launch = data.transcribed_since_launch
+          const privateFree = data.private_vs_free
+          const launchDate = privateFree.since_launch_ts
+            ? new Date(privateFree.since_launch_ts * 1000).toISOString().slice(0, 10)
+            : 'launch'
           const transcoding = data.transcoding
           const history = data.history
           const hourly = history.jobs_hourly
@@ -8983,8 +8999,8 @@
 
           document.getElementById('nerd-cards').innerHTML = [
             nerdCard('Uptime', data.uptime),
-            nerdCard('Jobs since launch', nerdNum(launch.total.jobs_count)),
-            nerdCard('Audio since launch', nerdHours(launch.total.total_minutes / 60)),
+            nerdCard(`Jobs since ${launchDate}`, nerdNum(launch.total.jobs_count)),
+            nerdCard(`Audio since ${launchDate}`, nerdHours(launch.total.total_minutes / 60)),
             nerdCard('Jobs (24h)', nerdNum(completed24h)),
             nerdCard('Audio (24h)', nerdHours(audio24h)),
             nerdCard('Realtime factor (24h)', transcribe24h > 0 ? (audio24h / transcribe24h).toFixed(1) + '×' : '–'),
@@ -9020,6 +9036,22 @@
               `<tr><td>${l.language}</td><td class="num">${nerdNum(l.jobs)}</td>` +
               `<td class="num">${nerdHours(l.audio_hours)}</td></tr>`
             ).join('') || `<tr><td colspan="3" class="muted">No jobs in the last ${languageDays} days.</td></tr>`
+
+          document.getElementById('nerd-private-free-launch-head').textContent = `Since ${launchDate}`
+          document.getElementById('nerd-private-free-recent-head').textContent = `Last ${privateFree.recent_days} days`
+          const nerdShare = (period, side) => {
+            const total = period.private.audio_hours + period.free.audio_hours
+            const share = total > 0 ? ` <span class="muted">(${Math.round((period[side].audio_hours / total) * 100)}%)</span>` : ''
+            return `${nerdHours(period[side].audio_hours)}${share}<br>` +
+              `<span class="muted">${nerdNum(period[side].jobs)} jobs</span>`
+          }
+          document.getElementById('nerd-private-free').innerHTML = [
+            ['private', 'Private (own RunPod key)'],
+            ['free', 'Free (short + long)'],
+          ].map(([side, label]) =>
+            `<tr><td>${label}</td><td class="num">${nerdShare(privateFree.since_launch, side)}</td>` +
+            `<td class="num">${nerdShare(privateFree.recent, side)}</td></tr>`
+          ).join('')
 
           document.getElementById('nerd-queues').innerHTML = ['short', 'long', 'private'].map(t =>
             `<tr><td>${t}</td>` +

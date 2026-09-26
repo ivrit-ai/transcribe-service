@@ -222,6 +222,7 @@ These are compile-time constants in `app.py` that require a code change to tune:
 | `HISTORY_HOURLY_BUCKETS` | 48 | Hourly job buckets served by `/stats` (48h) |
 | `HISTORY_DAILY_BUCKETS` | 30 | Daily job buckets served by `/stats` (30d) |
 | `HISTORY_LANGUAGE_DAYS` | 7 | Window for the per-language breakdown on `/stats` |
+| `HISTORY_PRIVATE_VS_FREE_DAYS` | 30 | Recent window for the private (own RunPod key) vs free audio split on `/stats`; the since-launch column counts from the `stats_since` row that migration 0004 writes (2026-07-09 on prod, when its counters started) |
 
 ## External Services
 

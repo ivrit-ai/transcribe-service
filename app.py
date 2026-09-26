@@ -720,6 +720,7 @@ HISTORY_QUEUE_BUCKETS = 96  # 24h of 15-minute buckets
 HISTORY_HOURLY_BUCKETS = 48  # 48h of hourly buckets
 HISTORY_DAILY_BUCKETS = 30  # 30 days of daily buckets
 HISTORY_LANGUAGE_DAYS = 7
+HISTORY_PRIVATE_VS_FREE_DAYS = 30
 last_queue_sample_time = 0.0
 last_history_prune_time = 0.0
 
@@ -2375,6 +2376,34 @@ async def build_queue_history(now: float) -> dict:
     return {"buckets": axis, "series": series}
 
 
+async def build_private_vs_free(s: dict, now: float) -> dict:
+    """Completed jobs and audio on users' own RunPod keys vs the free short/long queues."""
+    free_types = (SHORT, LONG)
+    since_launch = {
+        "private": {
+            "jobs": s.get(f"jobs_transcribed_{PRIVATE}", 0),
+            "audio_hours": s.get(f"minutes_transcribed_{PRIVATE}", 0.0) / 60.0,
+        },
+        "free": {
+            "jobs": sum(s.get(f"jobs_transcribed_{t}", 0) for t in free_types),
+            "audio_hours": sum(s.get(f"minutes_transcribed_{t}", 0.0) for t in free_types) / 60.0,
+        },
+    }
+
+    recent = {"private": {"jobs": 0, "audio_hours": 0.0}, "free": {"jobs": 0, "audio_hours": 0.0}}
+    for row in await db.get_job_types(int(now - HISTORY_PRIVATE_VS_FREE_DAYS * 86400)):
+        side = recent["private" if row["job_type"] == PRIVATE else "free"]
+        side["jobs"] += row["jobs"]
+        side["audio_hours"] += (row["audio_seconds"] or 0.0) / 3600.0
+
+    return {
+        "since_launch_ts": s.get("stats_since"),
+        "since_launch": since_launch,
+        "recent_days": HISTORY_PRIVATE_VS_FREE_DAYS,
+        "recent": recent,
+    }
+
+
 @app.get("/stats", dependencies=[Depends(require_google_login)])
 async def get_stats(request: Request):
     """Get application statistics"""
@@ -2495,6 +2524,7 @@ async def get_stats(request: Request):
             },
         },
         "transcoding": transcoding_stats,
+        "private_vs_free": await build_private_vs_free(s, now_ts),
         "errors": {
             "google_drive": drive_errors,
             "quota_denied": s.get("quota_denied", 0),
