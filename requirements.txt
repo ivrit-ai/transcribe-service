@@ -18,3 +18,4 @@ aiosqlite
 sqlalchemy
 alembic
 pywebpush==2.3.0
+cryptography
