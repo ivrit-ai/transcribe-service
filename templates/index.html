@@ -2613,6 +2613,10 @@
                 data-i18n="runpodKeyPlaceholder"
                 placeholder="הכנס את ה-API Key שלך"
               />
+              <div id="runpod-key-status" class="form-help" style="display: none"></div>
+              <button type="button" class="btn btn-secondary" id="remove-runpod-key" style="display: none">
+                <span data-i18n="removeRunpodKey">הסר מפתח RunPod</span>
+              </button>
               <small class="form-help"
                 ><span data-i18n="runpodHelpText">הזנת מפתח פרטי מאפשרת שימוש במשאבים פרטיים לעיבוד מהיר יותר.</span><br />
                 <a
@@ -3013,14 +3017,14 @@
       const clearSettings = document.getElementById("clear-settings")
       const settingsForm = document.getElementById("settings-form")
       const runpodTokenInput = document.getElementById("runpod-token")
-      let savedRunpodToken = ""
+      const runpodKeyStatusText = document.getElementById("runpod-key-status")
+      const removeRunpodKeyBtn = document.getElementById("remove-runpod-key")
       let runpodTokenDirty = false
 
       if (runpodTokenInput) {
-        savedRunpodToken = (getCookie("runpod_token") || "").trim()
+        // The input only ever holds a new key being entered; the stored one never reaches the browser.
         runpodTokenInput.addEventListener("input", () => {
-          const currentValue = runpodTokenInput.value.trim()
-          runpodTokenDirty = currentValue !== savedRunpodToken
+          runpodTokenDirty = runpodTokenInput.value.trim() !== ""
         })
       }
 
@@ -3086,9 +3090,10 @@
 
       let selectedFiles = []
       let pendingYoutubeUrl = null
-      const MAX_FILE_SIZE_REGULAR = 300 * 1024 * 1024 // 300MB in bytes
-      const MAX_FILE_SIZE_PRIVATE = 3 * 1024 * 1024 * 1024 // 3GB in bytes
+      const MAX_FILE_SIZE = 3 * 1024 * 1024 * 1024 // 3GB in bytes
       const IN_LOCAL_MODE = {{ 'true' if in_local_mode else 'false' }}
+      // The server never sends the key itself: only whether one is stored and its last 4 characters.
+      const runpodKeyStatus = {{ runpod_key_status | tojson }}
       let serverBatchConfig = null  // populated from /languages endpoint
       // Anything that feeds files in before the picker can be clicked has to wait
       // for this, or getBatchLimit() still answers 1.
@@ -3096,8 +3101,7 @@
       function getBatchLimit() {
         if (!serverBatchConfig) return 1
         if (IN_LOCAL_MODE) return serverBatchConfig.max_batch_local || 1
-        const token = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
-        return token ? (serverBatchConfig.max_batch_private || 1) : (serverBatchConfig.max_batch_default || 1)
+        return runpodKeyStatus.has_key ? (serverBatchConfig.max_batch_private || 1) : (serverBatchConfig.max_batch_default || 1)
       }
       function isBatchAllowed() { return getBatchLimit() > 1 }
       let transcriptionSegments = []
@@ -3106,20 +3110,17 @@
       let uploadPhase = "idle"
       let streamingUploadActive = false
 
-      // Function to get current max file size based on private key usage
       function getMaxFileSize() {
         // In local mode, no file size limit
         if (IN_LOCAL_MODE) return Infinity
-        const runpodToken = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
-        return runpodToken ? MAX_FILE_SIZE_PRIVATE : MAX_FILE_SIZE_REGULAR
+        return MAX_FILE_SIZE
       }
 
       // Function to get max file size text for display
       function getMaxFileSizeText() {
         // In local mode, no file size limit
         if (IN_LOCAL_MODE) return "unlimited"
-        const runpodToken = (runpodTokenInput && runpodTokenInput.value.trim()) || getCookie("runpod_token")
-        return runpodToken ? "3GB" : "300MB"
+        return "3GB"
       }
 
       let displaySettings = {
@@ -3276,13 +3277,11 @@
 
       // Load settings from cookies and localStorage
       function loadSettings() {
-        // Load RunPod token
-        const token = getCookie("runpod_token") || ""
         if (runpodTokenInput) {
-          runpodTokenInput.value = token
+          runpodTokenInput.value = ""
         }
-        savedRunpodToken = token.trim()
         runpodTokenDirty = false
+        renderRunpodKeyStatus()
 
         // Load display settings from localStorage
         const savedSettings = localStorage.getItem("displaySettings")
@@ -3302,10 +3301,7 @@
 
       // Update settings button to show if credentials are saved
       function updateSettingsButtonIndicator() {
-        const token = getCookie("runpod_token")
-        const hasCredentials = token
-
-        if (hasCredentials) {
+        if (runpodKeyStatus.has_key) {
           settingsBtn.style.color = "#4CAF50"
           settingsBtn.title = window.I18N.t('settingsWithRunpodSaved')
         } else {
@@ -3347,16 +3343,9 @@
 
         const token = runpodTokenInput.value.trim()
 
-        // If token is empty, just clear the RunPod credentials but keep display settings
+        // An empty input keeps the stored key; removing it has its own button
         if (!token) {
-          deleteCookie("runpod_token")
-          savedRunpodToken = ""
-          runpodTokenDirty = false
-          if (runpodTokenInput) {
-            runpodTokenInput.value = ""
-          }
           dismissSettingsModal(false)
-          updateSettingsButtonIndicator()
           showToast(window.I18N.t('settingsSaved'), "success")
           return
         }
@@ -3370,55 +3359,36 @@
         saveBtn.disabled = true
 
         try {
-          // Verify credentials by checking balance
-          const response = await fetch(
-            `/balance?runpod_token=${encodeURIComponent(token)}`
-          )
+          // The server verifies the key, prepares the endpoint and stores the key encrypted on Drive
+          const response = await fetch("/runpod_key", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ runpod_token: token }),
+          })
           const data = await response.json()
 
           if (!response.ok) {
-            showToast(
-              `שגיאה בבדיקת הגדרות RunPod:\n${response.status}: ${translateServerError(data)}`,
-              "error"
-            )
+            showToast(translateServerError(data), "error")
           } else {
-            // Credentials are valid, check endpoint
-            const endpointResult = await checkAndCreateEndpoint(token)
+            const { needs_wait: needsWait, ...status } = data
+            Object.assign(runpodKeyStatus, status)
 
-            if (endpointResult.success) {
-              // Save credentials
-              setCookie("runpod_token", token, 365 * 24 * 60 * 60) // 1 year
-
-              let successMessage = window.I18N.t('runpodSettingsSaved')
-              if (endpointResult.needsWait) {
-                successMessage += ' ' + window.I18N.t('runpodEndpointWait')
-              }
-              savedRunpodToken = token
-              runpodTokenDirty = false
-              if (runpodTokenInput) {
-                runpodTokenInput.value = token
-              }
-              showToast(successMessage, "success")
-              dismissSettingsModal(false)
-              updateSettingsButtonIndicator()
-              checkBalance() // Update balance display
-            } else {
-              showToast(`${window.I18N.t('endpointCheckError')}\n${translateServerError(endpointResult) || ''}`.trim(), "error")
+            let successMessage = window.I18N.t('runpodSettingsSaved')
+            if (needsWait) {
+              successMessage += ' ' + window.I18N.t('runpodEndpointWait')
             }
+            runpodTokenInput.value = ""
+            runpodTokenDirty = false
+            showToast(successMessage, "success")
+            dismissSettingsModal(false)
+            updateSettingsButtonIndicator()
+            checkBalance() // Update balance display
           }
         } catch (error) {
           console.error("Error verifying credentials:", error)
-          if (
-            error.name === "TypeError" &&
-            error.message.includes("Failed to fetch")
-          ) {
-            showToast(
-              "שגיאה: לא ניתן להתחבר לשרת RunPod.\nאנא בדוק את החיבור לאינטרנט ונסה שוב.",
-              "error"
-            )
-          } else {
-            showToast(`שגיאה בבדיקת הגדרות RunPod.\n ${error.message}`, "error")
-          }
+          showToast(window.I18N.t('runpodVerifyError'), "error")
         } finally {
           // Restore button state
           saveBtn.textContent = originalText
@@ -3426,15 +3396,49 @@
         }
       }
 
+      // Show whether a RunPod key is stored, and offer to remove it
+      function renderRunpodKeyStatus() {
+        if (!runpodKeyStatusText || !removeRunpodKeyBtn) return
+        if (runpodKeyStatus.has_key) {
+          runpodKeyStatusText.textContent = window.I18N.t('runpodKeySavedHint', { hint: runpodKeyStatus.hint })
+          runpodKeyStatusText.style.display = "block"
+          removeRunpodKeyBtn.style.display = "inline-block"
+        } else {
+          runpodKeyStatusText.textContent = ""
+          runpodKeyStatusText.style.display = "none"
+          removeRunpodKeyBtn.style.display = "none"
+        }
+      }
+
+      // Delete the stored RunPod key on the server. Returns whether it succeeded.
+      async function removeRunpodKey() {
+        try {
+          const response = await fetch("/runpod_key", { method: "DELETE" })
+          const data = await response.json()
+          if (!response.ok) {
+            showToast(translateServerError(data), "error")
+            return false
+          }
+          Object.assign(runpodKeyStatus, data)
+        } catch (error) {
+          console.error("Error removing RunPod key:", error)
+          showToast(window.I18N.t('errorRunpodKeyRemoveFailed'), "error")
+          return false
+        }
+        renderRunpodKeyStatus()
+        updateSettingsButtonIndicator()
+        checkBalance()
+        return true
+      }
+
       // Clear all settings
-      function clearAllSettings() {
+      async function clearAllSettings() {
         // Clear RunPod settings (only if not in local mode)
         if (!IN_LOCAL_MODE) {
-          deleteCookie("runpod_token")
+          if (!(await removeRunpodKey())) return
           if (runpodTokenInput) {
             runpodTokenInput.value = ""
           }
-          savedRunpodToken = ""
           runpodTokenDirty = false
         }
 
@@ -3454,20 +3458,9 @@
 
         showToast("כל ההגדרות נמחקו בהצלחה", "success")
         dismissSettingsModal(false)
-        updateSettingsButtonIndicator()
-
-        // Refresh balance/quota display after clearing credentials
-        checkBalance()
       }
 
       // Cookie utility functions
-      function setCookie(name, value, days) {
-        const expires = new Date()
-        expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000)
-        document.cookie =
-          name + "=" + value + ";expires=" + expires.toUTCString() + ";path=/"
-      }
-
       function getCookie(name) {
         const nameEQ = name + "="
         const ca = document.cookie.split(";")
@@ -3499,12 +3492,11 @@
           return
         }
         
-        const token = getCookie("runpod_token")
         const balanceLabel = document.getElementById("main-balance-label")
         const balanceAmount = document.getElementById("main-balance-amount")
         const quotaInfoLink = document.getElementById("quota-info-link")
 
-        if (token) {
+        if (runpodKeyStatus.has_key) {
           // User has private key - show RunPod balance
           balanceContainer.classList.add("visible")
           balanceLabel.textContent = window.I18N.t('balanceLabel') || 'יתרה'
@@ -3513,9 +3505,7 @@
           quotaInfoLink.style.display = "none"
 
           try {
-            const response = await fetch(
-              `/balance?runpod_token=${encodeURIComponent(token)}`
-            )
+            const response = await fetch("/balance")
             const data = await response.json()
 
             if (response.ok && data.clientBalance !== "N/A") {
@@ -3569,48 +3559,6 @@
         }
       }
 
-      // Check and create endpoint if needed (called automatically when saving settings)
-      async function checkAndCreateEndpoint(token) {
-        // Block endpoint checks in local mode
-        if (IN_LOCAL_MODE) {
-          console.error("checkAndCreateEndpoint called in local mode - this should not happen")
-          throw new Error("Endpoint checks are not available in local mode")
-        }
-        
-        try {
-          const response = await fetch("/check_endpoint", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              runpod_token: token,
-            }),
-          })
-
-          const data = await response.json()
-
-          if (response.ok) {
-            if (data.action === "up_to_date") {
-              console.log("Endpoint is up to date")
-              return { success: true, needsWait: false }
-            } else if (data.action === "updated") {
-              console.log("Endpoint was updated")
-              return { success: true, needsWait: true }
-            } else if (data.action === "created") {
-              console.log("New endpoint was created")
-              return { success: true, needsWait: true }
-            }
-          } else {
-            console.error("Endpoint check failed:", data.error)
-            return { success: false, error: translateServerError(data) }
-          }
-        } catch (error) {
-          console.error("Error checking endpoint:", error)
-          return { success: false, error: "שגיאה בבדיקת ה-endpoint" }
-        }
-      }
-
       function dismissSettingsModal(checkUnsaved = true) {
         if (!settingsModal) return
 
@@ -3622,7 +3570,7 @@
             "error"
           )
           if (runpodTokenInput) {
-            runpodTokenInput.value = savedRunpodToken
+            runpodTokenInput.value = ""
           }
         }
 
@@ -3631,7 +3579,7 @@
         settingsModal.classList.remove("show")
       }
 
-      async function runUploadPrecheck({ fileSize, language, runpodToken, saveAudio }) {
+      async function runUploadPrecheck({ fileSize, language, saveAudio }) {
         try {
           const response = await fetch("/upload/precheck", {
             method: "POST",
@@ -3641,7 +3589,6 @@
             body: JSON.stringify({
               file_size: fileSize,
               language,
-              runpod_token: runpodToken || "",
               save_audio: saveAudio,
             }),
           })
@@ -3987,7 +3934,6 @@
         showProgressUI()
         setProgressStatusText("youtubeDownloading")
 
-        const token = IN_LOCAL_MODE ? "" : getCookie("runpod_token")
         const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
         const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
         const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
@@ -3999,7 +3945,6 @@
             body: JSON.stringify({
               youtube_url: url,
               language: selectedLang,
-              runpod_token: token || "",
               save_audio: saveAudioValue,
               rights_confirmed: true,
             }),
@@ -4080,11 +4025,50 @@
         }
       }
 
-      // Initialize settings button indicator on page load
-      updateSettingsButtonIndicator()
+      // One-time move of a RunPod key from the legacy browser cookie to server-side storage.
+      // Removable once legacy cookies have expired (they were set for 1 year, so at most a year after deploy).
+      async function migrateRunpodCookie() {
+        if (IN_LOCAL_MODE) return
+        const legacyToken = getCookie("runpod_token")
+        if (!legacyToken) return
+        if (runpodKeyStatus.has_key) {
+          deleteCookie("runpod_token")
+          return
+        }
+        try {
+          const response = await fetch("/runpod_key", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ runpod_token: legacyToken }),
+          })
+          if (response.ok) {
+            const { needs_wait: _needsWait, ...status } = await response.json()
+            Object.assign(runpodKeyStatus, status)
+            deleteCookie("runpod_token")
+          } else if (response.status >= 400 && response.status < 500 && response.status !== 401) {
+            // The key itself was rejected; retrying on every page load would not help.
+            // A 401 means the session is gone, so the cookie is kept for after re-login.
+            deleteCookie("runpod_token")
+            showToast(window.I18N.t('runpodKeyMigrationFailed'), "error")
+          } else {
+            console.error("RunPod key migration failed, will retry on next load:", response.status)
+          }
+        } catch (error) {
+          console.error("RunPod key migration failed, will retry on next load:", error)
+        }
+      }
 
-      // Check balance on page load
-      checkBalance()
+      if (runpodKeyStatus.load_failed) {
+        showToast(window.I18N.t('runpodKeyLoadFailed'), "error")
+      }
+
+      // The indicator and balance must reflect a key migrated from the legacy cookie
+      migrateRunpodCookie().then(() => {
+        updateSettingsButtonIndicator()
+        checkBalance()
+      })
 
       // Settings modal handlers
       settingsBtn.addEventListener("click", () => {
@@ -4102,6 +4086,16 @@
       })
 
       clearSettings.addEventListener("click", clearAllSettings)
+
+      if (removeRunpodKeyBtn) {
+        removeRunpodKeyBtn.addEventListener("click", async () => {
+          removeRunpodKeyBtn.disabled = true
+          if (await removeRunpodKey()) {
+            showToast(window.I18N.t('runpodKeyRemoved'), "success")
+          }
+          removeRunpodKeyBtn.disabled = false
+        })
+      }
 
       settingsForm.addEventListener("submit", async (e) => {
         e.preventDefault()
@@ -4416,8 +4410,6 @@
         showProgressUI()
         setProgressStatusText("batchStarting", { count: selectedFiles.length })
 
-        // In local mode, ensure no RunPod token is used
-        const token = IN_LOCAL_MODE ? "" : getCookie("runpod_token")
         const selectedLang = (languageSelect && languageSelect.value) ? languageSelect.value : ((window.I18N && window.I18N.current) ? window.I18N.current : 'he')
         const saveAudioCheckbox = document.getElementById('save-audio-checkbox')
         const saveAudioValue = saveAudioCheckbox ? (saveAudioCheckbox.checked ? 'true' : 'false') : 'false'
@@ -4431,7 +4423,6 @@
           const precheckResult = await runUploadPrecheck({
             fileSize: file.size,
             language: selectedLang,
-            runpodToken: token,
             saveAudio: saveAudioValue,
           })
 
@@ -4443,7 +4434,6 @@
           const formData = new FormData()
           formData.append("file", file)
           formData.append('language', selectedLang)
-          if (token) formData.append("runpod_token", token)
 
           // Include save_audio checkbox value
           formData.append('save_audio', saveAudioValue)

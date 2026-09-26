@@ -45,6 +45,9 @@ def run_migrations(url: str):
     if url.startswith("sqlite:///"):
         path = url[len("sqlite:///"):]
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    elif url.startswith("postgresql://"):
+        # Name the driver: SQLAlchemy 2.1 defaults bare postgresql:// to psycopg (v3).
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
 
     here = os.path.dirname(os.path.abspath(__file__))
     cfg = Config(os.path.join(here, "alembic.ini"))

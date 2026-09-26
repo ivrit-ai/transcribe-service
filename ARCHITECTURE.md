@@ -30,7 +30,7 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 - Multi-language audio transcription with language-specific Whisper models
 - Automatic speaker diarization (who said what)
 - Timestamped segments
-- Files up to 20 hours, 300MB (3GB with custom RunPod)
+- Files up to 20 hours, 3GB
 - Chunked uploads (50MB per chunk)
 - Real-time progress tracking with queue position and ETA
 
@@ -58,7 +58,7 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 - Token-bucket rate limiting with configurable weekly minute credits (default 420 min/week)
 - Daily credit replenishment
 - Three job queues: short (<=20 min), long (>20 min), private (custom RunPod credentials)
-- Users can bring their own RunPod API key to bypass shared quotas
+- Users can bring their own RunPod API key to bypass shared quotas. The key is pasted once in settings, stored Fernet-encrypted in the user's Google Drive app folder (`runpod_key.enc`), loaded into the server session at login, and never returned to the browser (only a last-4 hint). See [RunPod Key Storage](#runpod-key-storage).
 - Quota is debited before transcription and refunded if the job never delivers a transcript
 - See [Failed Jobs](#failed-jobs) for what a user sees when a job dies
 
@@ -80,6 +80,7 @@ alembic/                  Database migrations
 
 gdrive_auth.py            Google OAuth token management
 gdrive_file_utils.py      Google Drive storage backend
+runpod_key_store.py       Fernet-encrypted storage of users' RunPod keys on their Drive
 local_file_utils.py       Local filesystem storage backend
 file_utils.py             Abstract storage interface
 
@@ -114,7 +115,8 @@ build_bundle.py           PyInstaller bundling script
 | Audio | `GET /appdata/audio/{id}`, `GET /appdata/audio/stream/{id}` |
 | Data | `GET /appdata/toc`, `GET /appdata/results/{id}`, `POST /appdata/edits/{id}` |
 | Management | `POST /appdata/rename`, `POST /appdata/delete`, `POST /appdata/donate_data` |
-| Auth & Account | `GET /login`, `GET /authorize`, `GET /login/authorized`, `GET /quota`, `GET /balance` |
+| Auth & Account | `GET /login`, `GET /authorize`, `GET /login/authorized`, `GET /quota`, `GET /balance` (RunPod balance for the session's stored key) |
+| RunPod key | `POST /runpod_key` (verify, store, use for this session), `DELETE /runpod_key` |
 | Push | `GET /sw.js` (unauthenticated), `GET /push/config`, `POST /push/subscribe` |
 | Share target | `POST /share-target` (unauthenticated fallback; the worker normally answers it) |
 | System | `GET /languages`, `POST /client_heartbeat`, `GET /stats` |
@@ -162,6 +164,7 @@ Jobs go through: upload -> pre-transcoding (ffmpeg to OPUS) -> queue -> RunPod/l
 | `RUNPOD_API_KEY` | (required in cloud) | Default RunPod API key |
 | `RUNPOD_ENDPOINT_ID` | (required in cloud) | Default RunPod endpoint ID |
 | `RUNPOD_TEMPLATE_ID` | (none) | RunPod template ID for auto-creating user endpoints |
+| `RUNPOD_KEY_ENCRYPTION_KEY` | (required outside local mode) | Fernet key encrypting users' stored RunPod keys. Startup fails if unset or malformed. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Changing it makes every stored key unreadable (users are asked to re-enter theirs) |
 | `BASE_URL` | (required in cloud) | Public base URL of the service |
 | `POSTHOG_API_KEY` | (none) | PostHog analytics key (optional, analytics disabled if unset) |
 | `TS_HIATUS_MODE` | `0` | Set to `1` to enable hiatus mode via env |
@@ -207,8 +210,7 @@ These are compile-time constants in `app.py` that require a code change to tune:
 | `TRANSCODING_SPEEDUP` | 100 | Transcoding speed ratio for ETA |
 | `SUBMISSION_DELAY` | 15s | Extra seconds added to ETA estimates |
 | `MAX_AUDIO_DURATION_IN_HOURS` | 20 | Maximum audio file length |
-| `MAX_FILE_SIZE_REGULAR` | 300 MB | Upload limit for regular users |
-| `MAX_FILE_SIZE_PRIVATE` | 3 GB | Upload limit for private (custom RunPod) users |
+| `MAX_FILE_SIZE` | 3 GB | Upload limit (cloud mode; local mode is unlimited) |
 | `UPLOAD_CHUNK_SIZE` | 50 MB | Chunked upload size |
 | `DRIVE_FILE_ID_CACHE_SIZE` | 1000 | LRU cache size for Google Drive file ID lookups |
 | `QUEUE_SAMPLE_BUCKET_SECONDS` | 15 min (900s) | Width of each queue-depth history bucket |
@@ -224,7 +226,7 @@ These are compile-time constants in `app.py` that require a code change to tune:
 ## External Services
 
 - **Google OAuth 2.0** - User authentication (scopes: openid, userinfo, drive.file)
-- **Google Drive** - Transcript and TOC storage in an app-specific folder
+- **Google Drive** - Transcript and TOC storage in an app-specific folder; also users' encrypted RunPod keys (`runpod_key.enc`)
 - **RunPod** - Serverless GPU compute. Endpoint management (list/find/create/delete,
   template lookup) uses REST API v2 (`api.runpod.io/v2`), which selects GPUs by *pool*
   (`RUNPOD_GPU_POOLS` in `app.py`) rather than by card name, and judges endpoint
@@ -471,6 +473,40 @@ Two things act on it:
 - Payloads are encrypted end to end, but the endpoint and the timing of each push are
   visible to Google/Apple, and the filename appears on the device's lock screen.
 
+### RunPod Key Storage
+
+A user's own RunPod key is held by the server, never by the browser. The page receives only
+`runpod_key_status` (`has_key`, the last 4 characters as `hint`, `load_failed`); the settings
+input is for entering a new key and always opens empty.
+
+- **Storage.** `RunpodKeyStore` (`runpod_key_store.py`) encrypts the key with
+  `RUNPOD_KEY_ENCRYPTION_KEY` (Fernet) and writes it as `runpod_key.enc` in the user's visible
+  app Drive folder, next to `toc.json.gz` — no extra OAuth scope. Neither the Drive file nor the
+  server alone recovers the key. Local mode has no store (`runpod_key_store is None`) and no
+  RunPod keys.
+- **Load.** `/login/authorized` decrypts it into `sessions[sid]["runpod_token"]` once per
+  login. A Drive failure or undecryptable file (`InvalidToken`, e.g. after rotating the
+  encryption key) degrades to "no key" and sets `runpod_key_load_failed`; login always
+  completes, and the page toasts `runpodKeyLoadFailed` asking the user to re-enter the key.
+- **Save** (`POST /runpod_key`): verify via balance → endpoint check/creation →
+  encrypt → Drive write → session. **Remove** (`DELETE /runpod_key`): delete every
+  `runpod_key.enc` in the folder (concurrent first saves can leave duplicates) → session.
+  In both, the session changes only after Drive succeeds, so the session never claims a key
+  that Drive disagrees with. An empty input on Save keeps the current key; removal is the
+  dedicated button or "clear settings".
+- **Use.** `validate_upload_request_metadata()`, `/balance` and the batch limit read the
+  session key; no request carries it. Having a key is what makes a user "paid" (private
+  queue, no quota). Jobs already submitted keep the key they were submitted with, even if the
+  user removes or replaces it.
+- **Legacy cookie migration.** Keys used to live in a `runpod_token` cookie.
+  `migrateRunpodCookie()` runs once per page load: no cookie → nothing; server already has a
+  key → delete the cookie; otherwise `POST /runpod_key` with it. 2xx → delete the cookie;
+  4xx (other than 401) → the key was rejected, delete the cookie and toast
+  `runpodKeyMigrationFailed`; 401/5xx/network → keep the cookie and retry next load. An
+  endpoint-check failure after the key passed verification is a `502`, so RunPod or config
+  trouble is retried rather than discarding a good key. Remove it once legacy cookies have
+  expired (they were set for 1 year).
+
 ### Web Share Target
 
 Installed, the app appears in the OS share sheet for audio and video, and a file shared
@@ -520,6 +556,8 @@ and installation still work there.
   finished take, and the banner offering a recording restored from IndexedDB
 - `push-optin-modal`, `push-dont-ask-checkbox` — notification opt-in prompt
 - `install-btn`, `install-modal` — the install offer and its iOS-only instructions
+- `runpod-token`, `runpod-key-status`, `remove-runpod-key` — settings: new-key input (always
+  starts empty), the "saved key ending in …" hint, and the remove button
 
 ### Key JS State Variables
 - `selectedFiles` — array of File objects pending upload
@@ -527,6 +565,8 @@ and installation still work there.
 - `currentJobId`, `activeTranscription` — active job tracking
 - `transcriptionSegments` — current transcription result segments
 - `uploadPhase` — `"idle"` | `"upload"` | `"transcoding"` | `"done"`
+- `runpodKeyStatus` — `{has_key, hint, load_failed}` rendered into the page; the only thing
+  the browser knows about the user's RunPod key. Updated from `POST`/`DELETE /runpod_key` responses
 
 ### Key JS Functions
 - `handleFiles()` — validates and queues files for upload
@@ -553,7 +593,10 @@ and installation still work there.
   the stats tab, so always call it by name rather than capturing a reference)
 - `updateThemeChrome(theme)` — swaps the sun/moon icon and the `theme-color` meta
 - `translateServerError(err)` — convert server error objects to i18n strings
-- `checkBalance()` — refresh quota display
+- `checkBalance()` — refresh the balance display: RunPod balance via `GET /balance` (session
+  key) when `runpodKeyStatus.has_key`, otherwise the free quota
+- `migrateRunpodCookie()` — one-time move of a legacy `runpod_token` cookie to server-side
+  storage, awaited at startup before the indicator and balance render
 
 ### Browser Recording Store (IndexedDB)
 

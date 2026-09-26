@@ -32,7 +32,7 @@ _PATTERNS = [
 # Keeps the label, drops the value; a lookbehind can't express this because the
 # separator is variable width, so it goes in as a callable redactor.
 _LABELLED_SECRET_RE = re.compile(
-    r"(?i)\b(access_token|refresh_token|id_token|client_secret|api_key|apikey|password)"
+    r"(?i)\b(access_token|refresh_token|id_token|client_secret|api_key|apikey|password|runpod_token)"
     r"(['\"]?\s*[:=]\s*['\"]?)[^\s,'\"}&]+"
 )
 
