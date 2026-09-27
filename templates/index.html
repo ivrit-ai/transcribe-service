@@ -664,45 +664,6 @@
         border: none;
         box-shadow: none;
       }
-      /* Speaker edit area styling */
-      .speaker-edit-area {
-        display: inline;
-        outline: none;
-        border: none;
-        box-shadow: none;
-        cursor: text;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-        direction: ltr !important;
-        unicode-bidi: plaintext;
-      }
-      .speaker-edit-area:focus {
-        outline: none;
-        border: none;
-        box-shadow: none;
-      }
-      .speaker-edit-area.highlighted {
-        background-color: rgba(255, 193, 7, 0.3);
-        border-radius: 2px;
-        padding: 2px 4px;
-        margin: -2px -4px;
-      }
-      [data-theme="dark"] .speaker-edit-area.highlighted {
-        background-color: rgba(255, 193, 7, 0.2);
-      }
-      /* Individual segment spans within edit areas */
-      .edit-segment {
-        display: inline;
-        cursor: text;
-      }
-      .edit-segment.highlighted {
-        background-color: rgba(255, 193, 7, 0.3);
-        border-radius: 2px;
-        padding: 0px 2px;
-      }
-      [data-theme="dark"] .edit-segment.highlighted {
-        background-color: rgba(255, 193, 7, 0.2);
-      }
       /* TipTap Editor Styles */
       .tiptap-editor {
         outline: none;
@@ -4528,7 +4489,7 @@
           9: "#607D8B",
           10: "#8BC34A"
         }
-        const esc = (text) => String(text || '').replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
+        const esc = (text) => escapeHtml(text || '')
 
         const lines = []
         const isRTL = ['he', 'yi'].includes(docLang)
@@ -4729,7 +4690,7 @@
         if (segment.speakers && segment.speakers.length > 0) {
           const speakerNumber = parseInt(segment.speakers[0].replace("SPEAKER_", ""))
           const speakerLabelText = translateSpeakerLabelText(lang, speakerNumber)
-          return `<span class="speaker speaker-${speakerNumber}">${speakerLabelText}: </span>`
+          return `<span class="speaker speaker-${speakerNumber}">${escapeHtml(speakerLabelText)}: </span>`
         }
         return `<span class="speaker">${translateSpeakerUnknownText(lang)}: </span>`
       }
@@ -4984,7 +4945,7 @@
       }
 
       window.addEventListener("beforeunload", function (e) {
-        if (activeTranscription || recordingSession) {
+        if (activeTranscription || recordingSession || hasUnsavedEdits()) {
           // Show confirmation dialog
           e.preventDefault()
           e.returnValue = window.I18N.t('exitWarning')
@@ -5312,10 +5273,38 @@
       let currentEditingSegmentIndex = -1
       let speakerNameMappings = {} // Map of SPEAKER_XX to custom names
       let speakerSegmentSwaps = {} // Map of segment index to new SPEAKER_XX
-      
-      // Snapshots for cancel functionality (stores state when entering edit mode)
+      // True only when loadEdits() got a 200 or 404 for the open file; edit mode requires it
+      let savedEditsLoaded = false
+
+      // Serialized edit state (serializeEditState()) taken when the editor is built; baseline for
+      // dirty checks and what cancel restores
       let editModeSnapshot = null
-      
+
+      // localStorage key prefix for unsaved edit state kept when the page is hidden
+      const EDIT_DRAFT_PREFIX = 'editDraft:'
+
+      // The edit overlay as JSON; also the POST /appdata/edits body
+      function serializeEditState() {
+        return JSON.stringify({ edits: currentEdits, speakerNames: speakerNameMappings, speakerSwaps: speakerSegmentSwaps })
+      }
+
+      function restoreEditState(json) {
+        const state = JSON.parse(json)
+        currentEdits = state.edits
+        speakerNameMappings = state.speakerNames
+        speakerSegmentSwaps = state.speakerSwaps
+      }
+
+      function hasUnsavedEdits() {
+        if (!isEditMode) return false
+        extractEditsFromTipTap()
+        return serializeEditState() !== editModeSnapshot
+      }
+
+      function escapeHtml(text) {
+        return String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+      }
+
       // TipTap editor instance
       let tiptapEditor = null
       let tiptapReady = false
@@ -5378,7 +5367,9 @@
           
           addAttributes() {
             return {
-              index: { default: -1 },
+              // Pasted segments must not claim an index: their text belongs to the surrounding
+              // segment. Reading data-segment-index would let a pasted copy steal identity.
+              index: { default: -1, parseHTML: () => -1 },
               start: { default: 0 },
               end: { default: 0 },
             }
@@ -5742,40 +5733,62 @@
       }
       
       /**
-       * Extract edits from TipTap editor content
+       * Compute the full text-edits map from a TipTap JSON document.
+       * Invariant: every document character belongs to exactly one segment, and a segment
+       * missing from the document is recorded as emptied. Text outside an owning segment node
+       * goes to the preceding owner in its block, else the next owning segment; with no owner
+       * left at all it goes to segment 0.
        */
+      function computeSegmentEdits(doc, segments) {
+        const owned = new Map()
+        let pending = ''
+        let lastOwner = -1
+
+        for (const block of doc.content || []) {
+          let owner = -1
+          for (const node of block.content || []) {
+            if (node.type === 'speakerLabel') continue
+            const text = node.type === 'segment'
+              ? (node.content || []).map(c => c.text || '').join('')
+              : (node.text || '')
+            const index = node.type === 'segment' ? node.attrs.index : -1
+
+            if (index >= 0 && index < segments.length && !owned.has(index)) {
+              owned.set(index, pending + text)
+              pending = ''
+              owner = index
+              lastOwner = index
+            } else if (owner !== -1) {
+              owned.set(owner, owned.get(owner) + text)
+            } else {
+              pending += text
+            }
+          }
+        }
+
+        if (pending) {
+          if (lastOwner !== -1) {
+            owned.set(lastOwner, owned.get(lastOwner) + pending)
+          } else if (segments.length > 0) {
+            owned.set(0, pending)
+          }
+        }
+
+        const edits = {}
+        for (let i = 0; i < segments.length; i++) {
+          const edited = owned.has(i) ? owned.get(i).trim() : ''
+          if (edited !== segments[i].text.trim()) {
+            edits[i] = edited
+          }
+        }
+        return edits
+      }
+
       function extractEditsFromTipTap() {
         if (!tiptapEditor) return
-        
-        const json = tiptapEditor.getJSON()
-        
-        // Walk through speaker blocks and segments
-        if (json.content) {
-          json.content.forEach(block => {
-            if (block.type === 'speakerBlock' && block.content) {
-              block.content.forEach(node => {
-                if (node.type === 'segment') {
-                  const segmentIndex = node.attrs.index
-                  const editedText = node.content && node.content.length > 0 
-                    ? node.content.map(c => c.text || '').join('') 
-                    : ''
-                  
-                  // Get original text
-                  const originalText = currentViewerData.results[segmentIndex]?.text.trim() || ''
-                  
-                  // Store edit if changed
-                  if (editedText !== originalText) {
-                    currentEdits[segmentIndex] = editedText
-                  } else {
-                    delete currentEdits[segmentIndex]
-                  }
-                }
-              })
-            }
-          })
-        }
+        currentEdits = computeSegmentEdits(tiptapEditor.getJSON(), currentViewerData.results)
       }
-      
+
       /**
        * Destroy TipTap editor instance
        */
@@ -5784,6 +5797,14 @@
           tiptapEditor.destroy()
           tiptapEditor = null
         }
+      }
+
+      // Recreate the editor from the current edit state
+      function rebuildTipTapEditor() {
+        destroyTipTapEditor()
+        const transcriptionDiv = document.getElementById('viewer-transcription')
+        transcriptionDiv.innerHTML = ''
+        tiptapEditor = createTipTapEditor(transcriptionDiv, getEffectiveTranscriptionData())
       }
       
       // Pending file tracking for viewer processing state
@@ -6207,6 +6228,7 @@
 
       // View saved file from TOC entry
       async function viewSavedFileFromTOC(entry) {
+        if (!leaveEditSession()) return
         // Show spinner to block access while loading
         showSpinner(window.I18N ? window.I18N.t('loadingFile') : 'טוען קובץ...')
 
@@ -6272,6 +6294,10 @@
           if (window.lucide && typeof window.lucide.createIcons === 'function') {
             window.lucide.createIcons()
           }
+
+          // Offer unsaved work from a previous session once the file is visible
+          hideSpinner()
+          offerEditDraft(entry.results_id)
 
         } catch (error) {
           console.error('Error viewing file:', error)
@@ -6453,7 +6479,7 @@
           // Show original data without any edits
           segments = currentViewerData.results
         } else if (editModeView === 'compared') {
-          // Show effective data but getSegmentDisplayText will handle the comparison
+          // Show effective data but getSegmentDisplayHtml will handle the comparison
           segments = currentViewerData.results
         } else {
           // Show effective data with all edits applied (default and 'new' view)
@@ -6697,87 +6723,6 @@
             }
           })
         })
-        
-        // Add handlers for individual segments within edit areas
-        const editSegments = document.querySelectorAll('.edit-segment')
-        editSegments.forEach(segmentSpan => {
-          // Right-click handler for speaker modification
-          segmentSpan.addEventListener('contextmenu', (e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            
-            const segmentIndex = parseInt(segmentSpan.dataset.segmentIndex)
-            
-            // Highlight only this segment
-            segmentSpan.classList.add('highlighted')
-            
-            // Show context menu for this single segment
-            showEditSegmentContextMenu(e.clientX, e.clientY, segmentIndex, segmentSpan)
-          })
-        })
-        
-        // Add context menu handlers to speaker labels in edit mode
-        addSpeakerContextMenuHandlers()
-      }
-
-      function addSpeakerContextMenuHandlers() {
-        if (!isEditMode) return
-        
-        const speakerLabels = document.querySelectorAll('.speaker')
-        speakerLabels.forEach(label => {
-          label.addEventListener('contextmenu', (e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            
-            // Get speaker number from class
-            const classes = Array.from(label.classList)
-            const speakerClass = classes.find(c => c.startsWith('speaker-'))
-            if (!speakerClass) return
-            
-            const speakerNumber = speakerClass.replace('speaker-', '')
-            const speakerId = `SPEAKER_${speakerNumber.padStart(2, '0')}`
-            
-            // Find the segment index by looking at the next sibling transcript-segment
-            let firstSegmentIndex = -1
-            const nextElement = label.nextElementSibling
-            if (nextElement && nextElement.classList.contains('transcript-segment')) {
-              firstSegmentIndex = parseInt(nextElement.dataset.segmentIndex)
-            }
-            
-            // Find all consecutive segments with the same speaker
-            const segmentIndices = findConsecutiveSpeakerSegments(firstSegmentIndex, speakerId)
-            
-            showSpeakerContextMenu(e.clientX, e.clientY, speakerId, segmentIndices)
-          })
-        })
-      }
-
-      /**
-       * Find all consecutive segment indices that belong to the same speaker block
-       */
-      function findConsecutiveSpeakerSegments(startIndex, speakerId) {
-        if (startIndex < 0 || !currentViewerData || !currentViewerData.results) {
-          return []
-        }
-        
-        const effectiveSegments = getEffectiveTranscriptionData()
-        const indices = []
-        
-        // Start from the given index and collect all consecutive segments with the same speaker
-        for (let i = startIndex; i < effectiveSegments.length; i++) {
-          const segment = effectiveSegments[i]
-          const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
-          
-          // Check if this segment belongs to the same speaker
-          if (segmentSpeaker === speakerId) {
-            indices.push(i)
-          } else {
-            // Speaker changed, stop here
-            break
-          }
-        }
-        
-        return indices
       }
 
       let currentRenamingSpeakerId = null
@@ -6906,14 +6851,7 @@
         
         // Refresh the display - recreate TipTap if in edit mode with TipTap
         if (isEditMode && tiptapEditor) {
-          // Destroy old editor
-          destroyTipTapEditor()
-          
-          // Recreate with updated data
-          const transcriptionDiv = document.getElementById('viewer-transcription')
-          transcriptionDiv.innerHTML = ''
-          const segments = getEffectiveTranscriptionData()
-          tiptapEditor = createTipTapEditor(transcriptionDiv, segments)
+          rebuildTipTapEditor()
         } else {
           updateViewerTranscriptionDisplay()
         }
@@ -6946,42 +6884,6 @@
             const segment = document.querySelector(`.transcript-segment[data-segment-index="${currentContextSegmentIndex}"]`)
             if (segment) {
               segment.classList.remove('highlighted')
-            }
-          }
-        }
-        setTimeout(() => {
-          document.addEventListener('click', hideMenu)
-        }, 0)
-      }
-
-      /**
-       * Show context menu for an individual edit segment
-       */
-      let currentEditSegmentElement = null
-      
-      function showEditSegmentContextMenu(x, y, segmentIndex, segmentElement) {
-        const contextMenu = document.getElementById('segment-context-menu')
-        currentContextSegmentIndices = [segmentIndex]
-        currentEditSegmentElement = segmentElement
-        
-        // Populate speaker submenu for this segment
-        populateSegmentSpeakerSubmenu(segmentIndex)
-        
-        // Position the menu
-        contextMenu.style.left = x + 'px'
-        contextMenu.style.top = y + 'px'
-        contextMenu.classList.add('show')
-        
-        // Hide menu when clicking outside
-        const hideMenu = (e) => {
-          if (!contextMenu.contains(e.target)) {
-            contextMenu.classList.remove('show')
-            document.removeEventListener('click', hideMenu)
-            
-            // Remove highlight from segment
-            if (currentEditSegmentElement) {
-              currentEditSegmentElement.classList.remove('highlighted')
-              currentEditSegmentElement = null
             }
           }
         }
@@ -7036,12 +6938,6 @@
             swapSegmentsSpeaker(indices, speakerId)
             document.getElementById('segment-context-menu').classList.remove('show')
             
-            // Remove highlight from edit segment (old contentEditable)
-            if (currentEditSegmentElement) {
-              currentEditSegmentElement.classList.remove('highlighted')
-              currentEditSegmentElement = null
-            }
-            
             // Clear TipTap highlights using decoration plugin
             if (tiptapEditor) {
               tiptapEditor.view.dispatch(
@@ -7090,13 +6986,7 @@
         if (isEditMode && tiptapEditor) {
           // Extract current text edits
           extractEditsFromTipTap()
-          // Destroy old editor
-          destroyTipTapEditor()
-          // Recreate with updated data
-          const transcriptionDiv = document.getElementById('viewer-transcription')
-          transcriptionDiv.innerHTML = ''
-          const segments = getEffectiveTranscriptionData()
-          tiptapEditor = createTipTapEditor(transcriptionDiv, segments)
+          rebuildTipTapEditor()
         } else {
           updateViewerTranscriptionDisplay()
         }
@@ -7167,38 +7057,39 @@
         segment.classList.remove('editing')
       }
 
-      function getSegmentDisplayText(segment, index) {
+      // Returns HTML: segment text is escaped, diff markup is not
+      function getSegmentDisplayHtml(segment, index) {
         const hasEdit = currentEdits.hasOwnProperty(index)
         const originalText = segment.text.trim()
         const editedText = hasEdit ? currentEdits[index] : originalText
-        
+
         if (!hasEdit || editModeView === 'new') {
-          return editedText
+          return escapeHtml(editedText)
         } else if (editModeView === 'original') {
-          return originalText
+          return escapeHtml(originalText)
         } else if (editModeView === 'compared') {
           if (originalText === editedText) {
-            return editedText
+            return escapeHtml(editedText)
           }
           return generateWordLevelDiff(originalText, editedText)
         }
-        
-        return editedText
+
+        return escapeHtml(editedText)
       }
 
       function generateWordLevelDiff(originalText, editedText) {
         // Use jsdiff library for word-level diff
         if (!window.Diff || !window.Diff.diffWords) {
           // Fallback if library not loaded
-          return `<del style="color: #999;">${originalText}</del> ${editedText}`
+          return `<del style="color: #999;">${escapeHtml(originalText)}</del> ${escapeHtml(editedText)}`
         }
-        
+
         const diff = window.Diff.diffWords(originalText, editedText)
         let result = []
-        
+
         for (let i = 0; i < diff.length; i++) {
           const part = diff[i]
-          const value = part.value
+          const value = escapeHtml(part.value)
           
           if (part.added) {
             // Text was added in the edit
@@ -7474,7 +7365,7 @@
               // Wrap each segment with timing data
               groupText = currentGroup.map((seg, idx) => {
                 const actualIndex = segments.indexOf(seg)
-                const displayText = useViewMode ? getSegmentDisplayText(seg, actualIndex) : seg.text.trim()
+                const displayText = useViewMode ? getSegmentDisplayHtml(seg, actualIndex) : escapeHtml(seg.text.trim())
                 const editableAttr = isEditMode ? '' : ''
                 return `<span class="transcript-segment" data-start="${seg.start}" data-end="${seg.end}" data-segment-index="${actualIndex}"${editableAttr}>${displayText}</span>`
               }).join(separator)
@@ -7537,44 +7428,6 @@
         let currentSpeaker = null
         const diarizationEnabled = displaySettings.diarizationDisplay !== "disabled"
         
-        // In edit mode, create editable divs per speaker group
-        if (isEditMode && isHTML) {
-          const groups = groupSegmentsBySpeaker(segments)
-          
-          for (const group of groups) {
-            const showSpeakerLabel = diarizationEnabled && group.speaker !== currentSpeaker
-            
-            // Wrap each segment in a span for individual targeting
-            const segmentSpans = group.segments.map((idx, i) => {
-              const seg = segments[idx]
-              const text = seg.text.trim()
-              // Add space before segment (except first)
-              const space = i > 0 ? ' ' : ''
-              return `${space}<span class="edit-segment" data-segment-index="${idx}">${text}</span>`
-            }).join('')
-            
-            // Create speaker label if needed
-            const labelHTML = showSpeakerLabel ? getSpeakerLabelForLanguage(segments[group.startIndex], currentViewerLanguage) : ''
-            
-            // Create editable div for this speaker group
-            const segmentIndices = group.segments.join(',')
-            const editableDiv = `<div class="speaker-edit-area" contenteditable="true" data-segment-indices="${segmentIndices}" data-speaker="${group.speaker || ''}">${segmentSpans}</div>`
-            
-            if (result.length === 0) {
-              result.push(labelHTML + editableDiv)
-            } else if (showSpeakerLabel) {
-              result.push('<br><br>' + labelHTML + editableDiv)
-            } else {
-              result.push(continuousSeparator + editableDiv)
-            }
-            
-            currentSpeaker = group.speaker
-          }
-          
-          return result.join("")
-        }
-        
-        // Normal mode (not editing) - use original logic
         for (let i = 0; i < segments.length; i++) {
           const segment = segments[i]
           const segmentSpeaker = segment.speakers && segment.speakers.length > 0 ? segment.speakers[0] : null
@@ -7584,11 +7437,11 @@
           let segmentText
           if (isHTML) {
             const labelHTML = showSpeakerLabel ? getSpeakerLabelForLanguage(segment, currentViewerLanguage) : ''
-            const displayText = useViewMode ? getSegmentDisplayText(segment, i) : segment.text.trim()
+            const displayText = useViewMode ? getSegmentDisplayHtml(segment, i) : escapeHtml(segment.text.trim())
             segmentText = labelHTML + `<span class="transcript-segment" data-start="${segment.start}" data-end="${segment.end}" data-segment-index="${i}">${displayText}</span>`
           } else {
-            const displayText = useViewMode ? getSegmentDisplayText(segment, i) : segment.text.trim()
-            segmentText = showSpeakerLabel 
+            const displayText = segment.text.trim()
+            segmentText = showSpeakerLabel
               ? getSpeakerLabelPlainForLanguage(segment, currentViewerLanguage) + displayText
               : displayText
           }
@@ -7665,7 +7518,7 @@
         if (segment.speakers && segment.speakers.length > 0) {
           const speakerNumber = parseInt(segment.speakers[0].replace("SPEAKER_", ""))
           const speakerLabelText = translateSpeakerLabelText(lang, speakerNumber)
-          return `<span class="speaker speaker-${speakerNumber}">${speakerLabelText}: </span>`
+          return `<span class="speaker speaker-${speakerNumber}">${escapeHtml(speakerLabelText)}: </span>`
         }
         return `<span class="speaker">${translateSpeakerUnknownText(lang)}: </span>`
       }
@@ -7691,28 +7544,21 @@
 
       // Wire up viewer controls
       document.getElementById('back-to-files-btn').addEventListener('click', () => {
+        if (!leaveEditSession()) return
         document.getElementById('viewer-tab-btn').style.display = 'none'
         // Stop processing poll if active
         stopViewerProcessingPoll()
         pendingViewerFilename = null
         hideViewerProcessingState()
-        
-        // Reset edit mode
-        isEditMode = false
-        currentEditingSegmentIndex = -1
+
+        // Reset edit state
         currentEdits = {}
         speakerNameMappings = {}
         speakerSegmentSwaps = {}
+        savedEditsLoaded = false
         editModeView = 'new'
         document.getElementById('viewer-edit-mode-toggle').style.display = 'none'
-        const editBtn = document.getElementById('viewer-edit-toggle-btn')
-        editBtn.innerHTML = '<i data-lucide="pen"></i>'
-        editBtn.title = 'ערוך'
-        editBtn.classList.remove('toggle-active')
-        if (window.lucide && typeof window.lucide.createIcons === 'function') {
-          window.lucide.createIcons()
-        }
-        
+
         // Hide and reset audio player
         const playerContainer = document.getElementById('viewer-audio-player-container')
         const audioPlayer = document.getElementById('viewer-audio-player')
@@ -7810,53 +7656,54 @@
         if (!currentViewerData || !currentViewerData.results) return
         
         if (isEditMode) {
-          // Cancel editing - exit without saving
-          exitEditMode(false)
+          // Cancel editing - confirms if there are unsaved changes
+          leaveEditSession()
         } else {
-          // Enter edit mode
           enterEditMode()
         }
       })
-      
+
       // Save edit button
       document.getElementById('viewer-save-edit-btn').addEventListener('click', async () => {
-        if (!isEditMode) return
-        
-        // Save edits and exit
-        await saveEdits()
-        exitEditMode()
+        const saveBtn = document.getElementById('viewer-save-edit-btn')
+        if (!isEditMode || saveBtn.disabled) return
+
+        saveBtn.disabled = true
+        // Read-only while the request is in flight: anything typed now would not be in it
+        tiptapEditor.setEditable(false)
+        showSpinner(window.I18N.t('saving'))
+        try {
+          // The session ends only once the server has the edits
+          if (await saveEdits() && isEditMode) exitEditMode(true)
+        } finally {
+          hideSpinner()
+          saveBtn.disabled = false
+          if (isEditMode) tiptapEditor.setEditable(true)
+        }
       })
 
       function enterEditMode() {
+        // Saving from a state that failed to load would overwrite edits the user can't see
+        if (!savedEditsLoaded) {
+          showToast(window.I18N.t('editsLoadError'), 'error')
+          return
+        }
+        if (!tiptapReady) {
+          showToast(window.I18N.t('editorLoadError'), 'error')
+          return
+        }
+
         isEditMode = true
         // Reset playing segment index so the next timeupdate re-applies the class to TipTap elements
         currentPlayingSegmentIndex = -1
-        
-        // Save snapshot of current edit state for cancel functionality
-        editModeSnapshot = {
-          currentEdits: JSON.parse(JSON.stringify(currentEdits)),
-          speakerNameMappings: JSON.parse(JSON.stringify(speakerNameMappings)),
-          speakerSegmentSwaps: JSON.parse(JSON.stringify(speakerSegmentSwaps))
-        }
-        
+
         const editBtn = document.getElementById('viewer-edit-toggle-btn')
         const saveBtn = document.getElementById('viewer-save-edit-btn')
         const viewModeBtn = document.getElementById('viewer-edit-mode-toggle')
         
         // Always set to 'new' view mode when entering edit mode
         editModeView = 'new'
-        
-        // Lock display settings for editing mode
-        displaySettings.diarizationDisplay = 'enabled'
-        displaySettings.textFormat = 'continuous'
-        displaySettings.timestampFormat = 'none'
-        localStorage.setItem('displaySettings', JSON.stringify(displaySettings))
-        
-        // Update toggle UI to reflect locked settings
-        updateViewerDiarizationToggleUI()
-        updateViewerTextFormatToggleUI()
-        updateViewerTimestampsToggleUI()
-        
+
         // Disable toggle buttons during edit mode
         document.getElementById('viewer-text-format-toggle').disabled = true
         document.getElementById('viewer-timestamps-toggle').disabled = true
@@ -7885,58 +7732,32 @@
           transcriptionDiv.classList.add('edit-mode-active')
         }
         
-        // Create TipTap editor if ready, otherwise fall back to old method
-        if (tiptapReady && currentViewerData && currentViewerData.results) {
-          // Clear the container
-          transcriptionDiv.innerHTML = ''
-          
-          // Get effective data with edits applied
-          const segments = getEffectiveTranscriptionData()
-          
-          // Create TipTap editor
-          tiptapEditor = createTipTapEditor(transcriptionDiv, segments)
-          
-          if (!tiptapEditor) {
-            console.error('Failed to create TipTap editor, falling back to old method')
-            updateViewerTranscriptionDisplay()
-          }
-        } else {
-          // Fall back to old contentEditable method
-          console.log('TipTap not ready, using fallback edit mode')
-          updateViewerTranscriptionDisplay()
-        }
+        rebuildTipTapEditor()
+
+        // Baseline for dirty checks, taken after one extraction so it is in the editor's normalized form
+        extractEditsFromTipTap()
+        editModeSnapshot = serializeEditState()
       }
 
-      function exitEditMode(saveChanges = true) {
+      // keepEdits: true after a successful save; false discards back to the snapshot
+      function exitEditMode(keepEdits) {
+        if (!keepEdits) {
+          restoreEditState(editModeSnapshot)
+        }
+        try {
+          localStorage.removeItem(EDIT_DRAFT_PREFIX + currentViewerEntry.results_id)
+        } catch (err) {
+          console.error('Failed to remove edit draft:', err)
+        }
+        editModeSnapshot = null
+
         isEditMode = false
         currentEditingSegmentIndex = -1
         // Reset playing segment index so the next timeupdate re-applies the class to transcript elements
         currentPlayingSegmentIndex = -1
-        
-        // Extract edits from TipTap or speaker edit areas before exiting if saving
-        if (saveChanges) {
-          if (tiptapEditor) {
-            extractEditsFromTipTap()
-          } else {
-            extractEditsFromSpeakerAreas()
-          }
-        } else {
-          // Cancel: restore from snapshot
-          if (editModeSnapshot) {
-            currentEdits = editModeSnapshot.currentEdits
-            speakerNameMappings = editModeSnapshot.speakerNameMappings
-            speakerSegmentSwaps = editModeSnapshot.speakerSegmentSwaps
-          }
-        }
-        
-        // Clear snapshot
-        editModeSnapshot = null
-        
-        // Destroy TipTap editor if it exists
-        if (tiptapEditor) {
-          destroyTipTapEditor()
-        }
-        
+
+        destroyTipTapEditor()
+
         const editBtn = document.getElementById('viewer-edit-toggle-btn')
         const saveBtn = document.getElementById('viewer-save-edit-btn')
         const viewModeBtn = document.getElementById('viewer-edit-mode-toggle')
@@ -7969,6 +7790,52 @@
         
         // Refresh display
         updateViewerTranscriptionDisplay()
+      }
+
+      // Single exit for everything that closes or replaces the open transcript.
+      // Returns false if the user chose to keep editing.
+      function leaveEditSession() {
+        if (!isEditMode) return true
+        if (hasUnsavedEdits() && !confirm(window.I18N.t('discardEditsConfirm'))) return false
+        exitEditMode(false)
+        return true
+      }
+
+      // Keep unsaved edit state on the device when the page is hidden: a lost session
+      // redirects to /login mid-edit
+      function persistEditDraft() {
+        if (!isEditMode) return
+        const key = EDIT_DRAFT_PREFIX + currentViewerEntry.results_id
+        try {
+          if (hasUnsavedEdits()) {
+            localStorage.setItem(key, serializeEditState())
+          } else {
+            localStorage.removeItem(key)
+          }
+        } catch (err) {
+          console.error('Failed to store edit draft:', err)
+        }
+      }
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') persistEditDraft()
+      })
+      window.addEventListener('pagehide', persistEditDraft)
+
+      // Offer to restore a draft left by a previous session. The snapshot stays the loaded
+      // state, so restored work shows as unsaved.
+      function offerEditDraft(resultsId) {
+        const key = EDIT_DRAFT_PREFIX + resultsId
+        const draft = localStorage.getItem(key)
+        // Keep the draft if edit mode is unavailable right now
+        if (!draft || !savedEditsLoaded || !tiptapReady) return
+        if (!confirm(window.I18N.t('restoreEditDraftConfirm'))) {
+          localStorage.removeItem(key)
+          return
+        }
+        enterEditMode()
+        restoreEditState(draft)
+        rebuildTipTapEditor()
       }
 
       // View mode toggle (original/compared/new)
@@ -8008,113 +7875,65 @@
         }
       }
 
-      /**
-       * Extract edits from speaker edit areas and update currentEdits
-       */
-      function extractEditsFromSpeakerAreas() {
-        const editAreas = document.querySelectorAll('.speaker-edit-area')
-        
-        editAreas.forEach(area => {
-          const segmentIndices = area.dataset.segmentIndices.split(',').map(i => parseInt(i))
-          const editedText = area.innerText.trim()
-          
-          if (segmentIndices.length === 0) return
-          
-          // Get original text for comparison
-          let originalText = ''
-          segmentIndices.forEach((idx, i) => {
-            if (i > 0) originalText += ' '
-            originalText += currentViewerData.results[idx].text.trim()
-          })
-          
-          // Check if text was actually edited
-          if (editedText !== originalText) {
-            // Store the edited text in the first segment
-            currentEdits[segmentIndices[0]] = editedText
-            
-            // Clear the remaining segments in the group (they're now merged into the first)
-            for (let i = 1; i < segmentIndices.length; i++) {
-              currentEdits[segmentIndices[i]] = ''
-            }
-          } else {
-            // No changes, remove any existing edits for this group
-            segmentIndices.forEach(idx => {
-              delete currentEdits[idx]
-            })
-          }
-        })
-      }
-
+      // Saves the full edit state (empty maps are how a full revert is saved).
+      // Returns true when there was nothing to save or the server accepted it.
       async function saveEdits() {
-        if (!currentViewerEntry || !currentViewerData) return
-        
-        // Extract edits from TipTap or speaker edit areas if in edit mode
-        if (isEditMode) {
-          if (tiptapEditor) {
-            extractEditsFromTipTap()
-          } else {
-            extractEditsFromSpeakerAreas()
-          }
-        }
-        
-        if (Object.keys(currentEdits).length === 0 && 
-            Object.keys(speakerNameMappings).length === 0 && 
-            Object.keys(speakerSegmentSwaps).length === 0) {
-          showToast("אין שינויים לשמירה", "info")
-          return
-        }
-        
+        if (!hasUnsavedEdits()) return true
+
+        const resultsId = currentViewerEntry.results_id
         try {
-          const response = await fetch(`/appdata/edits/${currentViewerEntry.results_id}`, {
+          const response = await fetch(`/appdata/edits/${resultsId}`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              edits: currentEdits,
-              speakerNames: speakerNameMappings,
-              speakerSwaps: speakerSegmentSwaps
-            })
+            body: serializeEditState()
           })
-          
-          if (response.ok) {
-            showToast("השינויים נשמרו בהצלחה", "success")
-          } else {
-            throw new Error('Failed to save edits')
+
+          if (!response.ok) {
+            throw new Error(`Failed to save edits (status ${response.status})`)
           }
+          showToast("השינויים נשמרו בהצלחה", "success")
+          return true
         } catch (error) {
           console.error('Error saving edits:', error)
           showToast("שגיאה בשמירת השינויים", "error")
+          return false
         }
       }
 
       async function loadEdits(uuid) {
+        // Never leave the previous file's edits (or a partial state) behind
+        currentEdits = {}
+        speakerNameMappings = {}
+        speakerSegmentSwaps = {}
+        savedEditsLoaded = false
         try {
           const response = await fetch(`/appdata/edits/${uuid}`)
-          if (response.ok) {
-            const data = await response.json()
-            currentEdits = data.edits || {}
-            speakerNameMappings = data.speakerNames || {}
-            speakerSegmentSwaps = data.speakerSwaps || {}
-            
-            // Show view mode button if any edits exist (text, speaker names, or speaker swaps)
-            if (Object.keys(currentEdits).length > 0 || 
-                Object.keys(speakerNameMappings).length > 0 || 
-                Object.keys(speakerSegmentSwaps).length > 0) {
-              document.getElementById('viewer-edit-mode-toggle').style.display = 'inline-block'
-              updateViewModeButtonUI()
-            }
-          } else if (response.status === 404) {
+          if (response.status === 404) {
             // No edits file exists yet
-            currentEdits = {}
-            speakerNameMappings = {}
-            speakerSegmentSwaps = {}
+            savedEditsLoaded = true
+            return
+          }
+          if (!response.ok) {
+            throw new Error(`Failed to load edits (status ${response.status})`)
+          }
+          const data = await response.json()
+          currentEdits = data.edits || {}
+          speakerNameMappings = data.speakerNames || {}
+          speakerSegmentSwaps = data.speakerSwaps || {}
+          savedEditsLoaded = true
+
+          // Show view mode button if any edits exist (text, speaker names, or speaker swaps)
+          if (Object.keys(currentEdits).length > 0 ||
+              Object.keys(speakerNameMappings).length > 0 ||
+              Object.keys(speakerSegmentSwaps).length > 0) {
+            document.getElementById('viewer-edit-mode-toggle').style.display = 'inline-block'
+            updateViewModeButtonUI()
           }
         } catch (error) {
           console.error('Error loading edits:', error)
-          currentEdits = {}
-          speakerNameMappings = {}
-          speakerSegmentSwaps = {}
+          showToast(window.I18N.t('editsLoadError'), 'error')
         }
       }
 

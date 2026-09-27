@@ -21,7 +21,7 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 - Responsive app shell (sticky header, bottom tab bar on phones) with a web app manifest
 - CSS variables for dark/light theming
 - Lucide icons (SVG)
-- Libraries: html-docx-js (DOCX export), Chart.js (statistics), diff (text diffing)
+- Libraries: html-docx-js (DOCX export), Chart.js (statistics), diff (text diffing), TipTap 2 (transcript editor; ES modules from esm.sh)
 - Full internationalization (i18n) support
 
 ## Features
@@ -36,7 +36,7 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 
 ### Result Management
 - Save, rename, delete transcriptions
-- Inline editing of transcription text
+- Transcript editing (text, speaker names, speaker reassignment) stored as a per-transcript overlay; see Transcript Editing
 - Per-transcript statistics with Chart.js visualizations
 - Export formats: plain text, timestamped text, VTT, SRT, DOCX, JSON, speaker-separated text
 
@@ -113,7 +113,7 @@ build_bundle.py           PyInstaller bundling script
 |----------|--------------|
 | Transcription | `POST /upload`, `POST /upload/precheck`, `POST /upload/youtube`, `GET /download/{job_id}` |
 | Audio | `GET /appdata/audio/{id}`, `GET /appdata/audio/stream/{id}` |
-| Data | `GET /appdata/toc`, `GET /appdata/results/{id}`, `POST /appdata/edits/{id}` |
+| Data | `GET /appdata/toc`, `GET /appdata/results/{id}`, `GET`/`POST /appdata/edits/{id}` |
 | Management | `POST /appdata/rename`, `POST /appdata/delete`, `POST /appdata/donate_data` |
 | Auth & Account | `GET /login`, `GET /authorize`, `GET /login/authorized`, `GET /quota`, `GET /balance` (RunPod balance for the session's stored key) |
 | RunPod key | `POST /runpod_key` (verify, store, use for this session), `DELETE /runpod_key` |
@@ -544,6 +544,44 @@ would break recording persistence.
 
 **Caveat.** WebKit does not implement Web Share Target, so this does nothing on iOS. Push
 and installation still work there.
+
+### Transcript Editing
+
+The viewer's edit mode edits an overlay; the results file is never modified.
+
+- **Storage:** `{results_id}.edits.json.gz` next to the results file, via `GET`/`POST /appdata/edits/{id}`,
+  shaped `{edits: {segmentIndex: text}, speakerNames: {SPEAKER_XX: name}, speakerSwaps: {segmentIndex: SPEAKER_XX}}`.
+  `POST` replaces the file and the client always sends the full state, so empty maps are how a full
+  revert is saved. Last writer wins; there is no cross-tab or cross-device concurrency control. Drive's
+  `find_file_by_name` orders by `modifiedTime desc`, so a duplicate left by a past race resolves to the
+  newest copy for both reads and updates.
+- **State:** `currentEdits`, `speakerNameMappings`, `speakerSegmentSwaps` hold the open file's overlay
+  (`serializeEditState()` is the `POST` body); `getEffectiveTranscriptionData()` applies them.
+  `savedEditsLoaded` is true only when `loadEdits()` got a 200 or 404. Any other outcome leaves the maps
+  empty and edit mode unavailable, since saving from that state would overwrite edits the user can't see.
+- **Session:** while editing, the TipTap document (`tiptapEditor`) is the source of truth;
+  `extractEditsFromTipTap()` syncs it into the maps before a save, before speaker rename/swap rebuild
+  the editor, and for dirty checks. `editModeSnapshot` is the JSON baseline taken right after the editor
+  is built and extracted once (so it is in the editor's normalized form); `hasUnsavedEdits()` compares
+  against it.
+- **Extraction invariant** (`computeSegmentEdits()`, pure): every character in the document belongs to
+  exactly one segment, and a segment missing from the document is recorded as emptied. Text outside an
+  owning segment node — typed between segments, pasted segment copies (pasted nodes get index -1 on
+  purpose), a repeat of an already-seen index — goes to the preceding segment in its block, else the next
+  one; with no segment left at all it goes to segment 0.
+- **Leaving:** everything that closes or replaces the open transcript (Back, and `viewSavedFileFromTOC()`,
+  which covers the file list, the processing poll and `openResultsById()`) calls `leaveEditSession()`
+  first: it confirms unsaved changes, then `exitEditMode(false)` restores the snapshot. Save ends the
+  session only after a 2xx; the button is disabled and the spinner shown while it is in flight.
+- **Unload and drafts:** `beforeunload` warns on unsaved edits. When the page is hidden
+  (`visibilitychange`/`pagehide`), unsaved state goes to `localStorage` under `editDraft:{results_id}`;
+  `exitEditMode()` deletes it and opening the file offers to restore it. This exists because a lost
+  session (every deploy logs users out) makes the fetch wrapper redirect to `/login` mid-edit. The draft
+  keeps transcript text on the device until it is saved, discarded or declined.
+- **No fallback editor:** if TipTap has not loaded, edit mode refuses with a toast. Edit mode disables the
+  display toggles but never changes `displaySettings`.
+- Transcript and speaker-name text interpolated into viewer HTML goes through `escapeHtml()`; the TipTap
+  editor renders through ProseMirror and needs none.
 
 ### Key DOM Elements
 - `drop-area`, `file-input` — file drag/drop and picker
