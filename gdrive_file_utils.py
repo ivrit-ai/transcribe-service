@@ -342,6 +342,7 @@ class GoogleDriveStorageBackend(FileStorageBackend):
             "q": f"name = '{quoted_filename}' and '{folder_id}' in parents and trashed = false",
             "spaces": "drive",
             "fields": "files(id)",
+            "orderBy": "modifiedTime desc",
             "pageSize": 1,
         }
         headers = {
