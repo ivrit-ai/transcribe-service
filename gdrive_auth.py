@@ -1,6 +1,7 @@
 """Google Drive authentication and token management utilities."""
 
 import os
+import json
 import time
 import hashlib
 import logging
@@ -32,12 +33,25 @@ class GoogleAuthError(GoogleAPIError):
     """Raised when Google OAuth operations fail."""
 
 
+class GoogleAuthRevokedError(GoogleAuthError):
+    """Raised when Google rejects a refresh token for good (invalid_grant): access revoked or expired."""
+
+
 class GoogleDriveError(GoogleAPIError):
     """Raised when Google Drive operations fail."""
 
 
 class DriveStorageFullError(GoogleDriveError):
     """Raised when a Drive write fails because the user is out of storage."""
+
+
+def _error_code(body: str) -> Optional[str]:
+    """Return the OAuth "error" field of a token endpoint response body, if it has one."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    return data.get("error") if isinstance(data, dict) else None
 
 
 def _get_token_cache_key(refresh_token: str) -> str:
@@ -73,6 +87,8 @@ async def refresh_google_access_token(refresh_token: str) -> Optional[dict]:
                         resp.status,
                         err,
                     )
+                    if resp.status == 400 and _error_code(err) == "invalid_grant":
+                        raise GoogleAuthRevokedError(f"Google refresh token rejected: {resp.status} {err}")
                     raise GoogleAuthError(
                         f"Failed to refresh Google access token: {resp.status} {err}"
                     )

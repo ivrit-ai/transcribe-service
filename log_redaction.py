@@ -20,13 +20,15 @@ _MIN_SECRET_LENGTH = 8
 
 # Credentials that reach us from outside the environment: Google access tokens,
 # refresh tokens and authorization codes, RunPod keys users supply themselves,
-# and anything spelled out as a labelled secret in a URL, header or JSON body.
+# Fernet tokens, and anything spelled out as a labelled secret in a URL, header
+# or JSON body.
 _PATTERNS = [
     re.compile(r"ya29\.[A-Za-z0-9._\-]{10,}"),
     re.compile(r"1//[A-Za-z0-9._\-]{10,}"),
     re.compile(r"\b4/0[A-Za-z0-9._\-]{10,}"),
     re.compile(r"\brpa_[A-Za-z0-9]{10,}"),
     re.compile(r"(?i)(?<=\bbearer )[A-Za-z0-9._\-]+"),
+    re.compile(r"gAAAAA[A-Za-z0-9_\-]{40,}={0,2}"),
 ]
 
 # Keeps the label, drops the value; a lookbehind can't express this because the

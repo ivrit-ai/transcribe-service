@@ -11,7 +11,7 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 - **Speaker Diarization:** PyTorch-based pipeline for identifying speakers
 - **Audio Processing:** ffmpeg for transcoding, julius for audio analysis
 - **Storage:** Google Drive (cloud mode) or local filesystem (local mode)
-- **Authentication:** Google OAuth 2.0 (cloud mode), session-based (local mode)
+- **Authentication:** Google OAuth 2.0 with a Fernet-encrypted, 30-day sliding session cookie (cloud and dev); none in local mode (fixed local user)
 - **Compute:** RunPod serverless GPU endpoints (cloud mode) or local GPU
 - **Analytics:** PostHog for event tracking
 - **Models:** Hosted on Hugging Face, downloaded via huggingface-hub
@@ -58,7 +58,7 @@ ivrit.ai is a Hebrew-focused audio transcription service built as a non-profit p
 - Token-bucket rate limiting with configurable weekly minute credits (default 420 min/week)
 - Daily credit replenishment
 - Three job queues: short (<=20 min), long (>20 min), private (custom RunPod credentials)
-- Users can bring their own RunPod API key to bypass shared quotas. The key is pasted once in settings, stored Fernet-encrypted in the user's Google Drive app folder (`runpod_key.enc`), loaded into the server session at login, and never returned to the browser (only a last-4 hint). See [RunPod Key Storage](#runpod-key-storage).
+- Users can bring their own RunPod API key to bypass shared quotas. The key is pasted once in settings, stored Fernet-encrypted in the user's Google Drive app folder (`runpod_key.enc`), loaded into the encrypted session cookie at login and re-read at each daily renewal, and never returned to the browser (only a last-4 hint). See [RunPod Key Storage](#runpod-key-storage).
 - Quota is debited before transcription and refunded if the job never delivers a transcript
 - See [Failed Jobs](#failed-jobs) for what a user sees when a job dies
 
@@ -81,6 +81,7 @@ alembic/                  Database migrations
 gdrive_auth.py            Google OAuth token management
 gdrive_file_utils.py      Google Drive storage backend
 runpod_key_store.py       Fernet-encrypted storage of users' RunPod keys on their Drive
+session_cookie.py         Encrypted client-side session cookie and OAuth state cookie
 local_file_utils.py       Local filesystem storage backend
 file_utils.py             Abstract storage interface
 
@@ -115,8 +116,8 @@ build_bundle.py           PyInstaller bundling script
 | Audio | `GET /appdata/audio/{id}`, `GET /appdata/audio/stream/{id}` |
 | Data | `GET /appdata/toc`, `GET /appdata/results/{id}`, `GET`/`POST /appdata/edits/{id}` |
 | Management | `POST /appdata/rename`, `POST /appdata/delete`, `POST /appdata/donate_data` |
-| Auth & Account | `GET /login`, `GET /authorize`, `GET /login/authorized`, `GET /quota`, `GET /balance` (RunPod balance for the session's stored key) |
-| RunPod key | `POST /runpod_key` (verify, store, use for this session), `DELETE /runpod_key` |
+| Auth & Account | `GET /login`, `GET /authorize`, `GET /login/authorized`, `POST /logout`, `GET /quota`, `GET /balance` (RunPod balance for the session's stored key) |
+| RunPod key | `POST /runpod_key` (verify, store, use for this browser's session), `DELETE /runpod_key` |
 | Push | `GET /sw.js` (unauthenticated), `GET /push/config`, `POST /push/subscribe` |
 | Share target | `POST /share-target` (unauthenticated fallback; the worker normally answers it) |
 | System | `GET /languages`, `POST /client_heartbeat`, `GET /stats` |
@@ -165,6 +166,7 @@ Jobs go through: upload -> pre-transcoding (ffmpeg to OPUS) -> queue -> RunPod/l
 | `RUNPOD_ENDPOINT_ID` | (required in cloud) | Default RunPod endpoint ID |
 | `RUNPOD_TEMPLATE_ID` | (none) | RunPod template ID for auto-creating user endpoints |
 | `RUNPOD_KEY_ENCRYPTION_KEY` | (required outside local mode) | Fernet key encrypting users' stored RunPod keys. Startup fails if unset or malformed. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Changing it makes every stored key unreadable (users are asked to re-enter theirs) |
+| `SESSION_ENCRYPTION_KEY` | (required outside local mode) | Fernet key encrypting the session cookie (email, Google refresh token, RunPod key). Startup fails if unset or malformed. Generate the same way as `RUNPOD_KEY_ENCRYPTION_KEY` but use a distinct value. Changing it signs every user out once; nothing stored is lost. Must be set before deploying code that requires it |
 | `BASE_URL` | (required in cloud) | Public base URL of the service |
 | `POSTHOG_API_KEY` | (none) | PostHog analytics key (optional, analytics disabled if unset) |
 | `TS_HIATUS_MODE` | `0` | Set to `1` to enable hiatus mode via env |
@@ -330,8 +332,8 @@ rather than polling.
 **Service worker.** `static/sw.js` is served from the root route `GET /sw.js` so its scope
 covers the whole app; the `/static` mount would scope it to `/static/` and it could never
 receive the app's pushes. That route is deliberately **unauthenticated** —
-`require_google_login` answers with a 303 to `/login`, and a redirected script response
-fails worker registration. The file contains no secrets, and nothing user-specific may ever
+`require_google_login` answers 401 without a session, and a non-script response fails
+worker registration. The file contains no secrets, and nothing user-specific may ever
 be templated into it.
 
 It handles `install` (`skipWaiting`), `activate` (`clients.claim`), `push`,
@@ -474,6 +476,44 @@ Two things act on it:
 - Payloads are encrypted end to end, but the endpoint and the timing of each push are
   visible to Google/Apple, and the filename appears on the device's lock screen.
 
+### Sessions
+
+The session lives entirely in the browser; the server keeps no session state, so restarts and
+deploys do not sign anyone out (in-flight jobs still die on deploy).
+
+- **Cookie.** `AuthCookies` (`session_cookie.py`) Fernet-encrypts a JSON payload
+  `{v, user_email, refresh_token, runpod_token, runpod_key_load_failed}` with
+  `SESSION_ENCRYPTION_KEY`. Encrypted, not just signed: it carries the Google refresh token.
+  Named `__Host-session` (HttpOnly, Secure, SameSite=Lax, Path=/, host-only, Max-Age 30 days);
+  in dev, where there may be no TLS, `session` without Secure. `__Host-` stops sibling
+  subdomains from setting or shadowing it. A cookie that is missing, tampered, older than 30
+  days (enforced server-side via the Fernet timestamp, not just Max-Age), or of another payload
+  version is treated as no session.
+- **Renewal.** Sliding, on the document load `GET /` only: once the token is a day old it is
+  re-issued, after re-reading the RunPod key from Drive so a key removed or replaced on another
+  device reaches this one within a day. If that read fails, renewal is skipped and retried on
+  the next load. A session whose Google access was revoked therefore cannot be renewed.
+- **OAuth state.** `/authorize` puts a random state in a separate 10-minute `__Host-oauth_state`
+  cookie; `/login/authorized` compares and clears it. SameSite=Lax is what lets it arrive on the
+  redirect back from Google.
+- **Accessors.** Handlers use `get_session`, `get_user_email`, `get_refresh_token`,
+  `get_session_runpod_token`; only `/login/authorized`, `POST`/`DELETE /runpod_key`, `/`
+  (renewal) and `POST /logout` write or clear the cookie.
+- **Modes.** Dev and staging always report `FIXED_USER_EMAIL` (`--dev-user-email` /
+  `TS_USER_EMAIL`) and skip `require_google_login`; the cookie supplies only the Drive refresh
+  token after OAuth. Local mode has no cookie and no OAuth.
+- **Losing a session.** No session → `require_google_login` answers 401 and the page's fetch
+  wrapper goes to `/login`. A refresh token Google rejects with `invalid_grant` (user revoked
+  access, token expired) raises `GoogleAuthRevokedError`, which the app answers with the same
+  401 and clears the cookie; transient Google failures stay 5xx.
+- **Trade-offs.** No server-side revocation: a stolen cookie works until 30 idle days pass.
+  The levers are revoking the app at Google (Drive calls fail, renewal stops) and rotating
+  `SESSION_ENCRYPTION_KEY` (signs everyone out). Logout clears only this browser's cookie; it
+  does not revoke at Google, which would cut every device and running job off from Drive.
+- **Constants** (`session_cookie.py`): `SESSION_MAX_AGE_SECONDS` 30 days,
+  `SESSION_RENEW_AFTER_SECONDS` 1 day, `OAUTH_STATE_MAX_AGE_SECONDS` 600,
+  `SESSION_PAYLOAD_VERSION` 1.
+
 ### RunPod Key Storage
 
 A user's own RunPod key is held by the server, never by the browser. The page receives only
@@ -485,18 +525,19 @@ input is for entering a new key and always opens empty.
   app Drive folder, next to `toc.json.gz` — no extra OAuth scope. Neither the Drive file nor the
   server alone recovers the key. Local mode has no store (`runpod_key_store is None`) and no
   RunPod keys.
-- **Load.** `/login/authorized` decrypts it into `sessions[sid]["runpod_token"]` once per
-  login. A Drive failure or undecryptable file (`InvalidToken`, e.g. after rotating the
+- **Load.** `/login/authorized` decrypts it into the session cookie at login and again at each
+  daily renewal (see [Sessions](#sessions)). A Drive failure or undecryptable file (`InvalidToken`, e.g. after rotating the
   encryption key) degrades to "no key" and sets `runpod_key_load_failed`; login always
   completes, and the page toasts `runpodKeyLoadFailed` asking the user to re-enter the key.
 - **Save** (`POST /runpod_key`): verify via balance → endpoint check/creation →
-  encrypt → Drive write → session. **Remove** (`DELETE /runpod_key`): delete every
-  `runpod_key.enc` in the folder (concurrent first saves can leave duplicates) → session.
-  In both, the session changes only after Drive succeeds, so the session never claims a key
-  that Drive disagrees with. An empty input on Save keeps the current key; removal is the
+  encrypt → Drive write → session cookie. **Remove** (`DELETE /runpod_key`): delete every
+  `runpod_key.enc` in the folder (concurrent first saves can leave duplicates) → session
+  cookie. In both, the cookie changes only after Drive succeeds, so the session never claims a
+  key that Drive disagrees with. Another device picks up a saved, replaced or removed key at its
+  next daily renewal. An empty input on Save keeps the current key; removal is the
   dedicated button or "clear settings".
 - **Use.** `validate_upload_request_metadata()`, `/balance` and the batch limit read the
-  session key; no request carries it. Having a key is what makes a user "paid" (private
+  key from the session cookie; no request body carries it. Having a key is what makes a user "paid" (private
   queue, no quota). Jobs already submitted keep the key they were submitted with, even if the
   user removes or replaces it.
 - **Legacy cookie migration.** Keys used to live in a `runpod_token` cookie.
@@ -576,8 +617,8 @@ The viewer's edit mode edits an overlay; the results file is never modified.
 - **Unload and drafts:** `beforeunload` warns on unsaved edits. When the page is hidden
   (`visibilitychange`/`pagehide`), unsaved state goes to `localStorage` under `editDraft:{results_id}`;
   `exitEditMode()` deletes it and opening the file offers to restore it. This exists because a lost
-  session (every deploy logs users out) makes the fetch wrapper redirect to `/login` mid-edit. The draft
-  keeps transcript text on the device until it is saved, discarded or declined.
+  session (30 idle days, sign-out, or Google access revoked) makes the fetch wrapper redirect to
+  `/login` mid-edit. The draft keeps transcript text on the device until it is saved, discarded or declined.
 - **No fallback editor:** if TipTap has not loaded, edit mode refuses with a toast. Edit mode disables the
   display toggles but never changes `displaySettings`.
 - Transcript and speaker-name text interpolated into viewer HTML goes through `escapeHtml()`; the TipTap

@@ -2617,6 +2617,11 @@
             <button type="button" class="btn btn-secondary" id="clear-settings">
               <span data-i18n="clear">נקה הגדרות</span>
             </button>
+            {% if not in_local_mode %}
+            <button type="button" class="btn btn-secondary" id="sign-out">
+              <span data-i18n="signOut">התנתקות</span>
+            </button>
+            {% endif %}
           </div>
         </form>
       </div>
@@ -2988,6 +2993,7 @@
       const closeSettings = document.getElementById("close-settings")
       const cancelSettings = document.getElementById("cancel-settings")
       const clearSettings = document.getElementById("clear-settings")
+      const signOutBtn = document.getElementById("sign-out")
       const settingsForm = document.getElementById("settings-form")
       const runpodTokenInput = document.getElementById("runpod-token")
       const runpodKeyStatusText = document.getElementById("runpod-key-status")
@@ -4059,6 +4065,20 @@
       })
 
       clearSettings.addEventListener("click", clearAllSettings)
+
+      if (signOutBtn) {
+        signOutBtn.addEventListener("click", async () => {
+          // Leave only once the cookie is gone, so a shared computer is never left signed in
+          try {
+            const response = await fetch("/logout", { method: "POST" })
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            window.location.href = "/login"
+          } catch (error) {
+            console.error("Sign out failed:", error)
+            showToast(window.I18N.t('signOutError'), "error")
+          }
+        })
+      }
 
       if (removeRunpodKeyBtn) {
         removeRunpodKeyBtn.addEventListener("click", async () => {

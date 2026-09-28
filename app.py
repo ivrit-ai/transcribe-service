@@ -32,6 +32,7 @@ import uuid
 import box
 import dotenv
 import random
+import secrets
 import tempfile
 import asyncio
 import queue
@@ -171,6 +172,18 @@ else:
     from runpod_key_store import RunpodKeyStore
 
     runpod_key_store = RunpodKeyStore(os.environ.get("RUNPOD_KEY_ENCRYPTION_KEY"), file_storage_backend)
+
+# Who the user is. Dev/staging and local report one fixed user; cloud and dev
+# carry the signed-in user's session in an encrypted cookie (dev needs it for
+# the Drive refresh token), local mode has no sign-in and so no cookie.
+from session_cookie import AuthCookies
+
+FIXED_USER_EMAIL = (
+    (args.dev_user_email or os.environ.get("TS_USER_EMAIL", "local@example.com"))
+    if (in_dev or in_local_mode)
+    else None
+)
+auth_cookies = None if in_local_mode else AuthCookies(os.environ.get("SESSION_ENCRYPTION_KEY"), not in_dev)
 
 # Durable state (quota buckets, stats counters): Postgres under xhost, SQLite
 # everywhere else. Schema is applied by Alembic (DB_URL) in the lifespan startup,
@@ -359,50 +372,42 @@ app.mount("/static", StaticFiles(directory=str(BASE_PATH / "static")), name="sta
 # Templates (handle PyInstaller paths)
 templates = Jinja2Templates(directory=str(BASE_PATH / "templates"))
 
-# Session management (simplified for FastAPI)
-sessions = {}
-
 # Backend version identifier for cache busting (set on startup)
 backend_version = None
 
 
-
-def get_session_id(request: Request) -> str:
-    """Get or create session ID from request"""
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        session_id = str(uuid.uuid4())
-    return session_id
-
+def get_session(request: Request) -> Optional[dict]:
+    """Return the session carried by the request's cookie, or None (always None in local mode)."""
+    return auth_cookies.read_session(request) if auth_cookies else None
 
 
 def get_user_email(request: Request) -> Optional[str]:
-    """Get user email from session"""
-    session_id = get_session_id(request)
-    return sessions.get(session_id, {}).get("user_email")
+    """Return the signed-in user's email (the fixed user in dev and local mode)."""
+    if FIXED_USER_EMAIL:
+        return FIXED_USER_EMAIL
+    session = get_session(request)
+    return session["user_email"] if session else None
 
-def set_user_email(request: Request, email: str) -> str:
-    """Set user email in session and return session ID"""
-    session_id = get_session_id(request)
-    if session_id not in sessions:
-        sessions[session_id] = {}
-    sessions[session_id]["user_email"] = email
-    return session_id
+
+def get_refresh_token(request: Request) -> Optional[str]:
+    """Return the session's Google refresh token, or None if there is no session."""
+    session = get_session(request)
+    return session["refresh_token"] if session else None
 
 
 def get_session_runpod_token(request: Request) -> str:
     """Return the user's own RunPod key held in the session, or "" if none."""
-    return sessions.get(get_session_id(request), {}).get("runpod_token", "")
+    session = get_session(request)
+    return session["runpod_token"] if session else ""
 
 
-def get_runpod_key_status(request: Request) -> dict:
+def runpod_key_status(session: Optional[dict]) -> dict:
     """Describe the session's RunPod key for the browser, which never sees the key itself."""
-    session = sessions.get(get_session_id(request), {})
-    runpod_token = session.get("runpod_token", "")
+    runpod_token = session["runpod_token"] if session else ""
     return {
         "has_key": bool(runpod_token),
         "hint": runpod_token[-4:],
-        "load_failed": bool(session.get("runpod_key_load_failed")),
+        "load_failed": bool(session and session["runpod_key_load_failed"]),
     }
 
 
@@ -417,10 +422,7 @@ async def require_google_login(request: Request):
     if in_dev or in_local_mode:
         return
 
-    session_id = request.cookies.get("session_id")
-    session = sessions.get(session_id) if session_id else None
-
-    if not session or not session.get("user_email"):
+    if get_session(request) is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
 # Import Google OAuth constants only if not in local mode
@@ -430,6 +432,7 @@ if not in_local_mode:
         refresh_google_access_token,
         get_access_token_from_refresh,
         GoogleAPIError,
+        GoogleAuthRevokedError,
         GoogleDriveError,
         DriveStorageFullError,
         GOOGLE_CLIENT_ID,
@@ -459,27 +462,19 @@ REQUIRED_OAUTH_SCOPES = [
 def log_message(message):
     logger.info(f"{message}")
 
-def get_user_identifier(request: Request = None, refresh_token: Optional[str] = None, user_email: Optional[str] = None, session_id: Optional[str] = None) -> Optional[str]:
+def get_user_identifier(refresh_token: Optional[str], user_email: Optional[str]) -> Optional[str]:
     """Get user identifier for file storage backend.
-    
-    In local mode: uses user_email or session_id
+
+    In local mode: uses user_email
     In Google Drive mode: uses refresh_token
     """
-    if in_local_mode:
-        if user_email:
-            return user_email
-        if session_id:
-            return session_id
-        if request:
-            return get_user_email(request) or get_session_id(request)
-        return None
-    else:
-        return refresh_token
+    return user_email if in_local_mode else refresh_token
 
-async def download_toc(refresh_token: Optional[str], user_email: Optional[str] = None, session_id: Optional[str] = None) -> dict:
+
+async def download_toc(refresh_token: Optional[str], user_email: Optional[str]) -> dict:
     """Download TOC file (gzipped), using cache if available."""
-    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email, session_id=session_id)
-    cache_key = get_toc_cache_key(refresh_token) if not in_local_mode else (user_email or session_id)
+    user_identifier = get_user_identifier(refresh_token, user_email)
+    cache_key = get_toc_cache_key(refresh_token) if not in_local_mode else user_email
     
     # Try to get from cache first (currently disabled)
     if TOC_CACHE_ENABLED and cache_key:
@@ -507,9 +502,9 @@ async def download_toc(refresh_token: Optional[str], user_email: Optional[str] =
     
     return toc_data
 
-async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: Optional[str] = None, session_id: Optional[str] = None) -> bool:
+async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: Optional[str]) -> bool:
     """Upload TOC file (gzipped), updating existing one atomically or creating new one."""
-    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    user_identifier = get_user_identifier(refresh_token, user_email)
     
     # Find existing toc.json.gz
     existing_id = await file_storage_backend.find_file_by_name("toc.json.gz", user_identifier)
@@ -529,7 +524,7 @@ async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: O
     
     # Invalidate cache if upload was successful
     if success:
-        cache_key = get_toc_cache_key(refresh_token) if not in_local_mode else (user_email or session_id)
+        cache_key = get_toc_cache_key(refresh_token) if not in_local_mode else user_email
         if TOC_CACHE_ENABLED and cache_key:
             toc_cache.pop(cache_key, None)
     
@@ -768,9 +763,11 @@ def get_drive_file_id_cache_key(refresh_token: str, filename: str) -> str:
     return f"{token_hash}:{filename}"
 
 
-async def find_drive_file_by_name_cached(refresh_token: str, filename: str, user_email: Optional[str] = None, session_id: Optional[str] = None) -> Optional[str]:
+async def find_drive_file_by_name_cached(
+    refresh_token: Optional[str], filename: str, user_email: Optional[str]
+) -> Optional[str]:
     """Find file by name with caching to reduce API calls."""
-    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    user_identifier = get_user_identifier(refresh_token, user_email)
     cache_key = get_drive_file_id_cache_key(refresh_token, filename) if not in_local_mode else f"{user_identifier}:{filename}"
     
     # Try cache first
@@ -1154,21 +1151,18 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
 @app.get("/")
 async def index(request: Request):
     if in_dev or in_local_mode:
-        user_email = args.dev_user_email or os.environ.get("TS_USER_EMAIL", "local@example.com")
-        session_id = set_user_email(request, user_email)
         response = templates.TemplateResponse("index.html", {
             "request": request,
             "quota_increase_url": QUOTA_INCREASE_URL,
             "in_local_mode": in_local_mode,
-            "runpod_key_status": get_runpod_key_status(request),
+            "runpod_key_status": runpod_key_status(get_session(request)),
         })
-        response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not (in_dev or in_local_mode))
         response.headers["ETag"] = f'"{backend_version}"'
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
-    user_email = get_user_email(request)
-    if not user_email:
+    session = get_session(request)
+    if session is None:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
     if in_hiatus_mode:
@@ -1176,13 +1170,27 @@ async def index(request: Request):
         response.headers["ETag"] = f'"{backend_version}"'
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
-    
+
+    # Sliding renewal, on document loads only. Re-reading the RunPod key brings in
+    # a key saved, replaced or removed on another device; if that read fails the
+    # cookie stays as it is and renewal is retried on the next load.
+    renewed_session = None
+    if auth_cookies.session_due_for_renewal(request):
+        try:
+            runpod_token = await runpod_key_store.load(session["refresh_token"])
+            renewed_session = {**session, "runpod_token": runpod_token, "runpod_key_load_failed": False}
+        except (GoogleAPIError, InvalidToken) as exc:
+            # InvalidToken has an empty str(), so log its repr.
+            logger.warning("Session renewal skipped for %s: could not load RunPod key: %r", session["user_email"], exc)
+
     response = templates.TemplateResponse("index.html", {
         "request": request,
         "quota_increase_url": QUOTA_INCREASE_URL,
         "in_local_mode": in_local_mode,
-        "runpod_key_status": get_runpod_key_status(request),
+        "runpod_key_status": runpod_key_status(renewed_session or session),
     })
+    if renewed_session:
+        auth_cookies.write_session(response, renewed_session)
     response.headers["ETag"] = f'"{backend_version}"'
     response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
@@ -1211,8 +1219,7 @@ async def list_languages():
 @app.get("/appdata/toc", dependencies=[Depends(require_google_login)])
 async def get_toc(request: Request):
     """Get TOC (table of contents) with all transcription metadata, augmented with in-memory job states."""
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
     if not in_local_mode and not refresh_token:
@@ -1222,7 +1229,7 @@ async def get_toc(request: Request):
         return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
     
     # Load persistent TOC (cached in download_toc, only contains completed jobs)
-    toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+    toc_data = await download_toc(refresh_token, user_email=user_email)
     
     if toc_data is None:
         return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
@@ -1332,14 +1339,13 @@ async def get_toc(request: Request):
 @app.get("/appdata/results/{results_id}", dependencies=[Depends(require_google_login)])
 async def get_transcription_results(results_id: str, request: Request):
     """Download transcription results by UUID (returns gzipped JSON for client-side decompression)."""
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
     if not in_local_mode and not refresh_token:
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
-    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
     
     # Find the results file (gzipped)
     filename = f"{results_id}.json.gz"
@@ -1378,14 +1384,13 @@ async def get_transcription_results(results_id: str, request: Request):
 @app.get("/appdata/edits/{results_id}", dependencies=[Depends(require_google_login)])
 async def get_edits(results_id: str, request: Request):
     """Get edit data for a transcription by UUID."""
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
     if not in_local_mode and not refresh_token:
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
-    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
     
     # Find the edits file
     filename = f"{results_id}.edits.json.gz"
@@ -1421,14 +1426,13 @@ async def get_edits(results_id: str, request: Request):
 @app.post("/appdata/edits/{results_id}", dependencies=[Depends(require_google_login)])
 async def save_edits(results_id: str, request: Request):
     """Save edit data for a transcription by UUID."""
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
     if not in_local_mode and not refresh_token:
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
-    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
     
     # Get the edits data from request body
     try:
@@ -1473,14 +1477,13 @@ async def save_edits(results_id: str, request: Request):
 @app.get("/appdata/audio/{results_id}", dependencies=[Depends(require_google_login)])
 async def get_audio_file(results_id: str, request: Request):
     """Download opus audio file by results_id UUID."""
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
     if not in_local_mode and not refresh_token:
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
-    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
     
     # Find the opus file
     filename = f"{results_id}.opus"
@@ -1510,18 +1513,17 @@ async def get_audio_file(results_id: str, request: Request):
 @app.api_route("/appdata/audio/stream/{results_id}", methods=["GET", "HEAD"], dependencies=[Depends(require_google_login)])
 async def stream_audio_file(results_id: str, request: Request):
     """Stream opus audio file with range support for seeking."""
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
     if not in_local_mode and not refresh_token:
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
-    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
     
     # Find the opus file (using cache to avoid repeated lookups for range requests)
     filename = f"{results_id}.opus"
-    file_id = await find_drive_file_by_name_cached(refresh_token, filename, user_email=user_email, session_id=session_id)
+    file_id = await find_drive_file_by_name_cached(refresh_token, filename, user_email=user_email)
     
     if not file_id:
         return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
@@ -1576,8 +1578,7 @@ async def stream_audio_file(results_id: str, request: Request):
 @app.post("/appdata/rename", dependencies=[Depends(require_google_login)])
 async def rename_file(request: Request):
     """Rename a file in the TOC by updating its source_filename."""
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
     if not in_local_mode and not refresh_token:
@@ -1603,7 +1604,7 @@ async def rename_file(request: Request):
         toc_lock = get_toc_lock(user_email)
         async with toc_lock:
             # Download current TOC
-            toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+            toc_data = await download_toc(refresh_token, user_email=user_email)
 
             if not toc_data or "entries" not in toc_data:
                 await db.incr_stat("gdrive_error_toc_download", 1)
@@ -1621,7 +1622,7 @@ async def rename_file(request: Request):
                 return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
 
             # Upload updated TOC atomically
-            success = await upload_toc(refresh_token, toc_data, user_email=user_email, session_id=session_id)
+            success = await upload_toc(refresh_token, toc_data, user_email=user_email)
 
             if not success:
                 await db.incr_stat("gdrive_error_toc_upload", 1)
@@ -1639,8 +1640,7 @@ async def rename_file(request: Request):
 @app.post("/appdata/delete", dependencies=[Depends(require_google_login)])
 async def delete_file(request: Request):
     """Delete a file by removing it from TOC and deleting associated files (opus, json.gz)."""
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
     if not in_local_mode and not refresh_token:
@@ -1649,7 +1649,7 @@ async def delete_file(request: Request):
     if not user_email:
         return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
     
-    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
     
     try:
         body = await request.json()
@@ -1662,7 +1662,7 @@ async def delete_file(request: Request):
         toc_lock = get_toc_lock(user_email)
         async with toc_lock:
             # Download current TOC
-            toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+            toc_data = await download_toc(refresh_token, user_email=user_email)
 
             if not toc_data or "entries" not in toc_data:
                 await db.incr_stat("gdrive_error_toc_download", 1)
@@ -1683,7 +1683,7 @@ async def delete_file(request: Request):
                 return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
 
             # Upload updated TOC atomically (removing from TOC first)
-            success = await upload_toc(refresh_token, toc_data, user_email=user_email, session_id=session_id)
+            success = await upload_toc(refresh_token, toc_data, user_email=user_email)
 
             if not success:
                 await db.incr_stat("gdrive_error_toc_upload", 1)
@@ -1736,9 +1736,8 @@ async def get_data_dir(request: Request):
     if not user_email:
         return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
 
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
-    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    refresh_token = get_refresh_token(request)
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
 
     user_dir_str = await file_storage_backend.ensure_folder(user_identifier)
     user_dir = Path(user_dir_str).resolve()
@@ -1759,8 +1758,7 @@ async def donate_data(request: Request):
     """Donate transcription data (audio + transcript + edits) for the ivrit.ai v2 dataset."""
     import tarfile
     
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
     if not in_local_mode and not refresh_token:
@@ -1769,7 +1767,7 @@ async def donate_data(request: Request):
     if not user_email:
         return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
     
-    user_identifier = get_user_identifier(request=request, refresh_token=refresh_token, user_email=user_email, session_id=session_id)
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
     
     try:
         body = await request.json()
@@ -1786,7 +1784,7 @@ async def donate_data(request: Request):
         toc_lock = get_toc_lock(user_email)
         async with toc_lock:
             # Download current TOC
-            toc_data = await download_toc(refresh_token, user_email=user_email, session_id=session_id)
+            toc_data = await download_toc(refresh_token, user_email=user_email)
 
             if not toc_data or "entries" not in toc_data:
                 return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
@@ -1883,7 +1881,7 @@ async def donate_data(request: Request):
             toc_data["entries"][entry_index]["donated"] = True
             
             # Upload updated TOC
-            success = await upload_toc(refresh_token, toc_data, user_email=user_email, session_id=session_id)
+            success = await upload_toc(refresh_token, toc_data, user_email=user_email)
             
             if not success:
                 return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
@@ -1936,14 +1934,12 @@ async def login(request: Request):
 @app.get("/authorize")
 async def authorize(request: Request):
     """Redirect to Google OAuth"""
+    if in_local_mode:
+        raise HTTPException(status_code=400, detail="OAuth not available in local mode")
+
     # Generate state parameter for security
-    state = str(uuid.uuid4())
-    session_id = get_session_id(request)
-    
-    if session_id not in sessions:
-        sessions[session_id] = {}
-    sessions[session_id]["oauth_state"] = state
-    
+    state = secrets.token_urlsafe(32)
+
     # Build Google OAuth URL using v2 endpoints
     params = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -1958,7 +1954,7 @@ async def authorize(request: Request):
     auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     
     response = RedirectResponse(url=auth_url)
-    response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
+    auth_cookies.write_oauth_state(response, state)
     return response
 
 async def get_max_serverless_concurrency(api_key: str) -> Optional[int]:
@@ -2645,8 +2641,7 @@ async def save_runpod_key(request: Request):
     if in_local_mode:
         raise HTTPException(status_code=400, detail="RunPod keys are not available in local mode")
 
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     if not refresh_token:
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
 
@@ -2686,10 +2681,11 @@ async def save_runpod_key(request: Request):
             {"error": "errorRunpodKeySaveFailed", "i18n_key": "errorRunpodKeySaveFailed"}, status_code=500
         )
 
-    sessions[session_id]["runpod_token"] = runpod_token
-    sessions[session_id].pop("runpod_key_load_failed", None)
+    session = {**get_session(request), "runpod_token": runpod_token, "runpod_key_load_failed": False}
     log_message(f"{user_email}: Stored RunPod key")
-    return JSONResponse({**get_runpod_key_status(request), "needs_wait": endpoint_result["needs_wait"]})
+    response = JSONResponse({**runpod_key_status(session), "needs_wait": endpoint_result["needs_wait"]})
+    auth_cookies.write_session(response, session)
+    return response
 
 
 @app.delete("/runpod_key", dependencies=[Depends(require_google_login)])
@@ -2698,8 +2694,7 @@ async def delete_runpod_key(request: Request):
     if in_local_mode:
         raise HTTPException(status_code=400, detail="RunPod keys are not available in local mode")
 
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
     if not refresh_token:
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
 
@@ -2712,10 +2707,11 @@ async def delete_runpod_key(request: Request):
             {"error": "errorRunpodKeyRemoveFailed", "i18n_key": "errorRunpodKeyRemoveFailed"}, status_code=500
         )
 
-    sessions[session_id].pop("runpod_token", None)
-    sessions[session_id].pop("runpod_key_load_failed", None)
+    session = {**get_session(request), "runpod_token": "", "runpod_key_load_failed": False}
     log_message(f"{user_email}: Removed RunPod key")
-    return JSONResponse(get_runpod_key_status(request))
+    response = JSONResponse(runpod_key_status(session))
+    auth_cookies.write_session(response, session)
+    return response
 
 @app.get("/login/authorized")
 async def authorized(request: Request, code: str = None, state: str = None, error: str = None):
@@ -2738,14 +2734,21 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
         return response
     
     # Verify state parameter
-    session_id = get_session_id(request)
-    if state != sessions.get(session_id, {}).get("oauth_state"):
+    expected_state = auth_cookies.read_oauth_state(request)
+    if not expected_state or not secrets.compare_digest(state.encode(), expected_state.encode()):
         error_message = "Invalid state parameter"
         response = templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
         response.headers["ETag"] = f'"{backend_version}"'
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
-    
+
+    response = await complete_google_sign_in(request, code)
+    auth_cookies.clear_oauth_state(response)
+    return response
+
+
+async def complete_google_sign_in(request: Request, code: str) -> Response:
+    """Exchange the OAuth code, and on success answer with a new session cookie."""
     try:
         # Exchange code for access token using v2 endpoint
         async with aiohttp.ClientSession() as session:
@@ -2762,7 +2765,12 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
                 token_data = await token_response.json()
                 
                 if "error" in token_data:
-                    error_message = f"Token exchange failed: {token_data.get('error_description', 'Unknown error')}"
+                    logger.error(
+                        "Google token exchange failed: %s (%s)",
+                        token_data.get("error"),
+                        token_data.get("error_description"),
+                    )
+                    error_message = "Sign-in could not be completed. Please try again."
                     response = templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
                     response.headers["ETag"] = f'"{backend_version}"'
                     response.headers["Cache-Control"] = "no-cache, must-revalidate"
@@ -2778,14 +2786,24 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
                 if missing_scopes:
                     logger.warning(f"User did not grant all required scopes. Missing: {missing_scopes}")
                     error_message = "errorDrivePermissionsRequired"
-                    # Clean up OAuth state
-                    if session_id in sessions:
-                        sessions[session_id].pop("oauth_state", None)
                     response = templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message, "i18n_key": True})
                     response.headers["ETag"] = f'"{backend_version}"'
                     response.headers["Cache-Control"] = "no-cache, must-revalidate"
                     return response
-                
+
+                # prompt=consent should make Google return one every time; without it
+                # there is no Drive access to put in the session.
+                refresh_token = token_data.get("refresh_token")
+                if not refresh_token:
+                    logger.error("Google token exchange returned no refresh token")
+                    error_message = "Sign-in could not be completed. Please try again."
+                    response = templates.TemplateResponse(
+                        "close_window.html", {"request": request, "success": False, "message": error_message}
+                    )
+                    response.headers["ETag"] = f'"{backend_version}"'
+                    response.headers["Cache-Control"] = "no-cache, must-revalidate"
+                    return response
+
                 access_token = token_data["access_token"]
                 
                 # Get user info using v2 endpoint
@@ -2795,42 +2813,62 @@ async def authorized(request: Request, code: str = None, state: str = None, erro
                 ) as user_response:
                     user_data = await user_response.json()
                     
-                    # Store user email in session
                     user_email = user_data["email"]
-                    set_user_email(request, user_email)
-                    # Persist refresh token in the session for later Drive uploads
-                    existing_refresh = sessions.get(session_id, {}).get("refresh_token")
-                    refresh_token = token_data.get("refresh_token", existing_refresh)
-                    if session_id not in sessions:
-                        sessions[session_id] = {}
-                    sessions[session_id]["refresh_token"] = refresh_token
 
                     # Load the user's stored RunPod key. A failure degrades to "no key"
                     # and is surfaced on the page, never blocking login.
                     try:
-                        sessions[session_id]["runpod_token"] = await runpod_key_store.load(refresh_token)
-                        sessions[session_id].pop("runpod_key_load_failed", None)
+                        runpod_token = await runpod_key_store.load(refresh_token)
+                        runpod_key_load_failed = False
                     except (GoogleAPIError, InvalidToken) as exc:
                         # InvalidToken has an empty str(), so log its repr.
                         logger.error("Failed to load stored RunPod key for %s: %r", user_email, exc)
-                        sessions[session_id]["runpod_token"] = ""
-                        sessions[session_id]["runpod_key_load_failed"] = True
+                        runpod_token = ""
+                        runpod_key_load_failed = True
 
-                    # Clean up OAuth state
-                    if session_id in sessions:
-                        sessions[session_id].pop("oauth_state", None)
-                    
                     response = templates.TemplateResponse("close_window.html", {"request": request, "success": True})
-                    response.set_cookie(key="session_id", value=session_id, httponly=True, secure=not in_dev)
+                    auth_cookies.write_session(
+                        response,
+                        {
+                            "user_email": user_email,
+                            "refresh_token": refresh_token,
+                            "runpod_token": runpod_token,
+                            "runpod_key_load_failed": runpod_key_load_failed,
+                        },
+                    )
                     response.headers["ETag"] = f'"{backend_version}"'
                     response.headers["Cache-Control"] = "no-cache, must-revalidate"
                     return response
             
     except Exception as e:
-        error_message = f"Authentication failed: {str(e)}"
+        logger.error("Google sign-in failed: %r", e)
+        error_message = "Sign-in could not be completed. Please try again."
         response = templates.TemplateResponse("close_window.html", {"request": request, "success": False, "message": error_message})
         response.headers["ETag"] = f'"{backend_version}"'
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
+@app.post("/logout")
+async def logout():
+    """Sign this browser out. Google access is not revoked, so other devices and running jobs keep Drive."""
+    if in_local_mode:
+        raise HTTPException(status_code=400, detail="Sign-out is not available in local mode")
+    response = JSONResponse({"success": True})
+    auth_cookies.clear_session(response)
+    return response
+
+
+if not in_local_mode:
+
+    @app.exception_handler(GoogleAuthRevokedError)
+    async def google_auth_revoked_handler(request: Request, exc: GoogleAuthRevokedError):
+        """The user's Google refresh token is dead: end the session so the page goes to /login."""
+        logger.warning("Google rejected the refresh token for %s, ending the session: %s", get_user_email(request), exc)
+        response = JSONResponse(
+            {"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401
+        )
+        auth_cookies.clear_session(response)
         return response
 
 
@@ -2927,8 +2965,7 @@ async def upload_file(
         except (ValueError, TypeError):
             pass
 
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
 
     log_message(f"{user_email}: Validating upload metadata (job_id={job_id}, content_length={content_length})")
     metadata, error_response = await validate_upload_request_metadata(
@@ -3125,8 +3162,7 @@ async def upload_youtube(request: Request):
     if not youtube_url or not validate_youtube_url(youtube_url):
         return JSONResponse({"error": "errorInvalidYoutubeUrl", "i18n_key": "errorInvalidYoutubeUrl"}, status_code=400)
 
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
 
     metadata, error_response = await validate_upload_request_metadata(
         request,
@@ -3617,8 +3653,7 @@ async def precheck_upload(request: Request):
     if not user_email:
         return JSONResponse({"error": "User email not found"}, status_code=401)
 
-    session_id = get_session_id(request)
-    refresh_token = sessions.get(session_id, {}).get("refresh_token")
+    refresh_token = get_refresh_token(request)
 
     try:
         body = await request.json()
@@ -3762,11 +3797,11 @@ async def handle_failed_job(job_desc, consumed_seconds, failure_reason):
     try:
         toc_lock = get_toc_lock(job_desc.user_email)
         async with toc_lock:
-            toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email, session_id=None)
+            toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email)
             if "entries" not in toc_data:
                 toc_data["entries"] = []
             toc_data["entries"].append(toc_entry)
-            success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email, session_id=None)
+            success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email)
             if not success:
                 await db.incr_stat("gdrive_error_toc_upload", 1)
                 logger.error(f"Failed to record failed job {job_desc.id} in TOC")
@@ -4092,8 +4127,7 @@ async def transcribe_job(job_desc):
             toc_lock = get_toc_lock(job_desc.user_email)
             async with toc_lock:
                 # Download current TOC
-                session_id_for_toc = None  # We don't have session_id in job_desc, but user_email should be enough for local mode
-                toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email, session_id=session_id_for_toc)
+                toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email)
 
                 # Append new entry
                 if "entries" not in toc_data:
@@ -4101,7 +4135,7 @@ async def transcribe_job(job_desc):
                 toc_data["entries"].append(toc_entry)
 
                 # Upload updated TOC atomically
-                success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email, session_id=session_id_for_toc)
+                success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email)
                 if not success:
                     await db.incr_stat("gdrive_error_toc_upload", 1)
                     raise Exception("Failed to upload TOC")
