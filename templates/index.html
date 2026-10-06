@@ -197,6 +197,7 @@
         display: none;
       }
       .balance-container.compact-balance a {
+        color: var(--text-color);
         font-size: 0.8rem;
         text-decoration: underline;
       }
@@ -1016,7 +1017,7 @@
         align-items: center;
         gap: 0.5rem;
         text-decoration: none;
-        color: #000000;
+        color: var(--text-color);
         font-weight: bold;
         transition: opacity 0.2s;
         flex-direction: row-reverse;
@@ -1027,6 +1028,9 @@
       .support-link img {
         width: 24px;
         height: 24px;
+      }
+      [data-theme="dark"] .support-link img {
+        filter: invert(1);
       }
       .links-container {
         margin-top: 1.5rem;
