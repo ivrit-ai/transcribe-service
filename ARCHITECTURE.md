@@ -231,10 +231,15 @@ These are compile-time constants in `app.py` that require a code change to tune:
 - **Google OAuth 2.0** - User authentication (scopes: openid, userinfo, drive.file)
 - **Google Drive** - Transcript and TOC storage in an app-specific folder; also users' encrypted RunPod keys (`runpod_key.enc`)
 - **RunPod** - Serverless GPU compute. Endpoint management (list/find/create/delete,
-  template lookup) uses REST API v2 (`api.runpod.io/v2`), which selects GPUs by *pool*
+  worker updates, template lookup) uses REST API v2 (`api.runpod.io/v2`), which selects GPUs by *pool*
   (`RUNPOD_GPU_POOLS` in `app.py`) rather than by card name, and judges endpoint
   up-to-dateness by comparing the endpoint's resolved image/pools/flashboot against the
-  desired config (v2 does not echo template IDs). Account balance and max serverless
+  desired config (v2 does not echo template IDs). RunPod cuts max workers on idle endpoints
+  (to 0 = paused after 7 days), so an up-to-date endpoint below `RUNPOD_ENDPOINT_WORKERS_CAP`
+  has its max raised back (bounded by the account's free concurrency) before each paid upload;
+  after un-pausing from 0 the check polls the job gateway with an empty-body `/run` probe
+  (409 while paused, 400 once active; never queues a job) for up to
+  `RUNPOD_UNPAUSE_TIMEOUT_SECONDS`. Account balance and max serverless
   concurrency have no v2 equivalent yet and remain on the GraphQL API. Job
   submission goes through the separate `api.runpod.ai/v2/<endpoint>` queue API via the
   `ivrit` package.
