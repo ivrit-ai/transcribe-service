@@ -2975,6 +2975,7 @@
           const lang = btn.getAttribute('data-lang')
           window.I18N.setLanguage(lang)
           window.I18N.apply()
+          renderBalance()
           if (window.lucide && typeof window.lucide.createIcons === 'function') {
             window.lucide.createIcons()
           }
@@ -3457,6 +3458,45 @@
           name + "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;"
       }
 
+      // Last fetched balance/quota, kept so the pill can be re-rendered on language change
+      let lastBalanceData = null
+
+      function renderBalance() {
+        if (!lastBalanceData) {
+          return
+        }
+        const balanceLabel = document.getElementById("main-balance-label")
+        const balanceAmount = document.getElementById("main-balance-amount")
+        const t = (key) => window.I18N.t(key)
+
+        if (lastBalanceData.type === "runpod") {
+          balanceLabel.textContent = t('balanceLabel')
+        } else {
+          balanceLabel.textContent = t('remainingQuotaLabel')
+        }
+
+        if (lastBalanceData.loading) {
+          balanceAmount.textContent = t('loading')
+          balanceAmount.className = "balance-amount balance-loading"
+          return
+        }
+        balanceAmount.className = "balance-amount"
+
+        if (lastBalanceData.error) {
+          balanceAmount.textContent = lastBalanceData.type === "runpod" ? t('balanceLoadingError') : t('quotaLoadingError')
+        } else if (lastBalanceData.type === "runpod") {
+          balanceAmount.textContent = `$${lastBalanceData.balance}`
+        } else {
+          const hours = Math.floor(lastBalanceData.minutes / 60)
+          const minutes = lastBalanceData.minutes % 60
+          if (hours > 0) {
+            balanceAmount.textContent = `${hours}:${minutes.toString().padStart(2, '0')} ${t('hours')}`
+          } else {
+            balanceAmount.textContent = `${minutes} ${t('minutes')}`
+          }
+        }
+      }
+
       // Check for RunPod credentials or fetch user quota
       async function checkBalance() {
         // Block in local mode
@@ -3464,78 +3504,56 @@
           console.log("checkBalance blocked: not available in local mode")
           return
         }
-        
+
         const balanceContainer = document.getElementById("main-balance-container")
         // Return early if balance container doesn't exist
         if (!balanceContainer) {
           return
         }
-        
-        const balanceLabel = document.getElementById("main-balance-label")
-        const balanceAmount = document.getElementById("main-balance-amount")
+
         const quotaInfoLink = document.getElementById("quota-info-link")
+        balanceContainer.classList.add("visible")
 
         if (runpodKeyStatus.has_key) {
           // User has private key - show RunPod balance
-          balanceContainer.classList.add("visible")
-          balanceLabel.textContent = window.I18N.t('balanceLabel') || 'יתרה'
-          balanceAmount.textContent = window.I18N.t('loading') || 'טוען...'
-          balanceAmount.className = "balance-amount balance-loading"
           quotaInfoLink.style.display = "none"
+          lastBalanceData = { type: "runpod", loading: true }
+          renderBalance()
 
           try {
             const response = await fetch("/balance")
             const data = await response.json()
 
             if (response.ok && data.clientBalance !== "N/A") {
-              const formattedBalance = parseFloat(data.clientBalance).toFixed(2)
-              balanceAmount.textContent = `$${formattedBalance}`
-              balanceAmount.className = "balance-amount"
+              lastBalanceData = { type: "runpod", balance: parseFloat(data.clientBalance).toFixed(2) }
             } else {
-              balanceAmount.textContent = window.I18N.t('balanceLoadingError') || 'שגיאה'
-              balanceAmount.className = "balance-amount"
+              lastBalanceData = { type: "runpod", error: true }
             }
           } catch (error) {
             console.error("Balance fetch error:", error)
-            balanceAmount.textContent = window.I18N.t('balanceLoadingError') || 'שגיאה'
-            balanceAmount.className = "balance-amount"
+            lastBalanceData = { type: "runpod", error: true }
           }
         } else {
           // No private key - show user quota
-          balanceContainer.classList.add("visible")
-          balanceLabel.textContent = window.I18N.t('remainingQuotaLabel') || 'מכסה נותרת'
-          balanceAmount.textContent = window.I18N.t('loading') || 'טוען...'
-          balanceAmount.className = "balance-amount balance-loading"
           quotaInfoLink.style.display = "inline"
+          lastBalanceData = { type: "quota", loading: true }
+          renderBalance()
 
           try {
             const response = await fetch('/quota')
             const data = await response.json()
 
             if (response.ok) {
-              const remainingMinutes = Math.floor(data.remainingMinutes)
-              const hours = Math.floor(remainingMinutes / 60)
-              const minutes = remainingMinutes % 60
-              
-              let quotaText = ''
-              if (hours > 0) {
-                quotaText = `${hours}:${minutes.toString().padStart(2, '0')} ${window.I18N.t('hours') || 'שעות'}`
-              } else {
-                quotaText = `${minutes} ${window.I18N.t('minutes') || 'דקות'}`
-              }
-              
-              balanceAmount.textContent = quotaText
-              balanceAmount.className = "balance-amount"
+              lastBalanceData = { type: "quota", minutes: Math.floor(data.remainingMinutes) }
             } else {
-              balanceAmount.textContent = window.I18N.t('quotaLoadingError') || 'שגיאה'
-              balanceAmount.className = "balance-amount"
+              lastBalanceData = { type: "quota", error: true }
             }
           } catch (error) {
             console.error("Quota fetch error:", error)
-            balanceAmount.textContent = window.I18N.t('quotaLoadingError') || 'שגיאה'
-            balanceAmount.className = "balance-amount"
+            lastBalanceData = { type: "quota", error: true }
           }
         }
+        renderBalance()
       }
 
       function dismissSettingsModal(checkUnsaved = true) {
