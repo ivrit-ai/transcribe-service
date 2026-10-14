@@ -10,6 +10,7 @@
     <link rel="manifest" href="{{ url_for('static', path='manifest.webmanifest') }}">
     <!-- ?v= — see ARCHITECTURE.md, Static Asset Versioning -->
     <link rel="stylesheet" href="{{ url_for('static', path='theme.css') }}?v={{ backend_version }}">
+    <script src="{{ url_for('static', path='app-banner.js') }}?v={{ backend_version }}" defer></script>
     <title>התחברות - שירות התמלול החופשי של ivrit.ai</title>
     <script>
         // Before first paint, so an installed dark-mode app doesn't flash white.
