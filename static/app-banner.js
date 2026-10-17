@@ -39,8 +39,8 @@
     bar.dir = lang === 'en' ? 'ltr' : 'rtl'
     bar.lang = lang
 
-    const body = document.createElement('span')
-    body.textContent = text.body
+    const message = document.createElement('span')
+    message.textContent = text.body
     const go = document.createElement('a')
     go.href = `https://app.ivrit.ai/?lang=${lang}`
     go.textContent = text.go
@@ -48,13 +48,23 @@
     close.type = 'button'
     close.textContent = '×'
     close.setAttribute('aria-label', text.close)
+    // A page laid out as a centred row (the sign-in page) would put the bar
+    // beside its content: there it is pinned to the top, with room made for it.
+    const body = document.body
+    const row = getComputedStyle(body).display.includes('flex') && getComputedStyle(body).flexDirection.startsWith('row')
+    const padding = parseFloat(getComputedStyle(body).paddingTop) || 0
+    const makeRoom = () => {
+      if (row && bar.isConnected) body.style.paddingTop = `${padding + bar.offsetHeight}px`
+    }
     close.addEventListener('click', () => {
       try {
         localStorage.setItem(KEY, '1')
       } catch {}
       bar.remove()
+      if (row) body.style.paddingTop = ''
+      removeEventListener('resize', makeRoom)
     })
-    bar.append(body, go, close)
+    bar.append(message, go, close)
 
     const style = document.createElement('style')
     style.textContent = `
@@ -65,9 +75,13 @@
       .app-banner span { flex: 1 1 18rem; }
       .app-banner a { font-weight: 600; color: var(--primary-color, #1e6fd0); white-space: nowrap; }
       .app-banner button { border: 0; background: none; color: inherit; font-size: 1.3rem;
-        line-height: 1; cursor: pointer; padding: 0 0.25rem; }`
+        line-height: 1; cursor: pointer; padding: 0 0.25rem; }
+      .app-banner.pinned { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; }`
     document.head.append(style)
-    document.body.prepend(bar)
+    if (row) bar.classList.add('pinned')
+    body.prepend(bar)
+    makeRoom()
+    addEventListener('resize', makeRoom)
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show)
